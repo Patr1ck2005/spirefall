@@ -24,7 +24,7 @@ The current build renders a complete procedural fallback, so missing raster asse
 
 ## Image generation prompts
 
-Use `gpt-image-2`, high quality, opaque WebP output. Generate each asset as a distinct job. No prompt may use the original game or Armor Games as a style reference.
+Generation pipeline (2026-08-23): Volcengine Ark `doubao-seedream-5.0-lite` via the local `~/.claude/scripts/genimg.sh` helper, opaque output, then converted to WebP at spec size with Pillow (environments generated 2560 x 1440 -> downsampled to 2048 x 1152; portraits and materials 1920 x 1920 -> 1024 x 1024). The earlier `gpt-image-2` plan was superseded when the local key proved invalid against the official API. Portrait equipment-light colors follow the fixed pilot accents (Breacher cyan, Warden coral, Rigger amber, Hunter violet). Generate each asset as a distinct job. No prompt may use the original game or Armor Games as a style reference.
 
 ### Canopy environment
 
