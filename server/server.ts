@@ -161,6 +161,18 @@ function broadcastRoom(room: Room) {
 function leave(client: Client) {
   const room = client.room;
   if (!room || room.clients.get(client.id) !== client) return;
+  removeClient(room, client, false);
+}
+
+// Explicit leave (exit button): remove the pilot immediately instead of
+// holding the slot for the 30s reconnect window.
+function leaveRoom(client: Client) {
+  const room = client.room;
+  if (!room || room.clients.get(client.id) !== client) return;
+  removeClient(room, client, true);
+}
+
+function removeClient(room: Room, client: Client, immediate: boolean) {
   room.clients.delete(client.id);
   const player = room.players.get(client.id);
   if (!player) return;
@@ -172,13 +184,25 @@ function leave(client: Client) {
     room.hostId = humanCandidate?.id || "";
     broadcastRoom(room);
   }
+  if (immediate) {
+    clearTimeout(room.reconnectTimers.get(client.id));
+    room.reconnectTimers.delete(client.id);
+    room.players.delete(client.id);
+    room.tokens.delete(client.id);
+    room.jumpHeld.delete(client.id);
+    // A room with no connected humans (bots only) is dead weight — dissolve it.
+    if (humanCount(room) === 0) rooms.delete(room.code);
+    broadcastRoom(room);
+    client.room = undefined;
+    return;
+  }
   const timer = setTimeout(() => {
     if (room.clients.has(client.id)) return;
     room.players.delete(client.id);
     room.tokens.delete(client.id);
     room.jumpHeld.delete(client.id);
     room.reconnectTimers.delete(client.id);
-    if (room.players.size === 0) rooms.delete(room.code);
+    if (humanCount(room) === 0) rooms.delete(room.code);
     else broadcastRoom(room);
   }, 30000);
   room.reconnectTimers.set(client.id, timer);
@@ -367,7 +391,7 @@ function damage(
   hitY: number,
   details: { actorId?: string; weaponId?: WeaponId; secondary?: boolean; explosive?: boolean } = {},
 ) {
-  if (victim.invulnerable > 0 || victim.respawnTimer > 0) return;
+  if (victim.invulnerable > 0 || victim.respawnTimer > 0 || isEliminated(room, victim)) return;
   victim.vx += (victim.x >= sourceX ? 1 : -1) * force;
   victim.vy -= force * 0.42;
   victim.hitFlash = 0.13;
@@ -465,8 +489,13 @@ function attack(room: Room, player: PlayerState, secondary: boolean) {
   }
 }
 
+// Eliminated players (out of lives in a match) are frozen server-side: no
+// physics, no AI inputs, no hazard or projectile interaction, no repeated
+// death events. Sandbox mode never eliminates anyone.
+const isEliminated = (room: Room, player: PlayerState) => room.mode !== "sandbox" && player.lives <= 0;
+
 function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard", emit = true) {
-  if (player.respawnTimer > 0) return;
+  if (player.respawnTimer > 0 || isEliminated(room, player)) return;
   if (room.mode === "sandbox") player.lives = room.config.lives;
   else player.lives -= 1;
   player.vx = 0;
@@ -483,7 +512,7 @@ function updateHazards(room: Room, previous: HazardState[], dt: number) {
     const def = defs.find((candidate) => candidate.id === state.id)!;
     const old = previous.find((candidate) => candidate.id === state.id) || state;
     for (const player of room.players.values()) {
-      if (player.respawnTimer > 0) continue;
+      if (player.respawnTimer > 0 || isEliminated(room, player)) continue;
       if (state.kind === "cargoLift") {
         const wasStanding = Math.abs(player.y + PLAYER_FOOT_OFFSET - old.y) < 6 && player.x > old.x - PLAYER_HALF_WIDTH && player.x < old.x + old.width + PLAYER_HALF_WIDTH;
         if (wasStanding) {
@@ -520,6 +549,10 @@ function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientI
   player.invulnerable = Math.max(0, player.invulnerable - dt);
   player.hitFlash = Math.max(0, player.hitFlash - dt);
 
+  if (isEliminated(room, player)) {
+    room.jumpHeld.set(player.id, false);
+    return;
+  }
   if (player.respawnTimer > 0) {
     room.jumpHeld.set(player.id, input.jump);
     player.respawnTimer -= dt;
@@ -676,7 +709,7 @@ function updateRoom(room: Room, dt: number) {
       if (projectile.y > platform.y - 8 && projectile.y < platform.y + platform.height + 8 && projectile.x > platform.x && projectile.x < platform.x + platform.width) projectile.ttl = 0;
     }
     for (const target of room.players.values()) {
-      if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || !intersectsCircle({ x: projectile.x, y: projectile.y, r: projectile.radius }, { x: target.x, y: target.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) continue;
+      if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target) || !intersectsCircle({ x: projectile.x, y: projectile.y, r: projectile.radius }, { x: target.x, y: target.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) continue;
       projectile.hitIds.push(target.id);
       damage(room, target, projectile.damage, projectile.knockback, projectile.x - projectile.vx, projectile.x, projectile.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
       if (projectile.explosiveRadius) {
@@ -695,10 +728,14 @@ function updateRoom(room: Room, dt: number) {
 
   room.projectiles = room.projectiles.filter((projectile) => projectile.ttl > 0 && projectile.x > -100 && projectile.x < WORLD.width + 100 && projectile.y < WORLD.height + 150);
   if (room.mode === "match") {
-    const alive = [...room.players.values()].filter((player) => player.lives > 0 || player.respawnTimer > 0);
+    const alive = [...room.players.values()].filter((player) => !isEliminated(room, player) && (player.lives > 0 || player.respawnTimer > 0));
     if (alive.length <= 1) {
       room.phase = "results";
       room.winner = alive[0]?.name;
+      // The tick loop freezes at results, so the periodic broadcast may never
+      // fire again — push the final snapshot explicitly so every client
+      // actually sees the results screen.
+      broadcastSnapshot(room);
     }
   }
 }
@@ -748,6 +785,7 @@ wss.on("connection", (ws) => {
     else if (message.type === "sandbox_respawn" && client.room && client.id === client.room.hostId) respawnSandboxPlayer(client.room, client.id);
     else if (message.type === "config" && client.room && client.id === client.room.hostId) setConfig(client.room, message.patch || {});
     else if (message.type === "input" && client.room) client.input = { ...client.input, ...message.input };
+    else if (message.type === "leave_room" && client.room) leaveRoom(client);
     else if (message.type === "restart" && client.room && client.room.phase === "results" && client.id === client.room.hostId) returnToLobby(client.room);
   });
   ws.on("close", () => leave(client));

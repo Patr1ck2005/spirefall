@@ -88,19 +88,34 @@ for (let i = 0; i < 40; i++) {
   if (guestPlayer?.invulnerable <= 0) { protectionExpired = true; break; }
 }
 assert(protectionExpired, "Spawn protection did not expire");
-guest.send(JSON.stringify({ type: "input", input: { seq: 20, left: false, right: false, jump: false, drop: true, primary: false, secondary: false } }));
-for (let i = 0; i < 30; i++) {
+// Terrain v2 spawn points sit ~770px apart with lethal floor gaps between
+// them, so walking into sidearm range is not practical. Both pilots drop
+// through their one-way ledges onto the shared ground floor (same height),
+// then the host switches to the Rail Lance (weaponSet slot 4, range 1100)
+// and fires straight across: deterministic geometry.
+guest.send(JSON.stringify({ type: "input", input: { seq: 20, drop: true } }));
+host.send(JSON.stringify({ type: "input", input: { seq: 5, drop: true } }));
+let bothGround = false;
+for (let i = 0; i < 40 && !bothGround; i++) {
   const message = await waitFor(host, "snapshot");
-  const player = message.snapshot.players.find((p: any) => p.id === joined.selfId);
-  if (player?.onGround && player.y > 500) break;
+  const guestPlayer = message.snapshot.players.find((p: any) => p.id === joined.selfId);
+  const hostPlayer = message.snapshot.players.find((p: any) => p.id === created.selfId);
+  bothGround = !!guestPlayer && !!hostPlayer && guestPlayer.onGround && hostPlayer.onGround && Math.abs(guestPlayer.y - hostPlayer.y) < 8;
 }
-guest.send(JSON.stringify({ type: "input", input: { seq: 21, left: true, drop: false } }));
-for (let i = 0; i < 8; i++) await waitFor(host, "snapshot");
-guest.send(JSON.stringify({ type: "input", input: { seq: 22, left: false } }));
+host.send(JSON.stringify({ type: "input", input: { seq: 6, drop: false } }));
+guest.send(JSON.stringify({ type: "input", input: { seq: 21, drop: false, left: false, right: false, jump: false, primary: false, secondary: false } }));
+assert(bothGround, "Pilots did not settle onto the shared ground floor");
+host.send(JSON.stringify({ type: "input", input: { seq: 7, weaponSlot: 4 } }));
+for (let i = 0; i < 6; i++) await waitFor(host, "snapshot");
+const preShot = (await waitFor(host, "snapshot")).snapshot;
+const preGuest = preShot.players.find((p: any) => p.id === joined.selfId);
+const preHost = preShot.players.find((p: any) => p.id === created.selfId);
+if (preHost.weapon !== "sniper") throw new Error(`Weapon slot switch failed: ${preHost.weapon}`);
+assert(Math.abs(preGuest.x - preHost.x) < 1100 && Math.abs(preGuest.y - preHost.y) < 16, "Pilots are not in a shared-floor sniper line; map geometry broke this test");
 host.send(JSON.stringify({ type: "input", input: { seq: 3, primary: true, secondary: false } }));
 let limbDamaged = false;
 let hitEventSeen = false;
-for (let i = 0; i < 12; i++) {
+for (let i = 0; i < 20; i++) {
   const message = await waitFor(host, "snapshot");
   const guestPlayer = message.snapshot.players.find((p: any) => p.id === joined.selfId);
   limbDamaged ||= Object.values(guestPlayer?.limbs || {}).some((value: any) => value < 100);
@@ -240,6 +255,70 @@ sandboxHost.send(JSON.stringify({ type: "start_sandbox" }));
 const sandboxStarted = await waitFor(sandboxHost, "snapshot");
 assert(sandboxStarted.snapshot.mode === "sandbox", "Sandbox with 1 human + 1 bot did not start");
 assert(sandboxStarted.snapshot.players.filter((p: any) => p.isBot).length === 1, "Sandbox snapshot is missing its bot");
+
+// --- Elimination freeze: an out-of-lives pilot stops simulating (no repeated
+// death events, lives never go negative), and the match resolves promptly ---
+const elimHost = await open();
+elimHost.send(JSON.stringify({ type: "create", name: "Elim-Watcher" }));
+const elimCreated = await waitFor(elimHost, "room");
+elimHost.send(JSON.stringify({ type: "config", patch: { mapId: "canopy", lives: 1, bots: 1, botSkill: "casual", crates: false } }));
+await waitFor(elimHost, "room");
+elimHost.send(JSON.stringify({ type: "start" }));
+const elimStarted = await waitFor(elimHost, "snapshot");
+assert(elimStarted.snapshot.players.length === 2, "Elimination room did not field 2 pilots");
+// Deterministic elimination: with lives=1 the host walks off the map once.
+// Afterwards the freeze must hold — the eliminated host emits no further
+// death events, never drops below 0 lives, and the match resolves.
+let elimSettled = false;
+let repeatedDeaths = false;
+let negativeLives = false;
+let resolved = false;
+// Deterministic elimination: with lives=1 the host holds "right" until the
+// death lands (walk off the spawn ledge, across the ground, into the gap).
+for (let i = 0; i < 400 && !resolved; i++) {
+  const message = await waitFor(elimHost, "snapshot", 5000);
+  const dead = message.snapshot.players.find((p: any) => p.lives <= 0);
+  if (!dead) elimHost.send(JSON.stringify({ type: "input", input: { seq: 1, right: true } }));
+  if (dead) {
+    elimSettled = true;
+    elimHost.send(JSON.stringify({ type: "input", input: { seq: 2, right: false } }));
+    negativeLives ||= dead.lives < 0;
+    const deathEvents = message.snapshot.events.filter((event: any) => event.type === "death" && event.targetId === dead.id);
+    repeatedDeaths ||= deathEvents.length > 1;
+  }
+  resolved ||= message.snapshot.phase === "results";
+}
+assert(elimSettled, "Elimination scenario never produced an out-of-lives pilot");
+assert(!negativeLives, "An eliminated pilot lost extra lives after death (freeze broken)");
+assert(!repeatedDeaths, "An eliminated pilot emitted repeated death events (freeze broken)");
+assert(resolved, "Match with one eliminated pilot did not resolve");
+elimHost.close();
+
+// --- Explicit leave_room removes the pilot immediately (no 30s hold) ---
+const leaveHost = await open();
+// Continuous collector: ws drops messages that arrive while no listener is
+// attached, so per-message waitFor races the server's roster broadcasts.
+const leaveRosters: any[] = [];
+leaveHost.on("message", (raw: WebSocket.RawData) => {
+  const message = JSON.parse(raw.toString()) as Message;
+  if (message.type === "room") leaveRosters.push(message);
+});
+leaveHost.send(JSON.stringify({ type: "create", name: "Leave-Host" }));
+const leaveCreated = await waitFor(leaveHost, "room");
+const leaver = await open();
+leaver.send(JSON.stringify({ type: "join", roomCode: leaveCreated.room.code, name: "Leave-Guest" }));
+const leaveJoined = await waitFor(leaver, "room");
+assert(leaveJoined.room.players.length === 2, "Leave-test guest did not join");
+leaver.send(JSON.stringify({ type: "leave_room" }));
+let leaveRoom: Message | undefined;
+for (let i = 0; i < 60 && !leaveRoom; i++) {
+  leaveRoom = leaveRosters.find((message) => message.room.players.length === 1);
+  if (!leaveRoom) await new Promise((resolve) => setTimeout(resolve, 50));
+}
+assert(leaveRoom, "leave_room did not remove the departing pilot immediately");
+assert(!leaveRoom!.room.players.some((p: any) => p.id === leaveJoined.selfId), "Departed pilot is still in the roster");
+leaver.close();
+leaveHost.close();
 
 host.close();
 restoredGuest.close();

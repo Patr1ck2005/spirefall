@@ -101,7 +101,7 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 
 ### M9 AI 机器人 + Tab 武器面板 + 地形 v2 + 沉浸感渲染（2026-08-23，Claude Code 第二轮）
 
-用户三项新需求全部拍板并实施（一次性 commit 待用户验收后执行）：
+用户三项新需求全部拍板并实施，已提交为 `1e8ccbd`（trailer `Origin: ai:stealth/ox-alpha-claude-code`）：
 
 - **AI 机器人**（正式解除"首版无 AI"排除项）：`server/bots.ts` 三档难度（Casual/Standard/Brutal），感知队列+反应延迟、BFS 平台导航图（buildPlatformGraph 共享真相源）、边缘自保（casual 按失误率跳过）、开火纪律/预判/噪声、brutal 档机关预警躲避；机器人=真实 PlayerState 占槽，沙盒=1 真人+N bot，对战=任意混合≥2；房主迁移立即发生且绝不选 bot；孤儿房间由新加入真人接任（顺手修的健壮性缺陷）
 - **Tab 武器面板**：按住 Tab 显示 weaponSet 键位/实时弹药/攻击模式摘要，当前枪高亮；window keydown/keyup preventDefault + Phaser addCapture("TAB") 双保险
@@ -109,18 +109,34 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - **沉浸感渲染**：平台静态烘焙进 RenderTexture（材质 TileSprite 叠加 alpha≈0.26，换图才重烘）、远景视差层（3 张新生成 <map>-far.webp，depth -3，自位移 ±30px/±15px 双层视差）、氛围粒子（canopy 雨 50 / fortress 尘埃 35 / factory 余烬 45）、mover 美术（行程轨道线+板台脉冲灯）
 - 全量回归通过（logic/smoke/browser/visual/performance 57.2 FPS）
 
-## 4. 当前真实状态（2026-08-23 第二轮核验）
+### M10 淘汰冻结 + 真退出 + 结算快照修复（2026-08-23，Claude Code 第三轮，用户验收发现）
 
-- ✅ Git：master @ `6aad3dd`，工作区含本轮改动待提交（资产+测试修复+文档）
+用户联机验收发现两个 bug，全部修复：
+
+- **淘汰玩家无限死亡循环**（血舞震动+机器人反复对冲+负命数）：生命耗尽的玩家在 respawnTimer 归零后仍被完整模拟（物理/AI/机关/子弹），掉坑→再 loseLife→再放死亡特效→循环；`alive` 判定含 respawnTimer>0 的死人导致结算被拖延。修复：新增 `isEliminated()`（match 模式 lives<=0），在 `stepPlayer`（冻结输入/物理）、`loseLife`、`damage`、机关循环、子弹命中五处拦截；`alive` 判定排除已淘汰者 → 比赛即时结算
+- **结算快照丢失**：phase 变 results 后 tick 冻结，周期广播依赖 `tick % 3 === 0`，2/3 概率客户端永远收不到结算界面。修复：结算时显式 `broadcastSnapshot(room)` 一次
+- **退出按钮从未真正工作**：大厅 "Leave circuit" 只是 `location.reload()`，而 reload 后自动重连（localStorage mayhem-session）会把玩家拉回原房间；对局中更无任何退出入口。修复：新增 `leave_room` 协议消息（立即删槽+清 token，跳过 30s 重连保留窗）；客户端三处退出（大厅 Leave / 对局右上 Exit match / 结算 Leave circuit）统一走 `leaveRoom()`——发协议、清会话存储、销毁 Phaser 实例、回主菜单，不再 reload；纯 bot/无人房间即时解散回收
+- **测试修复**（network-smoke 有两个上一轮遗留的隐性回归）：
+  - 命中测试：地形 v2 出生点相距 770px > Sidearm 射程 700 且中间有致命地面缺口，原固定走位必败；改为双方 drop 到共享地面层 + host 切狙击（slot 4, range 1100）射击，几何确定，并加几何健全性断言防地图再破坏
+  - ws 库无 listener 时静默丢消息：逐条 waitFor 在同步处理窗口会漏掉服务器广播（leave 测试时好时坏的根因）；改用持续挂载的 message collector 轮询
+  - 新增回归测试：淘汰冻结（无重复死亡事件、无负命、即时结算）+ leave_room 即时移除
+- 全量回归通过（logic/smoke×3/browser/visual/performance 78.5 FPS）
+
+## 4. 当前真实状态（2026-08-23 第三轮核验）
+
+- ✅ Git：master @ `1e8ccbd`（M9 已提交），工作区含 M10 修复待提交（server/main/style/network-smoke/PROGRESS）
+- ⚠️ 运维教训：`tsx server/server.ts` 不带 watch，改服务器代码必须手动重启进程；本轮多个"测试时好时坏"实为旧进程在跑（netstat 过滤词要用 LISTENING 而非 LISTEN）
 - ✅ `public/assets/` 已有全部 10 张 webp（3 环境 + 4 肖像 + 3 材质），加载器自动生效，程序化绘制仅作回退
 - ✅ 六套测试脚本齐全且全绿；dev 服务运行中（Vite 5173 / 游戏 8787）
 - 测试实测基线（本机当前环境）：单人持续战斗 ≈167 FPS；四人同机压测 ≈66–74 FPS / P95 ≈23.6ms（Edge 151 无头调度上限，非游戏瓶颈）
 
 ## 5. 未完成事项 / 下一步候选
 
-1. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
-2. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收（本轮交付物已就绪）
-3. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕
+1. **M10 修复提交**：用户已验收问题不大，待确认 provenance（模型名+agent 名+纯 AI/AI 辅助分类）后带 `Origin:` trailer 提交
+2. **用户复验两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
+3. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
+4. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
+5. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 

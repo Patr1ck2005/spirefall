@@ -148,12 +148,15 @@ select { cursor: pointer; }
 #game, #game canvas { display: block; width: 100%; height: 100%; }
 #game canvas { object-fit: contain; }
 .game-hud { pointer-events: none; position: absolute; inset: 0; z-index: 3; font-size: 10px; }
+.game-hud button { pointer-events: auto; }
+.hud-leave { position: absolute; right: 12px; top: 10px; z-index: 6; min-height: 26px; padding: 5px 9px; background: rgba(9,13,15,.88); font-size: 9px; }
+.hud-leave:hover { color: #e7ece6; border-color: #495457; }
 .hud-top { position: absolute; top: 0; left: 0; right: 0; display: grid; grid-template-columns: 190px 1fr minmax(260px, auto); align-items: start; min-height: 56px; padding: 10px 12px; background: linear-gradient(180deg, rgba(5,8,10,.88), rgba(5,8,10,0)); }
 .hud-top > div:first-child span, .hud-top > div:first-child small { display: block; }
 .hud-top > div:first-child span { color: #e9eee8; font-weight: 900; }
 .hud-top > div:first-child small { margin-top: 3px; color: #879496; font-size: 8px; }
 .hud-phase { justify-self: center; padding: 7px 12px; border-top: 2px solid var(--amber); background: rgba(8,12,14,.78); color: #eef0e9; font-size: 9px; font-weight: 900; }
-.hud-roster { display: flex; justify-content: flex-end; gap: 5px; }
+.hud-roster { display: flex; justify-content: flex-end; gap: 5px; margin-right: 92px; }
 .hud-roster span { --pilot: #888; display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 5px 6px; border-bottom: 2px solid var(--pilot); background: rgba(8,12,14,.74); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hud-roster span i { flex: none; width: 5px; height: 5px; background: var(--pilot); }
 .hud-roster span b { color: var(--pilot); }

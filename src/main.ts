@@ -107,6 +107,7 @@ app.innerHTML = `
           <div class="hud-top"><div><span id="hud-room"></span><small id="hud-sector"></small></div><div id="hud-phase" class="hud-phase"></div><div id="hud-roster" class="hud-roster"></div></div>
           <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
           <div id="weapon-panel" class="weapon-panel hidden"></div>
+          <button id="in-match-leave" class="quiet hud-leave">Exit match</button>
         </div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn">Test respawn</button><button id="sandbox-return">Return to lobby</button></div>
         <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Circuit resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave circuit</button></div></div>
@@ -283,8 +284,32 @@ $("solo-test").addEventListener("click", () => send("start_sandbox"));
 $("restart").addEventListener("click", () => send("restart"));
 $("sandbox-respawn").addEventListener("click", () => send("sandbox_respawn"));
 $("sandbox-return").addEventListener("click", () => send("return_lobby"));
-$("result-leave").addEventListener("click", () => location.reload());
-$("leave").addEventListener("click", () => location.reload());
+$("result-leave").addEventListener("click", leaveRoom);
+$("leave").addEventListener("click", leaveRoom);
+$("in-match-leave").addEventListener("click", leaveRoom);
+
+// Exit the room for real: tell the server (immediate slot removal, no 30s
+// reconnect hold), clear the saved session so the auto-resume does not pull
+// us straight back in, and return to the main menu without a page reload.
+function leaveRoom() {
+  manualConnectionAction = true;
+  send("leave_room");
+  localStorage.removeItem("mayhem-session");
+  token = "";
+  selfId = "";
+  roomCode = "";
+  currentRoom = undefined;
+  scene = undefined;
+  gameInstance?.destroy(true);
+  gameInstance = undefined;
+  showError("");
+  lobby.classList.add("hidden");
+  gameWrap.classList.add("hidden");
+  $("result").classList.add("hidden");
+  $("sandbox-actions").classList.add("hidden");
+  menu.classList.remove("hidden");
+  setStatus("Linked", "good");
+}
 $("copy-code").addEventListener("click", async () => {
   await navigator.clipboard?.writeText(roomCode);
   $("copy-code").textContent = "Copied";
