@@ -15,6 +15,7 @@ import {
   WORLD,
   calculateHazardState,
   calculateLimbModifiers,
+  calculateMoverState,
   clamp,
   freshLimbs,
   makePlayer,
@@ -26,25 +27,28 @@ import {
   type HazardDef,
   type HazardState,
   type LimbId,
+  type MapDef,
   type MatchConfig,
   type MatchMode,
+  type MoverState,
+  type Platform,
   type PlayerState,
   type ProjectileState,
   type RoomView,
   type ServerSnapshot,
   type WeaponId,
 } from "../shared/game.js";
+import { BOT_IDS, botNameFor, clampBotCount, clearBotInputs, createBotInput, ensureControllers, getBotInput, updateBots } from "./bots.js";
 
-type Client = {
+export type Client = {
   ws: WebSocket;
   id: string;
   room?: Room;
   token: string;
   input: ClientInput;
-  jumpHeld: boolean;
 };
 
-type Room = {
+export type Room = {
   code: string;
   hostId: string;
   clients: Map<string, Client>;
@@ -57,11 +61,13 @@ type Room = {
   projectiles: ProjectileState[];
   crates: CrateState[];
   hazards: HazardState[];
+  movers: MoverState[];
   events: CombatEvent[];
   nextProjectile: number;
   nextEvent: number;
   reconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
   hazardHits: Map<string, number>;
+  jumpHeld: Map<string, boolean>;
   winner?: string;
 };
 
@@ -78,7 +84,7 @@ const roomView = (room: Room): RoomView => ({
   phase: room.phase,
   mode: room.mode,
   config: room.config,
-  players: [...room.players.values()].map(({ id, name, connected, color, archetype }) => ({ id, name, connected, color, archetype })),
+  players: [...room.players.values()].map(({ id, name, connected, color, archetype, isBot }) => ({ id, name, connected, color, archetype, isBot })),
 });
 
 const createCode = () => {
@@ -115,14 +121,17 @@ function createRoom(client: Client, name: string) {
     projectiles: [],
     crates: [],
     hazards: [],
+    movers: [],
     events: [],
     nextProjectile: 1,
     nextEvent: 1,
     reconnectTimers: new Map(),
     hazardHits: new Map(),
+    jumpHeld: new Map(),
   };
   client.room = room;
   room.players.set(client.id, makePlayer(client.id, name.slice(0, 16) || "Player", 0, room.config));
+  room.jumpHeld.set(client.id, false);
   rooms.set(room.code, room);
   send(client, "room", { room: roomView(room), token: client.token, selfId: client.id });
 }
@@ -136,8 +145,11 @@ function joinRoom(client: Client, roomCode: string, name: string) {
   client.token = randomUUID();
   const player = makePlayer(client.id, name.slice(0, 16) || "Player", room.players.size, room.config);
   room.players.set(client.id, player);
+  room.jumpHeld.set(client.id, false);
   room.tokens.set(client.id, client.token);
   room.clients.set(client.id, client);
+  // An orphaned lobby (every human left before this arrival) adopts the newcomer.
+  if (!room.hostId || !room.players.has(room.hostId)) room.hostId = client.id;
   send(client, "room", { room: roomView(room), token: client.token, selfId: client.id });
   broadcastRoom(room);
 }
@@ -153,12 +165,19 @@ function leave(client: Client) {
   const player = room.players.get(client.id);
   if (!player) return;
   player.connected = false;
+  // Migrate host immediately so the room stays controllable during the
+  // 30s reconnect window; a returning former host rejoins as a regular pilot.
+  if (room.hostId === client.id) {
+    const humanCandidate = [...room.players.values()].find((candidate) => candidate.connected && room.clients.has(candidate.id));
+    room.hostId = humanCandidate?.id || "";
+    broadcastRoom(room);
+  }
   const timer = setTimeout(() => {
     if (room.clients.has(client.id)) return;
     room.players.delete(client.id);
     room.tokens.delete(client.id);
+    room.jumpHeld.delete(client.id);
     room.reconnectTimers.delete(client.id);
-    if (room.hostId === client.id) room.hostId = [...room.players.values()].find((candidate) => candidate.connected)?.id || [...room.players.keys()][0] || "";
     if (room.players.size === 0) rooms.delete(room.code);
     else broadcastRoom(room);
   }, 30000);
@@ -177,9 +196,9 @@ function reconnect(client: Client, roomCode: string, playerId: string, token: st
   client.room = room;
   client.token = token;
   client.input = blankInput();
-  client.jumpHeld = false;
   player.connected = true;
   room.clients.set(playerId, client);
+  if (!room.hostId || !room.players.has(room.hostId)) room.hostId = playerId;
   send(client, "room", { room: roomView(room), token, selfId: playerId });
   broadcastRoom(room);
   return true;
@@ -232,9 +251,36 @@ function spawnCrate(room: Room, crate: CrateState) {
   emitEvent(room, "crateSpawn", crate.x, crate.y, 1, { weaponId: crate.weapon, visualSeed: randomBetween(0, 0x7fffffff) });
 }
 
+const humanCount = (room: Room) => [...room.players.values()].filter((player) => !player.isBot).length;
+
+function syncBotRoster(room: Room) {
+  const humans = humanCount(room);
+  const wanted = clampBotCount(room.config.bots, humans);
+  for (const botId of BOT_IDS) {
+    const slot = Number(botId.slice(4));
+    const existing = room.players.get(botId);
+    if (slot <= wanted) {
+      if (!existing) {
+        const bot = makePlayer(botId, botNameFor(slot), slot, room.config);
+        bot.isBot = true;
+        room.players.set(botId, bot);
+        room.jumpHeld.set(botId, false);
+      }
+    } else if (existing) {
+      room.players.delete(botId);
+      room.jumpHeld.delete(botId);
+    }
+  }
+  ensureControllers(room);
+  clearBotInputs(room);
+}
+
 function start(room: Room, mode: MatchMode) {
-  const invalidCount = mode === "sandbox" ? room.players.size !== 1 : room.players.size < 2;
-  if (room.phase !== "lobby" || invalidCount) return;
+  if (room.phase !== "lobby") return;
+  syncBotRoster(room);
+  const humans = humanCount(room);
+  const invalid = mode === "sandbox" ? humans !== 1 : room.players.size < 2;
+  if (invalid) return;
   room.phase = "playing";
   room.mode = mode;
   room.winner = undefined;
@@ -247,6 +293,7 @@ function start(room: Room, mode: MatchMode) {
     ? [0, 1, 2, 3, 4, 5].map((id) => ({ id, x: 0, y: 0, weapon: "sidearm" as WeaponId, active: false, respawnTimer: 0, socketId: "", generation: 0, nextSpawnTick: id < 3 ? randomBetween(60, 180) : Number.MAX_SAFE_INTEGER }))
     : [];
   room.hazards = MAPS[room.config.mapId].hazards.map((def) => calculateHazardState(def, 0));
+  room.movers = MAPS[room.config.mapId].movers.map((def) => calculateMoverState(def, 0));
   broadcastRoom(room);
 }
 
@@ -257,11 +304,13 @@ function returnToLobby(room: Room) {
   room.projectiles = [];
   room.crates = [];
   room.hazards = [];
+  room.movers = [];
   room.events = [];
   for (const client of room.clients.values()) {
     client.input = blankInput();
-    client.jumpHeld = false;
+    room.jumpHeld.set(client.id, false);
   }
+  clearBotInputs(room);
   broadcastRoom(room);
 }
 
@@ -276,13 +325,17 @@ function setConfig(room: Room, patch: Partial<MatchConfig>) {
   const mapId = patch.mapId && patch.mapId in MAPS ? patch.mapId : room.config.mapId;
   const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 6);
   if (requestedWeapons && !requestedWeapons.includes("sidearm")) requestedWeapons.unshift("sidearm");
+  const botSkill = patch.botSkill === "casual" || patch.botSkill === "brutal" ? patch.botSkill : patch.botSkill === "standard" ? patch.botSkill : room.config.botSkill;
   room.config = {
     ...room.config,
-    ...patch,
     mapId,
     lives: clamp(Number(patch.lives ?? room.config.lives), 1, 5) as MatchConfig["lives"],
+    crates: typeof patch.crates === "boolean" ? patch.crates : room.config.crates,
     weaponSet: requestedWeapons?.length ? requestedWeapons : room.config.weaponSet,
+    bots: clampBotCount(patch.bots ?? room.config.bots, humanCount(room)),
+    botSkill,
   };
+  syncBotRoster(room);
   for (const player of room.players.values()) {
     player.weapon = "sidearm";
     player.ammo = player.ammoByWeapon[player.weapon];
@@ -353,6 +406,7 @@ function attack(room: Room, player: PlayerState, secondary: boolean) {
     if (def.pattern === "dashSlash") {
       player.x = clamp(player.x + player.facing * def.dashDistance, PLAYER_HALF_WIDTH, WORLD.width - PLAYER_HALF_WIDTH);
       player.vx = player.facing * def.dashSpeed;
+      resolveSolids(player, MAPS[room.config.mapId].platforms);
     }
     for (const other of room.players.values()) {
       const hitX = other.x - player.facing * 10;
@@ -460,93 +514,137 @@ function updateHazards(room: Room, previous: HazardState[], dt: number) {
   }
 }
 
+function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientInput, dt: number) {
+  player.primaryCooldown = Math.max(0, player.primaryCooldown - dt);
+  player.secondaryCooldown = Math.max(0, player.secondaryCooldown - dt);
+  player.invulnerable = Math.max(0, player.invulnerable - dt);
+  player.hitFlash = Math.max(0, player.hitFlash - dt);
+
+  if (player.respawnTimer > 0) {
+    room.jumpHeld.set(player.id, input.jump);
+    player.respawnTimer -= dt;
+    if (player.respawnTimer <= 0 && player.lives > 0) {
+      const index = [...room.players.keys()].indexOf(player.id);
+      const spawn = map.spawns[index % 4];
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.limbs = freshLimbs();
+      player.weapon = "sidearm";
+      player.ammo = player.ammoByWeapon.sidearm = WEAPONS.sidearm.ammo;
+      player.invulnerable = 1.4;
+      emitEvent(room, "respawn", player.x, player.y - PLAYER_TARGET_OFFSET, 1, { targetId: player.id });
+    }
+    return;
+  }
+
+  if (input.weaponSlot !== undefined) {
+    const next = room.config.weaponSet[input.weaponSlot - 1];
+    if (next && next !== player.weapon) {
+      player.weapon = next;
+      player.ammo = player.ammoByWeapon[next];
+    }
+    input.weaponSlot = undefined;
+  }
+
+  const modifiers = calculateLimbModifiers(player.limbs);
+  const move = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  player.vx += move * 30 * modifiers.move;
+  player.vx *= player.onGround ? 0.78 : 0.93;
+  player.vx = clamp(player.vx, -338 * modifiers.move, 338 * modifiers.move);
+  if (move) player.facing = move as 1 | -1;
+  const jumpPressed = input.jump && !room.jumpHeld.get(player.id);
+  room.jumpHeld.set(player.id, input.jump);
+  if (jumpPressed && player.jumpsUsed < MAX_JUMPS) {
+    player.vy = -(player.jumpsUsed === 0 ? 560 : 510) * modifiers.jump;
+    player.jumpsUsed += 1;
+    player.onGround = false;
+  }
+
+  player.vy += 1150 * dt;
+  const oldY = player.y;
+  player.x = clamp(player.x + player.vx * dt, PLAYER_HALF_WIDTH, WORLD.width - PLAYER_HALF_WIDTH);
+  player.y += player.vy * dt;
+  player.onGround = false;
+
+  resolveSolids(player, map.platforms);
+
+  for (const platform of map.platforms) {
+    const crossed = oldY + PLAYER_FOOT_OFFSET <= platform.y && player.y + PLAYER_FOOT_OFFSET >= platform.y;
+    const canDrop = input.drop && platform.oneWay;
+    if (player.vy >= 0 && crossed && !canDrop && player.x > platform.x - PLAYER_HALF_WIDTH && player.x < platform.x + platform.width + PLAYER_HALF_WIDTH) {
+      player.y = platform.y - PLAYER_FOOT_OFFSET;
+      player.vy = 0;
+      player.onGround = true;
+      player.jumpsUsed = 0;
+    }
+  }
+  const movers = [...room.hazards.filter((hazard) => hazard.kind === "cargoLift"), ...room.movers];
+  for (const surface of movers) {
+    const crossed = oldY + PLAYER_FOOT_OFFSET <= surface.y && player.y + PLAYER_FOOT_OFFSET >= surface.y;
+    if (player.vy >= 0 && crossed && player.x > surface.x - PLAYER_HALF_WIDTH && player.x < surface.x + surface.width + PLAYER_HALF_WIDTH) {
+      player.y = surface.y - PLAYER_FOOT_OFFSET;
+      player.vy = surface.vy;
+      player.onGround = true;
+      player.jumpsUsed = 0;
+    }
+  }
+
+  if (player.y > WORLD.height + 80) loseLife(room, player, player.x, WORLD.height, "fall");
+  if (input.primary) attack(room, player, false);
+  if (input.secondary) attack(room, player, true);
+}
+
+// Solid platforms block from every side: push out along the least-penetration
+// axis, stop upward motion at ceilings. Solids are thick (>=24px) versus the
+// ~10px/tick worst-case knockback displacement, so tunneling is not a concern.
+function resolveSolids(player: PlayerState, platforms: Platform[]) {
+  for (const solid of platforms) {
+    if (!solid.solid) continue;
+    if (!intersectsPlayerRect(player, solid)) continue;
+    const overlapLeft = player.x + PLAYER_HALF_WIDTH - solid.x;
+    const overlapRight = solid.x + solid.width - (player.x - PLAYER_HALF_WIDTH);
+    const overlapTop = player.y + PLAYER_FOOT_OFFSET - solid.y;
+    const overlapBottom = solid.y + solid.height - (player.y - PLAYER_BODY_HEIGHT);
+    const minHorizontal = Math.min(overlapLeft, overlapRight);
+    const minVertical = Math.min(overlapTop, overlapBottom);
+    if (minHorizontal <= minVertical) {
+      if (overlapLeft < overlapRight) player.x -= overlapLeft;
+      else player.x += overlapRight;
+      player.vx = 0;
+    } else {
+      if (overlapTop < overlapBottom) {
+        player.y = solid.y - PLAYER_FOOT_OFFSET;
+        if (player.vy > 0) { player.vy = 0; player.onGround = true; player.jumpsUsed = 0; }
+      } else {
+        player.y = solid.y + solid.height + PLAYER_BODY_HEIGHT;
+        if (player.vy < 0) player.vy = 0;
+      }
+    }
+  }
+}
+
 function updateRoom(room: Room, dt: number) {
   if (room.phase !== "playing") return;
   room.tick++;
   const map = MAPS[room.config.mapId];
   const previousHazards = room.hazards.map((hazard) => ({ ...hazard }));
   updateHazards(room, previousHazards, dt);
+  room.movers = MAPS[room.config.mapId].movers.map((def) => calculateMoverState(def, room.tick));
+  updateBots(room, dt);
 
-  for (const client of room.clients.values()) {
-    const player = room.players.get(client.id);
-    if (!player || !player.connected) continue;
-    const input = client.input;
-    player.primaryCooldown = Math.max(0, player.primaryCooldown - dt);
-    player.secondaryCooldown = Math.max(0, player.secondaryCooldown - dt);
-    player.invulnerable = Math.max(0, player.invulnerable - dt);
-    player.hitFlash = Math.max(0, player.hitFlash - dt);
-
-    if (player.respawnTimer > 0) {
-      client.jumpHeld = input.jump;
-      player.respawnTimer -= dt;
-      if (player.respawnTimer <= 0 && player.lives > 0) {
-        const index = [...room.players.keys()].indexOf(player.id);
-        const spawn = map.spawns[index % 4];
-        player.x = spawn.x;
-        player.y = spawn.y;
-        player.vx = 0;
-        player.vy = 0;
-        player.limbs = freshLimbs();
-        player.weapon = "sidearm";
-        player.ammo = player.ammoByWeapon.sidearm = WEAPONS.sidearm.ammo;
-        player.invulnerable = 1.4;
-        emitEvent(room, "respawn", player.x, player.y - PLAYER_TARGET_OFFSET, 1, { targetId: player.id });
-      }
-      continue;
+  for (const player of room.players.values()) {
+    const client = room.clients.get(player.id);
+    if (client) {
+      if (!player.connected) continue;
+      stepPlayer(room, map, player, client.input, dt);
+    } else {
+      // No socket entry: a bot pilot. Its controller supplies the input.
+      const input = getBotInput(room, player);
+      if (!input) continue;
+      stepPlayer(room, map, player, input, dt);
     }
-
-    if (input.weaponSlot !== undefined) {
-      const next = room.config.weaponSet[input.weaponSlot - 1];
-      if (next && next !== player.weapon) {
-        player.weapon = next;
-        player.ammo = player.ammoByWeapon[next];
-      }
-      input.weaponSlot = undefined;
-    }
-
-    const modifiers = calculateLimbModifiers(player.limbs);
-    const move = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    player.vx += move * 30 * modifiers.move;
-    player.vx *= player.onGround ? 0.78 : 0.93;
-    player.vx = clamp(player.vx, -338 * modifiers.move, 338 * modifiers.move);
-    if (move) player.facing = move as 1 | -1;
-    const jumpPressed = input.jump && !client.jumpHeld;
-    client.jumpHeld = input.jump;
-    if (jumpPressed && player.jumpsUsed < MAX_JUMPS) {
-      player.vy = -(player.jumpsUsed === 0 ? 560 : 510) * modifiers.jump;
-      player.jumpsUsed += 1;
-      player.onGround = false;
-    }
-
-    player.vy += 1150 * dt;
-    const oldY = player.y;
-    player.x = clamp(player.x + player.vx * dt, PLAYER_HALF_WIDTH, WORLD.width - PLAYER_HALF_WIDTH);
-    player.y += player.vy * dt;
-    player.onGround = false;
-
-    for (const platform of map.platforms) {
-      const crossed = oldY + PLAYER_FOOT_OFFSET <= platform.y && player.y + PLAYER_FOOT_OFFSET >= platform.y;
-      const canDrop = input.drop && platform.oneWay;
-      if (player.vy >= 0 && crossed && !canDrop && player.x > platform.x - PLAYER_HALF_WIDTH && player.x < platform.x + platform.width + PLAYER_HALF_WIDTH) {
-        player.y = platform.y - PLAYER_FOOT_OFFSET;
-        player.vy = 0;
-        player.onGround = true;
-        player.jumpsUsed = 0;
-      }
-    }
-    for (const lift of room.hazards.filter((hazard) => hazard.kind === "cargoLift")) {
-      const crossed = oldY + PLAYER_FOOT_OFFSET <= lift.y && player.y + PLAYER_FOOT_OFFSET >= lift.y;
-      if (player.vy >= 0 && crossed && player.x > lift.x - PLAYER_HALF_WIDTH && player.x < lift.x + lift.width + PLAYER_HALF_WIDTH) {
-        player.y = lift.y - PLAYER_FOOT_OFFSET;
-        player.vy = lift.vy;
-        player.onGround = true;
-        player.jumpsUsed = 0;
-      }
-    }
-
-    if (player.y > WORLD.height + 80) loseLife(room, player, player.x, WORLD.height, "fall");
-    if (input.primary) attack(room, player, false);
-    if (input.secondary) attack(room, player, true);
   }
 
   for (const crate of room.crates) {
@@ -614,6 +712,7 @@ function snapshot(room: Room): ServerSnapshot {
     projectiles: room.projectiles.map((projectile) => ({ ...projectile })),
     crates: room.crates.map((crate) => ({ ...crate })),
     hazards: room.hazards.map((hazard) => ({ ...hazard })),
+    movers: room.movers.map((mover) => ({ ...mover })),
     events: room.events.map((event) => ({ ...event })),
     config: room.config,
     winner: room.winner,
@@ -631,7 +730,7 @@ const http = createServer((_request, response) => {
 const wss = new WebSocketServer({ server: http });
 
 wss.on("connection", (ws) => {
-  const client: Client = { ws, id: randomUUID(), token: randomUUID(), input: blankInput(), jumpHeld: false };
+  const client: Client = { ws, id: randomUUID(), token: randomUUID(), input: blankInput() };
   ws.on("message", (raw) => {
     let message: any;
     try {

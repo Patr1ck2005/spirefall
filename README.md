@@ -36,8 +36,13 @@ The procedural environment is the guaranteed fallback. The final generated backg
 - `K`: secondary attack
 - `1`-`6`: select a weapon
 - Mouse wheel: cycle weapons
+- `Tab` (hold): weapon panel — keycap, live ammo, and attack patterns for every weapon in the match
 
 Every weapon defines separate primary and secondary attacks with independent cooldown, ammo cost, recoil, damage, and knockback.
+
+## AI pilots
+
+The room host can fill empty slots with server-authoritative bot pilots from the lobby (`AI pilots` count plus `Skill` tier: Casual / Standard / Brutal). Bots occupy real player slots, fight under the same limb, cooldown, crate, and hazard rules as humans, perceive only public match state through a tier-dependent reaction delay, and never disconnect. They work in both solo sandbox sessions (1 human + up to 3 bots) and normal matches (any human/bot mix totaling at least 2 pilots). If the host leaves, ownership migrates immediately to another human; bots never inherit the room.
 
 ## Verification
 
@@ -52,7 +57,7 @@ npm run test:visual
 npm run test:performance
 ```
 
-`test:logic` checks deterministic limb penalties, hit regions, lift travel, and hazard phases. `test:smoke` verifies room creation, joining, settings, authoritative match start, dual attacks, limb damage events, disconnect slot retention, reconnect, and the solo sandbox lifecycle. `test:browser` covers multiplayer and solo UI flows, three maps, J/K, visual preferences, screenshots, and refresh recovery. `test:visual` checks the menu, lobby, canvas, HUD, overflow, and nonblank rendering at four desktop viewports. `test:performance` drives four isolated clients through simultaneous J/K attacks and records frame timing plus a load screenshot.
+`test:logic` checks deterministic limb penalties, hit regions, lift and mover travel, hazard phases, navigation-graph connectivity, and map authoring rules. `test:smoke` verifies room creation, joining, settings, authoritative match start, dual attacks, limb damage events, disconnect slot retention, reconnect, the solo sandbox lifecycle, bot roster materialization, bot activity, host migration away from bots, and sandbox-with-bots. `test:browser` covers multiplayer and solo UI flows, three maps, J/K, the Tab weapon panel, visual preferences, screenshots, and refresh recovery. `test:visual` checks the menu, lobby, canvas, HUD, overflow, and nonblank rendering at four desktop viewports. `test:performance` drives four isolated clients through simultaneous J/K attacks and records frame timing plus a load screenshot.
 
 ## Architecture
 
@@ -62,4 +67,4 @@ npm run test:performance
 - `tests/`: repeatable network and browser smoke tests.
 - `docs/`: behavioral reference notes and tuning priorities.
 
-The first release intentionally excludes accounts, matchmaking, AI, teams, mobile controls, spectators, and public hosting.
+The first release intentionally excludes accounts, matchmaking, teams, mobile controls, spectators, and public hosting. (AI bot pilots were added in the August 2026 round as host-controlled slot fillers; see "AI pilots" above.)

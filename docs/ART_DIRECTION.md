@@ -96,6 +96,21 @@ Lighting/mood: neutral reference lighting
 Constraints: seamless; no text; no logos; no symbols; no watermark
 ```
 
+### Far-parallax layer template
+
+Generated 2026-08-23 (Volcengine Seedream 5.0 lite, 2560x1440 -> 2048x1152 webp q88) into `public/assets/environments/<map>-far.webp`. Render order: far plate (depth -3) -> environment plate (-2) -> baked platform layer (-1).
+
+```text
+Use case: stylized-concept
+Asset type: 2D arena game far-parallax background layer
+Primary request: <the most distant silhouette of the megastructure above a violent storm layer, seen from the upper maintenance crown | the deepest interior void of the defense spine receding into darkness | the far reaches of the foundry dissolving into smoke and furnace glow>
+Scene/backdrop: layered atmospheric depth fading toward the horizon; faint structural silhouettes only
+Style/medium: semi-realistic comic concept art, heavily atmospheric
+Composition/framing: orthographic-like wide side view, 16:9; darkest background layer behind everything else; keep the entire central gameplay band low contrast and free of walkable-looking horizontal structures
+Lighting/mood: <cold storm haze, muted cyan-grey | graphite darkness with sparse deep-red pinpoints | dim petroleum green haze over faint orange glow from below>
+Constraints: original design; no people; no text; no logos; no trademarks; no watermark; no foreground platforms
+```
+
 ## UI and effect limits
 
 - Camera shake: at most 12 px for 250 ms.

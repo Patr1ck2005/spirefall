@@ -2,7 +2,8 @@ import WebSocket from "ws";
 
 type Message = { type: string; [key: string]: any };
 const waitFor = (ws: WebSocket, type: string, timeout = 4000) => new Promise<Message>((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${type}`)), timeout);
+  const stack = new Error().stack?.split("\n").slice(3, 5).map((line) => line.trim().replace(/^at /, "")).join(" || ");
+  const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${type} @ ${stack}`)), timeout);
   const handler = (raw: WebSocket.RawData) => {
     const message = JSON.parse(raw.toString()) as Message;
     if (message.type !== type) return;
@@ -170,7 +171,82 @@ const soloLobby = await returnedToLobby;
 assert(soloLobby.room.phase === "lobby", "Solo sandbox did not return to the lobby");
 assert(soloLobby.room.mode === "match", "Returning to the lobby did not reset match mode");
 
+// --- Bot pilots: lobby roster, match start with 1 human + 2 bots, activity ---
+const botHost = await open();
+botHost.send(JSON.stringify({ type: "create", name: "Pilot-Prime" }));
+const botCreated = await waitFor(botHost, "room");
+const botRoomCode = botCreated.room.code as string;
+botHost.send(JSON.stringify({ type: "config", patch: { bots: 2, botSkill: "standard", mapId: "canopy", lives: 3 } }));
+const botLobby = await waitFor(botHost, "room");
+assert(botLobby.room.players.length === 3, `Bot roster was not materialized in the lobby (${botLobby.room.players.length})`);
+const botEntries = botLobby.room.players.filter((p: any) => p.isBot);
+assert(botEntries.length === 2, "Configured bots are not flagged isBot");
+assert(botEntries.every((p: any) => p.id !== botCreated.selfId), "Bot flag leaked onto a human player");
+
+botHost.send(JSON.stringify({ type: "start" }));
+const botStarted = await waitFor(botHost, "snapshot");
+assert(botStarted.snapshot.phase === "playing", "1 human + 2 bots did not pass the >= 2 participants rule");
+assert(botStarted.snapshot.players.length === 3, "Bots missing from the playing snapshot");
+
+let sawBotMove = false;
+let sawBotAttackEvent = false;
+for (let i = 0; i < 90; i++) {
+  const message = await waitFor(botHost, "snapshot", 5000);
+  for (const bot of message.snapshot.players.filter((p: any) => p.isBot)) {
+    if (Math.abs(bot.x - botStarted.snapshot.players.find((p: any) => p.id === bot.id).x) > 24) sawBotMove = true;
+  }
+  sawBotAttackEvent ||= message.snapshot.events.some((event: any) => event.type === "attack" && message.snapshot.players.find((p: any) => p.id === event.actorId)?.isBot);
+  if (sawBotMove && sawBotAttackEvent) break;
+}
+assert(sawBotMove, "Bots never changed position over the observation window");
+assert(sawBotAttackEvent, "Bots never produced an attack event over the observation window");
+
+// Host migration must fire immediately when the host leaves, and bots can
+// never inherit the room. Verified by reconnecting after the departure.
+const migrationHost = await open();
+migrationHost.send(JSON.stringify({ type: "create", name: "Migration-Host" }));
+const migrationCreated = await waitFor(migrationHost, "room");
+const migrationCode = migrationCreated.room.code as string;
+migrationHost.send(JSON.stringify({ type: "config", patch: { bots: 1 } }));
+await waitFor(migrationHost, "room");
+const migrant = await open();
+migrant.send(JSON.stringify({ type: "join", roomCode: migrationCode, name: "Migration-Heir" }));
+const migrantJoined = await waitFor(migrant, "room");
+assert(migrantJoined.room.players.length === 3, "Migration lobby did not hold host + bot + heir");
+migrationHost.close();
+migrant.close();
+// Give the server a beat to process the departure, then rejoin as the heir.
+await new Promise((resolve) => setTimeout(resolve, 600));
+const heir = await open();
+heir.send(JSON.stringify({ type: "join", roomCode: migrationCode, name: "Migration-Heir", token: undefined, playerId: undefined }));
+let migratedRoom: Message | undefined;
+for (let attempt = 0; attempt < 10; attempt++) {
+  const reply = await waitFor(heir, "room");
+  if (reply.room.players.some((p: any) => p.id === "bot-1")) { migratedRoom = reply; break; }
+}
+assert(migratedRoom, "Rejoin after host departure failed");
+assert(migratedRoom!.room.hostId !== migrationCreated.selfId, "Departed host still owns the room");
+const newHostEntry = migratedRoom!.room.players.find((p: any) => p.id === migratedRoom!.room.hostId);
+assert(newHostEntry && !newHostEntry.isBot, "Host migration selected a bot or vanished");
+heir.close();
+
+// Sandbox + one bot still works, and pure solo remains valid.
+const sandboxHost = await open();
+sandboxHost.send(JSON.stringify({ type: "create", name: "Sandbox-Pilot" }));
+const sandboxCreated = await waitFor(sandboxHost, "room");
+sandboxHost.send(JSON.stringify({ type: "config", patch: { bots: 1, botSkill: "casual" } }));
+await waitFor(sandboxHost, "room");
+sandboxHost.send(JSON.stringify({ type: "start_sandbox" }));
+const sandboxStarted = await waitFor(sandboxHost, "snapshot");
+assert(sandboxStarted.snapshot.mode === "sandbox", "Sandbox with 1 human + 1 bot did not start");
+assert(sandboxStarted.snapshot.players.filter((p: any) => p.isBot).length === 1, "Sandbox snapshot is missing its bot");
+
 host.close();
 restoredGuest.close();
 solo.close();
+botHost.close();
+sandboxHost.close();
+botRoomCode && void botRoomCode;
 console.log("network smoke test passed");
+// Open bot-room sockets keep the process alive; exit once assertions pass.
+process.exit(0);

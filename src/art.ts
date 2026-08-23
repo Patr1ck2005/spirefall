@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { MAPS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type PlayerState, type WeaponId } from "../shared/game";
+import { MAPS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
 
 export const PLAYER_HEX = ["#56d9d0", "#f0715d", "#f0c75e", "#ad80e8"] as const;
 
@@ -102,21 +102,61 @@ function drawMegastructure(graphics: Phaser.GameObjects.Graphics, mapId: MapId, 
 }
 
 export function drawPlatforms(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
+  drawPlatformBodies(graphics, mapId);
+  drawPlatformCaps(graphics, mapId);
+}
+
+// Static platform stack split in two passes so the RenderTexture baker can
+// sandwich a tiled material overlay between the body fill and the bright cap.
+export function drawPlatformBodies(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
   const map = MAPS[mapId];
   for (const platform of map.platforms) {
     graphics.fillStyle(0x0b0e10, 0.72);
     graphics.fillRect(platform.x + 5, platform.y + 8, platform.width - 10, Math.max(8, platform.height + 12));
-    graphics.fillStyle(0x343c3f, 1);
+    graphics.fillStyle(platform.solid ? 0x23282b : 0x343c3f, 1);
     graphics.fillRect(platform.x, platform.y, platform.width, platform.height);
-    graphics.fillStyle(map.accent, platform.oneWay ? 0.78 : 0.38);
-    graphics.fillRect(platform.x, platform.y, platform.width, 3);
-    graphics.lineStyle(1, 0x849094, 0.32);
-    graphics.lineBetween(platform.x + 8, platform.y + 7, platform.x + platform.width - 8, platform.y + 7);
+    if (platform.solid) {
+      graphics.fillStyle(0x14181a, 1);
+      graphics.fillRect(platform.x + platform.width * 0.18, platform.y + 4, platform.width * 0.64, Math.max(2, platform.height - 8));
+    }
     for (let x = platform.x + 13; x < platform.x + platform.width - 8; x += 38) {
       graphics.fillStyle(0x090c0e, 0.8);
       graphics.fillCircle(x, platform.y + platform.height - 4, 2);
     }
   }
+}
+
+export function drawPlatformCaps(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
+  const map = MAPS[mapId];
+  for (const platform of map.platforms) {
+    graphics.fillStyle(map.accent, platform.oneWay ? 0.78 : 0.38);
+    graphics.fillRect(platform.x, platform.y, platform.width, 3);
+    graphics.lineStyle(1, 0x849094, 0.32);
+    graphics.lineBetween(platform.x + 8, platform.y + 7, platform.x + platform.width - 8, platform.y + 7);
+  }
+}
+
+export function drawMover(graphics: Phaser.GameObjects.Graphics, mover: MoverState, accent: number, time: number) {
+  // Travel rail along the movement axis so riders can read the path.
+  const def = Object.values(MAPS).flatMap((map) => map.movers).find((candidate) => candidate.id === mover.id);
+  if (def) {
+    const endX = def.x + (def.travelX || 0);
+    const endY = def.y + (def.travelY || 0);
+    graphics.lineStyle(1, accent, 0.14);
+    if ((def.travelX || 0) !== 0) graphics.lineBetween(Math.min(def.x, endX), def.y + def.height / 2, Math.max(def.x, endX) + def.width, def.y + def.height / 2);
+    else graphics.lineBetween(def.x + def.width / 2, Math.min(def.y, endY), def.x + def.width / 2, Math.max(def.y, endY) + def.height);
+  }
+  const pulse = 0.6 + Math.sin(time * 0.005 + mover.x * 0.01) * 0.16;
+  graphics.fillStyle(0x0b0e10, 0.66);
+  graphics.fillRect(mover.x + 4, mover.y + 7, mover.width - 8, Math.max(8, mover.height + 9));
+  graphics.fillStyle(0x3d4548, 1);
+  graphics.fillRect(mover.x, mover.y, mover.width, mover.height);
+  for (let x = mover.x + 10; x < mover.x + mover.width - 8; x += 22) {
+    graphics.fillStyle(accent, pulse);
+    graphics.fillRect(x, mover.y + mover.height / 2 - 1, 10, 2);
+  }
+  graphics.fillStyle(accent, 0.85);
+  graphics.fillRect(mover.x, mover.y, mover.width, 2);
 }
 
 export function drawHazard(graphics: Phaser.GameObjects.Graphics, hazard: HazardState, accent: number, time: number) {

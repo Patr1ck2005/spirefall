@@ -18,6 +18,7 @@ export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "
 export type AttackKind = "projectile" | "hitscan" | "melee" | "explosive";
 export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash";
 export type MatchMode = "match" | "sandbox";
+export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
 export type HazardKind = "cargoLift" | "blastCrusher" | "conveyor" | "forgePiston";
@@ -29,6 +30,8 @@ export type MatchConfig = {
   lives: 1 | 2 | 3 | 4 | 5;
   crates: boolean;
   weaponSet: WeaponId[];
+  bots: number;
+  botSkill: BotSkill;
 };
 
 export type ClientInput = {
@@ -46,6 +49,7 @@ export type PlayerState = {
   id: string;
   name: string;
   archetype: 0 | 1 | 2 | 3;
+  isBot?: boolean;
   x: number;
   y: number;
   vx: number;
@@ -161,6 +165,7 @@ export type ServerSnapshot = {
   projectiles: ProjectileState[];
   crates: CrateState[];
   hazards: HazardState[];
+  movers: MoverState[];
   events: CombatEvent[];
   config: MatchConfig;
   winner?: string;
@@ -171,7 +176,7 @@ export type RoomView = {
   hostId: string;
   phase: ServerSnapshot["phase"];
   mode: MatchMode;
-  players: Array<Pick<PlayerState, "id" | "name" | "connected" | "color" | "archetype">>;
+  players: Array<Pick<PlayerState, "id" | "name" | "connected" | "color" | "archetype" | "isBot">>;
   config: MatchConfig;
 };
 
@@ -181,6 +186,29 @@ export type Platform = {
   width: number;
   height: number;
   oneWay?: boolean;
+  solid?: boolean;
+};
+
+export type MoverDef = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  periodTicks: number;
+  phaseOffset: number;
+  travelX?: number;
+  travelY?: number;
+};
+
+export type MoverState = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  vx: number;
+  vy: number;
 };
 
 export type MapDef = {
@@ -194,6 +222,7 @@ export type MapDef = {
   spawns: Array<{ x: number; y: number }>;
   crateSockets: CrateSocket[];
   hazards: HazardDef[];
+  movers: MoverDef[];
 };
 
 export const MAPS: Record<MapId, MapDef> = {
@@ -205,25 +234,43 @@ export const MAPS: Record<MapId, MapDef> = {
     atmosphere: 0x99b7bb,
     backgroundAsset: "/assets/environments/canopy.webp",
     platforms: [
-      { x: 0, y: 530, width: 1000, height: 30 },
-      { x: 40, y: 430, width: 250, height: 16, oneWay: true },
-      { x: 710, y: 430, width: 250, height: 16, oneWay: true },
-      { x: 280, y: 335, width: 440, height: 16, oneWay: true },
-      { x: 55, y: 240, width: 220, height: 16, oneWay: true },
-      { x: 725, y: 240, width: 220, height: 16, oneWay: true },
-      { x: 360, y: 135, width: 280, height: 16, oneWay: true },
+      { x: 0, y: 530, width: 300, height: 30 },
+      { x: 380, y: 530, width: 240, height: 30 },
+      { x: 740, y: 530, width: 260, height: 30 },
+      { x: 40, y: 440, width: 130, height: 14, oneWay: true },
+      { x: 230, y: 440, width: 120, height: 14, oneWay: true },
+      { x: 420, y: 445, width: 150, height: 14, oneWay: true },
+      { x: 660, y: 440, width: 110, height: 14, oneWay: true },
+      { x: 820, y: 435, width: 140, height: 14, oneWay: true },
+      { x: 160, y: 350, width: 150, height: 14, oneWay: true },
+      { x: 430, y: 345, width: 170, height: 14, oneWay: true },
+      { x: 700, y: 350, width: 160, height: 14, oneWay: true },
+      { x: 50, y: 255, width: 130, height: 14, oneWay: true },
+      { x: 250, y: 250, width: 120, height: 14, oneWay: true },
+      { x: 470, y: 245, width: 130, height: 14, oneWay: true },
+      { x: 660, y: 252, width: 120, height: 14, oneWay: true },
+      { x: 840, y: 258, width: 120, height: 14, oneWay: true },
+      { x: 180, y: 158, width: 130, height: 14, oneWay: true },
+      { x: 400, y: 152, width: 210, height: 14, oneWay: true },
+      { x: 690, y: 158, width: 130, height: 14, oneWay: true },
+      { x: 330, y: 62, width: 340, height: 16, oneWay: true },
+      { x: 296, y: 0, width: 24, height: 64, solid: true },
+      { x: 680, y: 0, width: 24, height: 64, solid: true },
     ],
-    spawns: [{ x: 165, y: 426 }, { x: 835, y: 426 }, { x: 430, y: 331 }, { x: 570, y: 331 }],
+    spawns: [{ x: 105, y: 436 }, { x: 885, y: 431 }, { x: 500, y: 341 }, { x: 285, y: 436 }],
     crateSockets: [
-      { id: "canopy-ground-west", x: 105, y: 508 }, { id: "canopy-ground-east", x: 895, y: 508 },
-      { id: "canopy-west-deck", x: 90, y: 408 }, { id: "canopy-east-deck", x: 910, y: 408 },
-      { id: "canopy-crossing-west", x: 350, y: 313 }, { id: "canopy-crossing-east", x: 650, y: 313 },
-      { id: "canopy-upper-west", x: 120, y: 218 }, { id: "canopy-upper-east", x: 880, y: 218 },
-      { id: "canopy-crown", x: 500, y: 113 },
+      { id: "canopy-ground-west", x: 100, y: 508 }, { id: "canopy-ground-mid", x: 495, y: 508 }, { id: "canopy-ground-east", x: 895, y: 508 },
+      { id: "canopy-west-deck", x: 95, y: 418 }, { id: "canopy-east-deck", x: 875, y: 413 },
+      { id: "canopy-crossing-west", x: 225, y: 328 }, { id: "canopy-crossing-mid", x: 500, y: 323 }, { id: "canopy-crossing-east", x: 765, y: 328 },
+      { id: "canopy-upper-west", x: 305, y: 228 }, { id: "canopy-upper-east", x: 720, y: 230 },
+      { id: "canopy-crown", x: 495, y: 130 },
     ],
     hazards: [
       { id: "crown-lift-a", kind: "cargoLift", x: 250, y: 470, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 0, travelY: -205 },
       { id: "crown-lift-b", kind: "cargoLift", x: 620, y: 265, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 180, travelY: 205 },
+    ],
+    movers: [
+      { id: "canopy-shuttle", x: 560, y: 392, width: 110, height: 14, periodTicks: 420, phaseOffset: 0, travelX: -320 },
     ],
   },
   fortress: {
@@ -234,24 +281,43 @@ export const MAPS: Record<MapId, MapDef> = {
     atmosphere: 0xa68b7c,
     backgroundAsset: "/assets/environments/fortress.webp",
     platforms: [
-      { x: 0, y: 530, width: 1000, height: 30 },
-      { x: 40, y: 435, width: 240, height: 16, oneWay: true },
-      { x: 720, y: 435, width: 240, height: 16, oneWay: true },
-      { x: 300, y: 345, width: 400, height: 16, oneWay: true },
-      { x: 80, y: 250, width: 240, height: 16, oneWay: true },
-      { x: 680, y: 250, width: 240, height: 16, oneWay: true },
-      { x: 390, y: 150, width: 220, height: 16, oneWay: true },
+      { x: 0, y: 530, width: 280, height: 30 },
+      { x: 360, y: 530, width: 280, height: 30 },
+      { x: 720, y: 530, width: 280, height: 30 },
+      { x: 60, y: 445, width: 140, height: 14, oneWay: true },
+      { x: 250, y: 440, width: 120, height: 14, oneWay: true },
+      { x: 440, y: 442, width: 130, height: 14, oneWay: true },
+      { x: 640, y: 438, width: 120, height: 14, oneWay: true },
+      { x: 820, y: 445, width: 140, height: 14, oneWay: true },
+      { x: 170, y: 352, width: 150, height: 14, oneWay: true },
+      { x: 420, y: 348, width: 160, height: 14, oneWay: true },
+      { x: 690, y: 352, width: 140, height: 14, oneWay: true },
+      { x: 60, y: 262, width: 120, height: 14, oneWay: true },
+      { x: 260, y: 255, width: 110, height: 14, oneWay: true },
+      { x: 630, y: 258, width: 110, height: 14, oneWay: true },
+      { x: 820, y: 262, width: 120, height: 14, oneWay: true },
+      { x: 180, y: 165, width: 120, height: 14, oneWay: true },
+      { x: 430, y: 158, width: 140, height: 14, oneWay: true },
+      { x: 700, y: 165, width: 120, height: 14, oneWay: true },
+      { x: 400, y: 66, width: 200, height: 14, oneWay: true },
+      { x: 0, y: 380, width: 26, height: 150, solid: true },
+      { x: 974, y: 380, width: 26, height: 150, solid: true },
+      { x: 340, y: 0, width: 24, height: 56, solid: true },
+      { x: 636, y: 0, width: 24, height: 56, solid: true },
     ],
-    spawns: [{ x: 160, y: 431 }, { x: 840, y: 431 }, { x: 430, y: 341 }, { x: 570, y: 341 }],
+    spawns: [{ x: 120, y: 441 }, { x: 885, y: 441 }, { x: 495, y: 344 }, { x: 305, y: 436 }],
     crateSockets: [
-      { id: "fortress-ground-west", x: 100, y: 508 }, { id: "fortress-ground-east", x: 900, y: 508 },
-      { id: "fortress-west-deck", x: 110, y: 413 }, { id: "fortress-east-deck", x: 890, y: 413 },
-      { id: "fortress-core-west", x: 360, y: 323 }, { id: "fortress-core-east", x: 640, y: 323 },
-      { id: "fortress-upper-west", x: 145, y: 228 }, { id: "fortress-upper-east", x: 855, y: 228 },
-      { id: "fortress-crown", x: 500, y: 128 },
+      { id: "fortress-ground-west", x: 95, y: 508 }, { id: "fortress-ground-mid", x: 500, y: 508 }, { id: "fortress-ground-east", x: 905, y: 508 },
+      { id: "fortress-west-deck", x: 115, y: 423 }, { id: "fortress-east-deck", x: 885, y: 423 },
+      { id: "fortress-core-west", x: 240, y: 330 }, { id: "fortress-core-mid", x: 495, y: 326 }, { id: "fortress-core-east", x: 755, y: 330 },
+      { id: "fortress-upper-west", x: 315, y: 233 }, { id: "fortress-upper-east", x: 680, y: 236 },
+      { id: "fortress-crown", x: 495, y: 136 },
     ],
     hazards: [
       { id: "bastion-crusher", kind: "blastCrusher", x: 455, y: 45, width: 90, height: 118, periodTicks: 480, warningTicks: 90, activeTicks: 54, phaseOffset: 45, travelY: 175, force: 620, limbDamage: 62 },
+    ],
+    movers: [
+      { id: "bastion-elevator", x: 300, y: 300, width: 100, height: 14, periodTicks: 400, phaseOffset: 0, travelY: -180 },
     ],
   },
   factory: {
@@ -262,27 +328,42 @@ export const MAPS: Record<MapId, MapDef> = {
     atmosphere: 0x71806b,
     backgroundAsset: "/assets/environments/factory.webp",
     platforms: [
-      { x: 0, y: 530, width: 270, height: 30 },
-      { x: 365, y: 530, width: 270, height: 30 },
-      { x: 730, y: 530, width: 270, height: 30 },
-      { x: 30, y: 420, width: 250, height: 16, oneWay: true },
-      { x: 720, y: 420, width: 250, height: 16, oneWay: true },
-      { x: 330, y: 330, width: 340, height: 16, oneWay: true },
-      { x: 80, y: 240, width: 220, height: 16, oneWay: true },
-      { x: 700, y: 240, width: 220, height: 16, oneWay: true },
-      { x: 390, y: 145, width: 220, height: 16, oneWay: true },
+      { x: 0, y: 530, width: 260, height: 30 },
+      { x: 380, y: 530, width: 250, height: 30 },
+      { x: 750, y: 530, width: 250, height: 30 },
+      { x: 50, y: 442, width: 130, height: 14, oneWay: true },
+      { x: 240, y: 438, width: 110, height: 14, oneWay: true },
+      { x: 430, y: 440, width: 140, height: 14, oneWay: true },
+      { x: 640, y: 438, width: 120, height: 14, oneWay: true },
+      { x: 820, y: 442, width: 140, height: 14, oneWay: true },
+      { x: 160, y: 350, width: 150, height: 14, oneWay: true },
+      { x: 420, y: 346, width: 170, height: 14, oneWay: true },
+      { x: 690, y: 350, width: 150, height: 14, oneWay: true },
+      { x: 55, y: 258, width: 120, height: 14, oneWay: true },
+      { x: 255, y: 252, width: 115, height: 14, oneWay: true },
+      { x: 635, y: 256, width: 115, height: 14, oneWay: true },
+      { x: 825, y: 260, width: 125, height: 14, oneWay: true },
+      { x: 175, y: 162, width: 120, height: 14, oneWay: true },
+      { x: 415, y: 156, width: 170, height: 14, oneWay: true },
+      { x: 705, y: 162, width: 120, height: 14, oneWay: true },
+      { x: 395, y: 64, width: 210, height: 14, oneWay: true },
+      { x: 268, y: 0, width: 24, height: 58, solid: true },
+      { x: 708, y: 0, width: 24, height: 58, solid: true },
     ],
-    spawns: [{ x: 150, y: 416 }, { x: 850, y: 416 }, { x: 430, y: 326 }, { x: 570, y: 326 }],
+    spawns: [{ x: 115, y: 438 }, { x: 885, y: 438 }, { x: 495, y: 342 }, { x: 290, y: 434 }],
     crateSockets: [
-      { id: "factory-ground-west", x: 110, y: 508 }, { id: "factory-ground-mid", x: 500, y: 508 }, { id: "factory-ground-east", x: 890, y: 508 },
-      { id: "factory-west-deck", x: 110, y: 398 }, { id: "factory-east-deck", x: 890, y: 398 },
-      { id: "factory-assembly-west", x: 390, y: 308 }, { id: "factory-assembly-east", x: 610, y: 308 },
-      { id: "factory-upper-west", x: 145, y: 218 }, { id: "factory-upper-east", x: 855, y: 218 },
-      { id: "factory-crown", x: 500, y: 123 },
+      { id: "factory-ground-west", x: 95, y: 508 }, { id: "factory-ground-mid", x: 500, y: 508 }, { id: "factory-ground-east", x: 905, y: 508 },
+      { id: "factory-west-deck", x: 110, y: 420 }, { id: "factory-east-deck", x: 885, y: 420 },
+      { id: "factory-assembly-west", x: 245, y: 328 }, { id: "factory-assembly-mid", x: 500, y: 324 }, { id: "factory-assembly-east", x: 760, y: 328 },
+      { id: "factory-upper-west", x: 310, y: 230 }, { id: "factory-upper-east", x: 690, y: 234 },
+      { id: "factory-crown", x: 495, y: 134 },
     ],
     hazards: [
-      { id: "foundry-belt", kind: "conveyor", x: 365, y: 530, width: 270, height: 16, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 95 },
+      { id: "foundry-belt", kind: "conveyor", x: 380, y: 530, width: 250, height: 16, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 95 },
       { id: "foundry-piston", kind: "forgePiston", x: 470, y: 222, width: 60, height: 112, periodTicks: 360, warningTicks: 60, activeTicks: 42, phaseOffset: 90, travelY: 170, force: 690, limbDamage: 72 },
+    ],
+    movers: [
+      { id: "foundry-shuttle", x: 560, y: 296, width: 100, height: 14, periodTicks: 460, phaseOffset: 200, travelX: -360 },
     ],
   },
 };
@@ -348,6 +429,8 @@ export const DEFAULT_CONFIG: MatchConfig = {
   lives: 3,
   crates: true,
   weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade"],
+  bots: 0,
+  botSkill: "standard",
 };
 
 export const PLAYER_COLORS = [0x56d9d0, 0xf0715d, 0xf0c75e, 0xad80e8] as const;
@@ -410,6 +493,95 @@ export const calculateHazardState = (def: HazardDef, tick: number): HazardState 
     progress,
     lethal: phase === "active" && progress > 0.34 && progress < 0.66,
   };
+};
+
+export const calculateMoverState = (def: MoverDef, tick: number): MoverState => {
+  const angle = ((tick + def.phaseOffset) % def.periodTicks) / def.periodTicks * Math.PI * 2;
+  const previousAngle = ((tick - 1 + def.phaseOffset + def.periodTicks) % def.periodTicks) / def.periodTicks * Math.PI * 2;
+  const ease = (value: number) => (1 - Math.cos(value)) / 2;
+  const x = def.x + (def.travelX || 0) * ease(angle);
+  const y = def.y + (def.travelY || 0) * ease(angle);
+  const previousX = def.x + (def.travelX || 0) * ease(previousAngle);
+  const previousY = def.y + (def.travelY || 0) * ease(previousAngle);
+  return { id: def.id, x, y, width: def.width, height: def.height, vx: (x - previousX) * WORLD.tickRate, vy: (y - previousY) * WORLD.tickRate };
+};
+
+// Movement budget derived from the authoritative physics in server.ts:
+// ground-jump apex ≈ 560²/(2·1150) ≈ 136px, air-jump apex ≈ 510²/(2·1150) ≈ 113px.
+export const NAV_MAX_RISE = 115;
+export const NAV_MAX_GAP = 200;
+
+export type PlatformNode = {
+  index: number;
+  platform: Platform;
+  left: number;
+  right: number;
+};
+
+export type NavEdge = {
+  from: number;
+  to: number;
+  kind: "walk" | "drop" | "jump";
+};
+
+export type PlatformGraph = {
+  nodes: PlatformNode[];
+  edgesFrom: Map<number, NavEdge[]>;
+};
+
+const surfaceOf = (platform: Platform) => platform.y;
+
+export const buildPlatformGraph = (map: MapDef): PlatformGraph => {
+  // Split the ground strip into segments wherever a gap exceeds jump reach,
+  // so bots reason about fall zones instead of walking into them blindly.
+  const nodes: PlatformNode[] = [];
+  for (let index = 0; index < map.platforms.length; index++) {
+    const platform = map.platforms[index];
+    if (platform.solid) continue;
+    const isGround = platform.width >= 240 && !platform.oneWay;
+    if (isGround) {
+      let start = platform.x;
+      while (start < platform.x + platform.width) {
+        let segmentEnd = start;
+        while (segmentEnd < platform.x + platform.width) {
+          const probeX = segmentEnd + 30;
+          const covered = map.platforms.some((other) => other !== platform && surfaceOf(other) <= platform.y + platform.height && other.y > platform.y && probeX > other.x - 10 && probeX < other.x + other.width + 10);
+          if (covered && segmentEnd + 60 <= platform.x + platform.width) {
+            segmentEnd += 60;
+            break;
+          }
+          segmentEnd += 60;
+        }
+        const end = Math.min(segmentEnd, platform.x + platform.width);
+        if (end - start >= 40) nodes.push({ index, platform, left: start, right: end });
+        start = end;
+      }
+    } else {
+      nodes.push({ index, platform, left: platform.x, right: platform.x + platform.width });
+    }
+  }
+
+  const edgesFrom = new Map<number, NavEdge[]>();
+  const pushEdge = (from: number, to: number, kind: NavEdge["kind"]) => {
+    if (!edgesFrom.has(from)) edgesFrom.set(from, []);
+    edgesFrom.get(from)!.push({ from, to, kind });
+  };
+  for (const node of nodes) {
+    const nodeSurface = surfaceOf(node.platform);
+    for (const other of nodes) {
+      if (other === node) continue;
+      const otherSurface = surfaceOf(other.platform);
+      const overlap = Math.min(node.right, other.right) - Math.max(node.left, other.left);
+      if (overlap > 0 && Math.abs(nodeSurface - otherSurface) < 8) pushEdge(node.index, other.index, "walk");
+      else if (overlap > 0 && otherSurface > nodeSurface && otherSurface - nodeSurface < 400) pushEdge(node.index, other.index, "drop");
+      else if (otherSurface < nodeSurface && nodeSurface - otherSurface <= NAV_MAX_RISE) {
+        const horizontalGap = other.left > node.right ? other.left - node.right : node.left > other.right ? node.left - other.right : 0;
+        if (horizontalGap <= NAV_MAX_GAP) pushEdge(node.index, other.index, "jump");
+        else if (horizontalGap <= NAV_MAX_GAP + 140 && overlap > -80) pushEdge(node.index, other.index, "jump");
+      }
+    }
+  }
+  return { nodes, edgesFrom };
 };
 
 export const makePlayer = (id: string, name: string, index: number, config: MatchConfig): PlayerState => {

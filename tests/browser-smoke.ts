@@ -64,6 +64,14 @@ await solo.locator("#sandbox-respawn").click();
 await solo.waitForTimeout(1700);
 await solo.screenshot({ path: "test-results/solo.png", fullPage: true });
 
+// Tab weapon panel: hold shows the loadout with the current weapon, release hides.
+await solo.keyboard.down("Tab");
+await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
+const panelText = await solo.locator("#weapon-panel").textContent();
+if (!panelText?.includes("M-12 Needle")) throw new Error("Weapon panel did not list the held weapon");
+await solo.keyboard.up("Tab");
+await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout: 3000 });
+
 await solo.locator("#settings-button").click();
 await solo.locator("label").filter({ has: solo.locator("#gore-toggle") }).click();
 await solo.locator("label").filter({ has: solo.locator("#shake-toggle") }).click();

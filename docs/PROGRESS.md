@@ -99,7 +99,17 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - 性能门禁决策记录：曾按用户选择收紧到 ≥90 FPS/P95≤14ms，实测发现 **Edge 于 2026-08-20 自动更新到 151**，其无头 BeginFrame 调度把四人同机压测的每页吞吐硬性压到 ~66–74 FPS（与游戏代码无关）。经确认回退到原 ≥45/P95≤45 门禁；保留两项测试基建修复：采样前 2s 预热、try/finally 保证浏览器必关
 - 全量回归通过（build/logic/smoke/browser/visual/performance）
 
-## 4. 当前真实状态（2026-08-23 核验）
+### M9 AI 机器人 + Tab 武器面板 + 地形 v2 + 沉浸感渲染（2026-08-23，Claude Code 第二轮）
+
+用户三项新需求全部拍板并实施（一次性 commit 待用户验收后执行）：
+
+- **AI 机器人**（正式解除"首版无 AI"排除项）：`server/bots.ts` 三档难度（Casual/Standard/Brutal），感知队列+反应延迟、BFS 平台导航图（buildPlatformGraph 共享真相源）、边缘自保（casual 按失误率跳过）、开火纪律/预判/噪声、brutal 档机关预警躲避；机器人=真实 PlayerState 占槽，沙盒=1 真人+N bot，对战=任意混合≥2；房主迁移立即发生且绝不选 bot；孤儿房间由新加入真人接任（顺手修的健壮性缺陷）
+- **Tab 武器面板**：按住 Tab 显示 weaponSet 键位/实时弹药/攻击模式摘要，当前枪高亮；window keydown/keyup preventDefault + Phaser addCapture("TAB") 双保险
+- **地形 v2**：三图重排至 ~19-23 平台/图（小台面、错落塔楼、地面缺口坠落区）、每图 2-4 块 solid 实体墙（最小穿透轴解析+天花板碰撞+dash 后单独解析）、每图 1 个通用移动平台 mover（calculateMoverState tick 确定，承载逻辑与货梯统一）、11 个 crateSockets/图
+- **沉浸感渲染**：平台静态烘焙进 RenderTexture（材质 TileSprite 叠加 alpha≈0.26，换图才重烘）、远景视差层（3 张新生成 <map>-far.webp，depth -3，自位移 ±30px/±15px 双层视差）、氛围粒子（canopy 雨 50 / fortress 尘埃 35 / factory 余烬 45）、mover 美术（行程轨道线+板台脉冲灯）
+- 全量回归通过（logic/smoke/browser/visual/performance 57.2 FPS）
+
+## 4. 当前真实状态（2026-08-23 第二轮核验）
 
 - ✅ Git：master @ `6aad3dd`，工作区含本轮改动待提交（资产+测试修复+文档）
 - ✅ `public/assets/` 已有全部 10 张 webp（3 环境 + 4 肖像 + 3 材质），加载器自动生效，程序化绘制仅作回退
@@ -115,8 +125,9 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）
-- 不引入 AI 机器人、账号、匹配、队伍、移动端、观战、公网托管（首版排除项）
+- ~~不引入 AI 机器人~~ **2026-08-23 用户解除该排除项**：机器人作为房主可控的补位/陪练加入（沙盒+对战），三档难度；其余排除项不变（无账号、匹配、队伍、移动端、观战、公网托管）
 - 攻击冷却和机关周期在手感调参时保持不变
 - 界面英文
 - 密钥不发聊天；不提交密钥
 - Commit 必须带 `Origin:` trailer（格式见全局 CLAUDE.md；模型名+agent 名以用户确认为准）
+- 2026-08-23 起全局规则：当前模型支持识图，Read 图片/PDF 无需事先确认

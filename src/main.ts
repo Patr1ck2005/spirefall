@@ -19,6 +19,9 @@ import {
   drawCrate,
   drawEnvironment,
   drawHazard,
+  drawMover,
+  drawPlatformBodies,
+  drawPlatformCaps,
   drawPlatforms,
   drawPlayer,
   drawProjectile,
@@ -30,7 +33,7 @@ type RoomMessage = {
   hostId: string;
   phase: ServerSnapshot["phase"];
   mode: ServerSnapshot["mode"];
-  players: Array<{ id: string; name: string; connected: boolean; color: number; archetype: 0 | 1 | 2 | 3 }>;
+  players: Array<{ id: string; name: string; connected: boolean; color: number; archetype: 0 | 1 | 2 | 3; isBot?: boolean }>;
   config: MatchConfig;
 };
 
@@ -92,7 +95,7 @@ app.innerHTML = `
         <div class="lobby-console">
           <section class="roster-column"><div class="section-title"><span>01</span><div><p>DEPLOYMENT</p><h3>Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
           <section class="map-column"><div class="section-title"><span>02</span><div><p>LOCATION</p><h3>Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
-          <section class="settings-column"><div class="section-title"><span>03</span><div><p>PARAMETERS</p><h3>Match control</h3></div></div><div class="settings"><label>Sector<select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label>Lives<select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> Supply drops</label></div></section>
+          <section class="settings-column"><div class="section-title"><span>03</span><div><p>PARAMETERS</p><h3>Match control</h3></div></div><div class="settings"><label>Sector<select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label>Lives<select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> Supply drops</label><label>AI pilots<select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label>Skill<select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
         </div>
         <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p>ARMORY</p><h3>Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
         <div class="lobby-actions"><div><button id="start" class="primary">Start match</button><button id="solo-test">Solo test</button></div><button id="leave" class="quiet">Leave circuit</button></div>
@@ -103,6 +106,7 @@ app.innerHTML = `
         <div class="game-hud">
           <div class="hud-top"><div><span id="hud-room"></span><small id="hud-sector"></small></div><div id="hud-phase" class="hud-phase"></div><div id="hud-roster" class="hud-roster"></div></div>
           <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
+          <div id="weapon-panel" class="weapon-panel hidden"></div>
         </div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn">Test respawn</button><button id="sandbox-return">Return to lobby</button></div>
         <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Circuit resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave circuit</button></div></div>
@@ -169,6 +173,8 @@ function send(type: string, payload: Record<string, unknown> = {}) {
   else ws.addEventListener("open", run, { once: true });
 }
 
+const humanCountOf = (players: Array<{ isBot?: boolean }>) => players.filter((player) => !player.isBot).length;
+
 function enterLobby(room: RoomMessage) {
   currentRoom = room;
   menu.classList.add("hidden");
@@ -182,16 +188,19 @@ function enterLobby(room: RoomMessage) {
   $<HTMLSelectElement>("map").value = room.config.mapId;
   $<HTMLSelectElement>("lives").value = String(room.config.lives);
   $<HTMLInputElement>("crates").checked = room.config.crates;
+  $<HTMLSelectElement>("bots").value = String(room.config.bots);
+  $<HTMLSelectElement>("bot-skill").value = room.config.botSkill;
   updateMapVisual(room.config.mapId);
   const isHost = selfId === room.hostId;
-  for (const id of ["map", "lives", "crates"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
+  for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
   for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
     input.checked = room.config.weaponSet.includes(input.value as WeaponId);
     input.disabled = !isHost;
   }
   renderPlayers(room);
+  const humans = humanCountOf(room.players);
   $<HTMLButtonElement>("start").disabled = !isHost || room.players.length < 2;
-  $<HTMLButtonElement>("solo-test").disabled = !isHost || room.players.length !== 1;
+  $<HTMLButtonElement>("solo-test").disabled = !isHost || humans !== 1;
 }
 
 function renderPlayers(room: RoomMessage) {
@@ -201,7 +210,8 @@ function renderPlayers(room: RoomMessage) {
     const portraitStyle = availablePortraits.has(player?.archetype ?? index) ? ` style="background-image:url('${archetype.portrait}')"` : "";
     if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>OPEN SLOT</strong><small>${archetype.name}</small></div><em>WAITING</em></div>`;
     const accent = colorCss(player.color);
-    return `<div class="player-slot" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${player.id === room.hostId ? "HOST" : player.connected ? "READY" : "RECONNECT"}</em></div>`;
+    const status = player.id === room.hostId ? "HOST" : player.isBot ? "BOT" : player.connected ? "READY" : "RECONNECT";
+    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${status}</em></div>`;
   });
   $("players").innerHTML = slots.join("");
   $("lobby-note").textContent = room.players.length >= 2 ? `${room.players.length}/4 pilots linked. Combat authorization available.` : "Run a solo systems test or transmit the room code.";
@@ -293,11 +303,11 @@ for (const id of ["gore-toggle", "shake-toggle"]) {
     scene?.setVisualPreferences();
   });
 }
-for (const id of ["map", "lives", "crates"]) {
+for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) {
   $(id).addEventListener("change", () => {
     const mapId = $<HTMLSelectElement>("map").value as MapId;
     updateMapVisual(mapId);
-    send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked } });
+    send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked, bots: Number($<HTMLSelectElement>("bots").value), botSkill: $<HTMLSelectElement>("bot-skill").value } });
   });
 }
 for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
@@ -311,6 +321,23 @@ for (const input of document.querySelectorAll<HTMLInputElement>('input[name="wea
   });
 }
 connect();
+// Tab weapon panel: hold to inspect the loadout, release to dismiss.
+const weaponPanel = $("weapon-panel");
+const syncWeaponPanel = (held: boolean) => {
+  const show = held && !gameWrap.classList.contains("hidden") && Boolean(scene?.hasSnapshot());
+  weaponPanel.classList.toggle("hidden", !show);
+};
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Tab") return;
+  event.preventDefault();
+  syncWeaponPanel(true);
+});
+window.addEventListener("keyup", (event) => {
+  if (event.key !== "Tab") return;
+  event.preventDefault();
+  syncWeaponPanel(false);
+});
+window.addEventListener("blur", () => syncWeaponPanel(false));
 for (const [index, archetype] of ARCHETYPES.entries()) {
   const image = new Image();
   image.onload = () => {
@@ -349,6 +376,12 @@ class ArenaScene extends Phaser.Scene {
   private tracers: Tracer[] = [];
   private processedEvents = new Set<number>();
   private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
+  private farBackgrounds = new Map<MapId, Phaser.GameObjects.Image>();
+  private materialsReady = new Set<MapId>();
+  private platformLayer?: Phaser.GameObjects.RenderTexture;
+  private bakedMapId = "";
+  private atmosphere: Array<{ x: number; y: number; vx: number; vy: number; kind: "rain" | "dust" | "ember" }> = [];
+  private atmosphereMap: MapId | "" = "";
 
   constructor() {
     super("Arena");
@@ -358,6 +391,7 @@ class ArenaScene extends Phaser.Scene {
     scene = this;
     this.graphics = this.add.graphics();
     this.loadGeneratedBackgrounds();
+    this.input.keyboard!.addCapture("TAB");
     this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown", (event: KeyboardEvent) => {
       if (event.key >= "1" && event.key <= "6") this.sendInput(Number(event.key));
@@ -378,6 +412,12 @@ class ArenaScene extends Phaser.Scene {
     if (!this.graphics) return;
     const predicted = this.renderPositions.get(selfId);
     if (predicted && this.keys) predicted.x += ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * 230 * delta / 1000;
+    // Fake parallax: nudge the two background plates against self movement.
+    const offsetX = (predicted?.x ?? WORLD.width / 2) - WORLD.width / 2;
+    const far = this.farBackgrounds.get(this.snapshot?.config.mapId ?? "canopy");
+    const mid = this.backgrounds.get(this.snapshot?.config.mapId ?? "canopy");
+    far?.setPosition(WORLD.width / 2 - offsetX * 0.06, WORLD.height / 2);
+    mid?.setPosition(WORLD.width / 2 - offsetX * 0.03, WORLD.height / 2);
     this.updateEffects(delta / 1000);
     this.draw(time);
     if (time - this.lastSent > 33) {
@@ -396,11 +436,38 @@ class ArenaScene extends Phaser.Scene {
     this.snapshot = snapshot;
     this.processEvents(snapshot.events);
     this.updateHud(snapshot);
+    this.refreshWeaponPanel();
+    this.bakePlatformLayer();
     const finished = snapshot.phase === "results";
     $("result").classList.toggle("hidden", !finished);
     $("sandbox-actions").classList.toggle("hidden", snapshot.mode !== "sandbox" || snapshot.phase !== "playing");
+    const winnerEntry = snapshot.players.find((player) => player.name === snapshot.winner);
+    const subtitle = $("result").querySelector("p:last-of-type") as HTMLElement | null;
+    if (winnerEntry?.isBot) {
+      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner} HOLDS THE CIRCUIT`; subtitle.classList.add("defeated"); }
+      $("result").classList.add("bot-victory");
+    } else {
+      if (subtitle) { subtitle.textContent = "ONE PILOT REMAINS"; subtitle.classList.remove("defeated"); }
+      $("result").classList.remove("bot-victory");
+    }
     $("winner").textContent = snapshot.winner || "NO SURVIVOR";
     $<HTMLButtonElement>("restart").classList.toggle("hidden", selfId !== currentRoom?.hostId);
+  }
+
+  private refreshWeaponPanel() {
+    const snapshot = this.snapshot;
+    const mine = snapshot?.players.find((player) => player.id === selfId);
+    const panel = $("weapon-panel");
+    if (!snapshot || !mine) return;
+    panel.innerHTML = `<p class="panel-hint">HOLD TAB — RELEASE TO CLOSE</p>` + snapshot.config.weaponSet.map((weaponId, index) => {
+      const weapon = WEAPONS[weaponId];
+      const active = weaponId === mine.weapon ? " active" : "";
+      return `<div class="weapon-row${active}" style="--weapon:${colorCss(weapon.color)}"><b>${index + 1}</b><span>${weapon.label}</span><em>${mine.ammoByWeapon[weaponId]}</em><small>PRI ${weapon.primary.pattern}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · SEC ${weapon.secondary.pattern}</small></div>`;
+    }).join("");
+  }
+
+  hasSnapshot() {
+    return Boolean(this.snapshot);
   }
 
   setVisualPreferences() {
@@ -417,7 +484,7 @@ class ArenaScene extends Phaser.Scene {
     $("hud-room").textContent = roomCode ? `CIRCUIT ${roomCode}` : "";
     $("hud-sector").textContent = map.sector;
     $("hud-phase").textContent = snapshot.mode === "sandbox" ? "SOLO TEST" : snapshot.phase === "results" ? "CIRCUIT RESOLVED" : "LIVE";
-    $("hud-roster").innerHTML = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)} <b>${player.lives}</b></span>`).join("");
+    $("hud-roster").innerHTML = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
     if (!mine) return;
     const weapon = WEAPONS[mine.weapon];
     $("hud-weapon").innerHTML = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>AMMO</small><div><i style="--cool:${Math.min(1, mine.primaryCooldown / Math.max(0.01, weapon.primary.cooldown))}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown))}">K</i></div></div>`;
@@ -521,15 +588,22 @@ class ArenaScene extends Phaser.Scene {
     if (!snapshot) return;
     const map = MAPS[snapshot.config.mapId];
     for (const [mapId, background] of this.backgrounds) background.setVisible(mapId === snapshot.config.mapId);
+    for (const [mapId, far] of this.farBackgrounds) far.setVisible(mapId === snapshot.config.mapId);
     this.graphics.clear();
     drawEnvironment(this.graphics, snapshot.config.mapId, time, this.backgrounds.has(snapshot.config.mapId));
     this.drawDecals();
-    drawPlatforms(this.graphics, snapshot.config.mapId);
+    if (this.platformLayer && this.bakedMapId === snapshot.config.mapId) {
+      this.platformLayer.setVisible(true);
+    } else {
+      drawPlatforms(this.graphics, snapshot.config.mapId);
+    }
     for (const hazard of snapshot.hazards) drawHazard(this.graphics, hazard, map.accent, time);
+    for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
     for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation);
     for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile);
     this.drawTracers();
     this.drawParticles();
+    this.drawAtmosphere(time);
 
     const visible = new Set<string>();
     for (const player of snapshot.players) {
@@ -547,10 +621,104 @@ class ArenaScene extends Phaser.Scene {
       source.onload = () => {
         const key = `environment-${mapId}`;
         if (!this.textures.exists(key)) this.textures.addImage(key, source);
-        const background = this.add.image(WORLD.width / 2, WORLD.height / 2, key).setDisplaySize(WORLD.width, WORLD.height).setDepth(-2).setVisible(this.snapshot?.config.mapId === mapId);
+        const background = this.add.image(WORLD.width / 2, WORLD.height / 2, key).setDisplaySize(WORLD.width * 1.06, WORLD.height * 1.06).setDepth(-2).setVisible(this.snapshot?.config.mapId === mapId);
         this.backgrounds.set(mapId, background);
       };
       source.src = MAPS[mapId].backgroundAsset;
+      const farSource = new Image();
+      farSource.onload = () => {
+        const key = `far-${mapId}`;
+        if (!this.textures.exists(key)) this.textures.addImage(key, farSource);
+        const far = this.add.image(WORLD.width / 2, WORLD.height / 2, key).setDisplaySize(WORLD.width * 1.12, WORLD.height * 1.12).setDepth(-3).setVisible(this.snapshot?.config.mapId === mapId);
+        this.farBackgrounds.set(mapId, far);
+      };
+      farSource.src = `/assets/environments/${mapId}-far.webp`;
+      const materialSource = new Image();
+      materialSource.onload = () => {
+        const key = `material-${mapId}`;
+        if (!this.textures.exists(key)) this.textures.addImage(key, materialSource);
+        this.materialsReady.add(mapId);
+        this.bakePlatformLayer();
+      };
+      materialSource.src = `/assets/materials/${mapId}.webp`;
+    }
+  }
+
+  // Bake the static platform stack once per map into a RenderTexture: shadow,
+  // body fill, bright cap and rivets from drawPlatforms' geometry plus a tiled
+  // material overlay when the generated texture is available.
+  private bakePlatformLayer() {
+    const snapshot = this.snapshot;
+    if (!snapshot || !this.materialsReady.has(snapshot.config.mapId)) return;
+    const mapId = snapshot.config.mapId;
+    if (this.platformLayer) {
+      if (this.bakedMapId === mapId) return;
+      this.platformLayer.destroy();
+      this.platformLayer = undefined;
+    }
+    try {
+      const layer = this.add.renderTexture(0, 0, WORLD.width, WORLD.height).setOrigin(0, 0).setDepth(-1);
+      const brush = this.make.graphics({ x: 0, y: 0 }, false);
+      drawPlatformBodies(brush, mapId);
+      layer.draw(brush);
+      brush.destroy();
+      for (const platform of MAPS[mapId].platforms) {
+        const tile = this.add.tileSprite(platform.x, platform.y, platform.width, platform.height + 8, `material-${mapId}`).setOrigin(0, 0).setAlpha(0.26);
+        layer.draw(tile);
+        tile.destroy();
+      }
+      const caps = this.make.graphics({ x: 0, y: 0 }, false);
+      drawPlatformCaps(caps, mapId);
+      layer.draw(caps);
+      caps.destroy();
+      this.platformLayer = layer;
+      this.bakedMapId = mapId;
+    } catch {
+      this.platformLayer = undefined;
+      this.bakedMapId = "";
+    }
+  }
+
+  private drawAtmosphere(time: number) {
+    const snapshot = this.snapshot;
+    if (!snapshot) return;
+    const mapId = snapshot.config.mapId;
+    if (this.atmosphereMap !== mapId) {
+      this.atmosphereMap = mapId;
+      this.atmosphere = [];
+      if (mapId === "canopy") {
+        for (let index = 0; index < 50; index++) this.atmosphere.push({ x: Math.random() * (WORLD.width + 200), y: Math.random() * WORLD.height, vx: -140, vy: 460, kind: "rain" });
+      } else if (mapId === "fortress") {
+        for (let index = 0; index < 35; index++) this.atmosphere.push({ x: Math.random() * WORLD.width, y: Math.random() * WORLD.height, vx: 6 + Math.random() * 10, vy: -5 - Math.random() * 9, kind: "dust" });
+      } else {
+        for (let index = 0; index < 45; index++) this.atmosphere.push({ x: Math.random() * WORLD.width, y: 300 + Math.random() * 260, vx: 8 - Math.random() * 16, vy: -34 - Math.random() * 30, kind: "ember" });
+      }
+    }
+    const dt = 1 / 60;
+    for (const mote of this.atmosphere) {
+      mote.x += mote.vx * dt;
+      mote.y += mote.vy * dt;
+      if (mote.kind === "rain") {
+        if (mote.y > WORLD.height) { mote.y = -10; mote.x = Math.random() * (WORLD.width + 200); }
+        if (mote.x < -100) mote.x += WORLD.width + 200;
+      } else if (mote.kind === "dust") {
+        if (mote.y < 0) mote.y = WORLD.height;
+        if (mote.x > WORLD.width) mote.x = 0;
+      } else {
+        if (mote.y < 260) { mote.y = WORLD.height + 6; mote.x = Math.random() * WORLD.width; }
+      }
+    }
+    for (const mote of this.atmosphere) {
+      if (mote.kind === "rain") {
+        this.graphics.lineStyle(1, 0x9fc2c8, 0.24);
+        this.graphics.lineBetween(mote.x, mote.y, mote.x + mote.vx * 0.03, mote.y + mote.vy * 0.03);
+      } else if (mote.kind === "dust") {
+        this.graphics.fillStyle(0xb9a98e, 0.09 + Math.sin(time * 0.002 + mote.x) * 0.04);
+        this.graphics.fillCircle(mote.x, mote.y, 1.6);
+      } else {
+        this.graphics.fillStyle(0xf0873c, 0.32 + Math.sin(time * 0.008 + mote.x * 0.7) * 0.22);
+        this.graphics.fillCircle(mote.x, mote.y, 1.5 + Math.sin(time * 0.006 + mote.y) * 0.5);
+      }
     }
   }
 

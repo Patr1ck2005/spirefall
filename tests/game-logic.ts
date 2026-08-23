@@ -1,4 +1,4 @@
-import { MAPS, WEAPONS, calculateHazardState, calculateLimbModifiers, selectLimbAtPoint, type HazardDef } from "../shared/game.js";
+import { MAPS, WEAPONS, buildPlatformGraph, calculateHazardState, calculateLimbModifiers, calculateMoverState, selectLimbAtPoint, type HazardDef, type MoverDef } from "../shared/game.js";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
@@ -28,6 +28,27 @@ const lift: HazardDef = { id: "test-lift", kind: "cargoLift", x: 0, y: 400, widt
 assert(Math.abs(calculateHazardState(lift, 0).y - 400) < 0.01, "Cargo lift start position is incorrect");
 assert(Math.abs(calculateHazardState(lift, 180).y - 200) < 0.01, "Cargo lift did not reach its opposite endpoint");
 assert(calculateHazardState(lift, 90).vy < 0, "Cargo lift velocity direction is incorrect");
+
+const mover: MoverDef = { id: "test-mover", x: 0, y: 400, width: 120, height: 16, periodTicks: 360, phaseOffset: 0, travelY: -200 };
+assert(Math.abs(calculateMoverState(mover, 0).y - 400) < 0.01, "Mover start position is incorrect");
+assert(Math.abs(calculateMoverState(mover, 180).y - 200) < 0.01, "Mover did not reach its opposite endpoint");
+assert(calculateMoverState(mover, 90).vy < 0 && calculateMoverState(mover, 270).vy > 0, "Mover velocity does not reverse mid-period");
+
+for (const map of Object.values(MAPS)) {
+  const graph = buildPlatformGraph(map);
+  assert(graph.nodes.length > 0, `${map.name} produced an empty navigation graph`);
+  const reachable = new Set<number>();
+  const queue = [graph.nodes[0].index];
+  while (queue.length) {
+    const current = queue.pop()!;
+    if (reachable.has(current)) continue;
+    reachable.add(current);
+    for (const edge of graph.edgesFrom.get(current) || []) queue.push(edge.to);
+  }
+  for (const node of graph.nodes) {
+    assert(reachable.has(node.index), `${map.name} has a platform unreachable in the navigation graph`);
+  }
+}
 
 for (const map of Object.values(MAPS)) {
   const levels = [...new Set(map.platforms.map((platform) => platform.y))].sort((a, b) => b - a);
