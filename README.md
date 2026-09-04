@@ -21,6 +21,10 @@
 
 Requirements: Node.js 20 or newer.
 
+**Windows one-click launcher** — double-click `Spirefall.bat`. On first run it installs dependencies, then it starts the game server and web client together and opens your browser at the game automatically. Keep the window open while playing; closing it stops both servers.
+
+Manual setup:
+
 ```powershell
 npm install
 npm run dev
