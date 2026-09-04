@@ -151,13 +151,28 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - 验证：bat 拉起的完整技术栈通过 browser-smoke（房间 294973）；8787/5173 双端口确认、HTTP 200
 - README "Run locally" 增加一键启动说明
 
+### M13 程序化音效系统（2026-08-23，DSH/glm-5.3-flash）
+
+用户从候选（音效 / 发布收尾 / 验收清单）中选定音效里程碑。纯 WebAudio 合成，零音频资产（清洁室安全），零协议改动（复用既有 CombatEvent 流）。
+
+- 新建 `src/audio.ts`：惰性 AudioContext 单例 + master 压缩链；合成助手（噪声 burst / 扫频振荡 / 非谐波 clang）；距离衰减（1-d/900）+ StereoPanner 左右定位；voice 预算（>24 丢低优先级）+ 同名 30ms 节流；prefs 持久化 `spirefall-audio`（muted/volume）；全模块 try/catch 降级
+- 音色表：6 武器主/副 12 种攻击签名（sidearm 三连 tick、scatter 低鼓、rifle 短 tick、rail 裂痕、rocket whoosh、blade swish 等）+ hit/explosion/dismember/death/respawn/hazard/crateSpawn/cratePickup + UI（click/join/leave/start/victory/defeat sting，胜负区分）
+- 接线：processEvents 各分支 sfx.play（事件坐标相对我的位置空间化）；applySnapshot 相位转换 → 开始 beep / 胜负 sting / ambient 启停；enterLobby 名册 diff → 进出提示音；leaveRoom 停 ambient；首次手势（pointerdown/keydown）unlock
+- FX 面板：Sound toggle + Volume 滑条（style.css 新增 .range 样式），眉标改 "Audio & visual"
+- 比赛进行中低音量工业底噪（双失谐锯齿 55/55.8/110.5Hz + 低通 130 + 慢 LFO，gain 0.018）
+- 删除旧 `playAttackTone`（按键触发的裸振荡器音，与真实攻击事件无关）
+- **调试教训**：给 start/solo-test/restart 等按钮加点击音时一度用循环整体替换了监听器，把 send() 调用覆盖掉——browser-smoke 卡 canvas 等待超时暴露（gameWrap 保持 hidden、无 pageerror、favicon 404 是噪音）。诊断靠 playwright 双页忠实复刻测试流程抓 console/pageerror/requestfailed；修复为 clickAnd() 包装（音效+原 send 并存）
+- 全量回归：tsc + 六套测试全绿，performance 116.4 FPS / p95 17.5ms（新高）
+
 ## 5. 未完成事项 / 下一步候选
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
-2. **用户复验 M10 两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
-3. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
-4. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
-5. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕
+2. **用户验收 M13 音效**：Solo test 听全部音色（各武器主/副、爆炸、死亡、箱子、底噪）→ FX 面板关 Sound 确认静音且刷新保持 → 四人局确认多声源不糊；音色口味（闷/脆、音量比例）可低成本调参
+3. **用户复验 M10 两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
+4. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
+5. **发布收尾（候选）**：MIT LICENSE + v0.1.0 tag + GitHub About/topics 文案（gh CLI 未装，网页项需用户操作）
+6. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
+7. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 

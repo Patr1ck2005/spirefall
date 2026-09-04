@@ -46,6 +46,7 @@ For one-player setup and feel checks, create a room and choose **Solo test**. Th
 - **Six weapons, twelve attacks.** Every weapon defines separate primary (`J`) and secondary (`K`) attacks with independent cooldown, ammo, recoil, damage, and knockback — bursts, pellets, piercing shots, clusters, slashes, and dash slashes are all server-simulated.
 - **Randomized supply crates.** Platform-aligned sockets spawn weapon crates on randomized timers with highlight pulses and warning beams.
 - **Event-driven effects.** Tracers, explosions, sparks, smoke, blood decals, and detached parts are driven by server combat events. `Gore` and `Camera shake` are local visual preferences under the `FX` control.
+- **Procedural sound.** Every sound is synthesized in-browser with WebAudio — no audio assets. Each weapon's primary and secondary attack has a distinct signature, and hits, explosions, dismemberment, deaths, respawns, hazards, crates, and UI flow all carry their own cues. World sounds attenuate and pan relative to your pilot, a low industrial ambience runs while a match is live, and the `FX` panel exposes a `Sound` toggle with a volume slider (persisted locally).
 - **Immersive rendering.** Generated bitmap environments with parallax far-layers, baked platform textures with material overlays, and per-map atmosphere particles (canopy rain, fortress dust, factory embers). The procedural renderer remains as a guaranteed fallback when assets are missing.
 
 ## Controls

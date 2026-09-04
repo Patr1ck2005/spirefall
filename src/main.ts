@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { sfx } from "./audio";
 import {
   MAPS,
   WEAPONS,
@@ -70,7 +71,9 @@ app.innerHTML = `
       <div class="brand"><span class="brand-mark"><i></i><b>S</b></span><div><p>BRUTAL ARENA SYSTEM</p><h1>Spirefall</h1></div></div>
       <div class="command-meta"><span id="status" class="status">OFFLINE</span><button id="settings-button" class="icon-command" title="Visual settings" aria-expanded="false">FX</button></div>
       <div id="visual-settings" class="visual-settings hidden">
-        <p class="eyebrow">Visual output</p>
+        <p class="eyebrow">Audio &amp; visual</p>
+        <label class="toggle"><input id="sound-toggle" type="checkbox" checked /><span></span> Sound</label>
+        <label class="range"><span>Volume</span><input id="sound-volume" type="range" min="0" max="100" value="80" /></label>
         <label class="toggle"><input id="gore-toggle" type="checkbox" checked /><span></span> Gore</label>
         <label class="toggle"><input id="shake-toggle" type="checkbox" checked /><span></span> Camera shake</label>
       </div>
@@ -130,12 +133,16 @@ let scene: ArenaScene | undefined;
 let gameInstance: Phaser.Game | undefined;
 let manualConnectionAction = false;
 let resumeAttempted = false;
+let lastRosterKey = "";
 const availablePortraits = new Set<number>();
 
 const savedVisuals = JSON.parse(localStorage.getItem("spirefall-visuals") || "null");
 const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false };
 $<HTMLInputElement>("gore-toggle").checked = visualPrefs.gore;
 $<HTMLInputElement>("shake-toggle").checked = visualPrefs.shake;
+const audioPrefs = sfx.getPrefs();
+$<HTMLInputElement>("sound-toggle").checked = !audioPrefs.muted;
+$<HTMLInputElement>("sound-volume").value = String(Math.round(audioPrefs.volume * 100));
 
 const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}:8787`;
 
@@ -184,6 +191,14 @@ function enterLobby(room: RoomMessage) {
     gameWrap.classList.add("hidden");
     $("result").classList.add("hidden");
     $("sandbox-actions").classList.add("hidden");
+    const rosterKey = room.players.map((player) => player.id).join(",");
+    if (lastRosterKey && rosterKey !== lastRosterKey) {
+      const before = new Set(lastRosterKey.split(","));
+      const after = new Set(room.players.map((player) => player.id));
+      const joined = [...after].some((id) => !before.has(id));
+      sfx.ui(joined ? "ui:join" : "ui:leave");
+    }
+    lastRosterKey = rosterKey;
   }
   $("room-label").textContent = room.code;
   $<HTMLSelectElement>("map").value = room.config.mapId;
@@ -270,20 +285,23 @@ function escapeHtml(value: string) {
 $("create").addEventListener("click", () => {
   manualConnectionAction = true;
   showError("");
+  sfx.ui("ui:click");
   send("create", { name: $<HTMLInputElement>("name").value });
 });
 $("join").addEventListener("click", () => {
   manualConnectionAction = true;
   showError("");
+  sfx.ui("ui:click");
   const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
   const requestedCode = $<HTMLInputElement>("room-code").value.trim();
   send("join", { roomCode: requestedCode, name: $<HTMLInputElement>("name").value, token: saved?.roomCode === requestedCode ? saved.token : undefined, playerId: saved?.roomCode === requestedCode ? saved.selfId : undefined });
 });
-$("start").addEventListener("click", () => send("start"));
-$("solo-test").addEventListener("click", () => send("start_sandbox"));
-$("restart").addEventListener("click", () => send("restart"));
-$("sandbox-respawn").addEventListener("click", () => send("sandbox_respawn"));
-$("sandbox-return").addEventListener("click", () => send("return_lobby"));
+const clickAnd = (handler: () => void) => () => { sfx.ui("ui:click"); handler(); };
+$("start").addEventListener("click", clickAnd(() => send("start")));
+$("solo-test").addEventListener("click", clickAnd(() => send("start_sandbox")));
+$("restart").addEventListener("click", clickAnd(() => send("restart")));
+$("sandbox-respawn").addEventListener("click", clickAnd(() => send("sandbox_respawn")));
+$("sandbox-return").addEventListener("click", clickAnd(() => send("return_lobby")));
 $("result-leave").addEventListener("click", leaveRoom);
 $("leave").addEventListener("click", leaveRoom);
 $("in-match-leave").addEventListener("click", leaveRoom);
@@ -300,6 +318,8 @@ function leaveRoom() {
   roomCode = "";
   currentRoom = undefined;
   scene = undefined;
+  lastRosterKey = "";
+  sfx.ambient(false);
   gameInstance?.destroy(true);
   gameInstance = undefined;
   showError("");
@@ -328,6 +348,13 @@ for (const id of ["gore-toggle", "shake-toggle"]) {
     scene?.setVisualPreferences();
   });
 }
+$("sound-toggle").addEventListener("change", () => {
+  sfx.setEnabled($<HTMLInputElement>("sound-toggle").checked);
+  sfx.ui("ui:click");
+});
+$("sound-volume").addEventListener("input", () => {
+  sfx.setVolume(Number($<HTMLInputElement>("sound-volume").value) / 100);
+});
 for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) {
   $(id).addEventListener("change", () => {
     const mapId = $<HTMLSelectElement>("map").value as MapId;
@@ -372,20 +399,10 @@ for (const [index, archetype] of ARCHETYPES.entries()) {
   image.src = archetype.portrait;
 }
 
-let audioContext: AudioContext | undefined;
-function playAttackTone(secondary: boolean) {
-  audioContext ||= new AudioContext();
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  oscillator.type = secondary ? "sawtooth" : "triangle";
-  oscillator.frequency.setValueAtTime(secondary ? 126 : 242, audioContext.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(secondary ? 58 : 112, audioContext.currentTime + 0.08);
-  gain.gain.setValueAtTime(0.045, audioContext.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.1);
-  oscillator.connect(gain).connect(audioContext.destination);
-  oscillator.start();
-  oscillator.stop(audioContext.currentTime + 0.1);
-}
+// First user gesture unlocks the AudioContext; later event-driven sounds can play freely.
+const unlockAudio = () => sfx.unlock();
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 
 class ArenaScene extends Phaser.Scene {
   private snapshot?: ServerSnapshot;
@@ -420,8 +437,6 @@ class ArenaScene extends Phaser.Scene {
     this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown", (event: KeyboardEvent) => {
       if (event.key >= "1" && event.key <= "6") this.sendInput(Number(event.key));
-      if (event.key.toLowerCase() === "j") playAttackTone(false);
-      if (event.key.toLowerCase() === "k") playAttackTone(true);
     });
     this.input.on("wheel", (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
       const mine = this.snapshot?.players.find((player) => player.id === selfId);
@@ -458,8 +473,11 @@ class ArenaScene extends Phaser.Scene {
   }
 
   applySnapshot(snapshot: ServerSnapshot) {
+    const previousPhase = this.snapshot?.phase;
+    const previousMode = this.snapshot?.mode;
     this.snapshot = snapshot;
     this.processEvents(snapshot.events);
+    this.updatePhaseAudio(snapshot, previousPhase, previousMode);
     this.updateHud(snapshot);
     this.refreshWeaponPanel();
     this.bakePlatformLayer();
@@ -477,6 +495,22 @@ class ArenaScene extends Phaser.Scene {
     }
     $("winner").textContent = snapshot.winner || "NO SURVIVOR";
     $<HTMLButtonElement>("restart").classList.toggle("hidden", selfId !== currentRoom?.hostId);
+  }
+
+  private updatePhaseAudio(snapshot: ServerSnapshot, previousPhase?: string, previousMode?: string) {
+    if (snapshot.phase === previousPhase && snapshot.mode === previousMode) return;
+    if (snapshot.phase === "playing" && previousPhase !== "playing") {
+      sfx.ambient(true);
+      if (previousPhase === "lobby" || previousMode === undefined) sfx.ui("start");
+    }
+    if (snapshot.phase === "results") {
+      sfx.ambient(false);
+      if (snapshot.mode !== "sandbox" && snapshot.winner) {
+        const winnerEntry = snapshot.players.find((player) => player.name === snapshot.winner);
+        sfx.ui(winnerEntry?.id === selfId ? "victory" : "defeat");
+      }
+    }
+    if (snapshot.phase === "lobby") sfx.ambient(false);
   }
 
   private refreshWeaponPanel() {
@@ -518,6 +552,8 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private processEvents(events: CombatEvent[]) {
+    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    const at = (x: number, y: number) => ({ x, y, mx: mine?.x, my: mine?.y });
     for (const event of events) {
       if (this.processedEvents.has(event.id)) continue;
       this.processedEvents.add(event.id);
@@ -526,18 +562,22 @@ class ArenaScene extends Phaser.Scene {
       const target = this.snapshot?.players.find((player) => player.id === event.targetId);
       const color = event.weaponId ? WEAPONS[event.weaponId].color : 0xf0a14a;
       if (event.type === "attack") {
+        sfx.play(`attack:${event.weaponId}:${event.secondary ? "sec" : "pri"}`, at(event.x, event.y));
         const facing = actor?.facing || 1;
         const length = event.pattern === "piercing" ? 150 : event.pattern === "cluster" ? 44 : event.pattern === "dashSlash" || event.pattern === "slash" ? 34 : event.secondary ? 105 : 72;
         this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: 0.12, color, width: event.pattern === "piercing" ? 4 : event.pattern === "slash" || event.pattern === "dashSlash" ? 7 : event.secondary ? 5 : 2 });
         this.spawnBurst(event.x, event.y, color, event.count ? Math.min(18, event.count * 3) : event.secondary ? 11 : 7, event.pattern === "cluster" ? "energy" : "spark", actor?.facing || 1);
         if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(event.x + facing * 24, event.y - 8, color, 14, "energy", facing);
       } else if (event.type === "crateSpawn") {
+        sfx.play("crateSpawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y - 16, color, 18, "energy", 0);
         this.tracers.push({ x1: event.x, y1: event.y - 48, x2: event.x, y2: event.y + 4, life: 0.24, color, width: 3 });
       } else if (event.type === "cratePickup") {
+        sfx.play("cratePickup", at(event.x, event.y));
         this.spawnBurst(event.x, event.y, color, 20, "spark", 0);
         this.spawnBurst(event.x, event.y - 16, color, 10, "energy", 0);
       } else if (event.type === "hit") {
+        sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         if (visualPrefs.gore) {
           this.spawnBurst(event.x, event.y, 0x8d151d, Math.round(10 + event.strength * 10), "blood", target?.facing || 1);
           this.decals.push({ x: event.x, y: Math.min(520, event.y + 18), radius: 4 + event.strength * 5, alpha: 0.35, rotation: Math.random() * Math.PI });
@@ -545,10 +585,12 @@ class ArenaScene extends Phaser.Scene {
         } else this.spawnBurst(event.x, event.y, 0xe0b66d, 12, "spark", 0);
         this.shake(event.strength, target?.id === selfId);
       } else if (event.type === "explosion") {
+        sfx.play("explosion", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         this.spawnBurst(event.x, event.y, 0xf06b2f, 40, "energy", 0);
         this.spawnBurst(event.x, event.y, 0x343b3b, 24, "smoke", 0);
         this.shake(event.strength, true);
       } else if (event.type === "dismember") {
+        sfx.play("dismember", { ...at(event.x, event.y), priority: "high" });
         if (visualPrefs.gore && event.limbId) {
           this.gibs.push({ x: event.x, y: event.y, vx: (Math.random() - 0.5) * 250, vy: -180 - Math.random() * 120, life: 5, color: target?.color || 0x8d151d, limb: event.limbId });
           this.gibs = this.gibs.slice(-16);
@@ -556,11 +598,14 @@ class ArenaScene extends Phaser.Scene {
         }
         this.shake(1.2, target?.id === selfId);
       } else if (event.type === "death") {
+        sfx.play("death", { ...at(event.x, event.y), priority: "high" });
         this.spawnBurst(event.x, event.y, visualPrefs.gore ? 0x6e0d16 : 0xd7aa56, visualPrefs.gore ? 50 : 24, visualPrefs.gore ? "blood" : "spark", 0);
         this.shake(1.4, true);
       } else if (event.type === "respawn") {
+        sfx.play("respawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y, target?.color || 0x56d9d0, 32, "energy", 0);
       } else if (event.type === "hazard") {
+        sfx.play("hazard", { ...at(event.x, event.y), strength: event.strength });
         this.spawnBurst(event.x, event.y, 0xf09b3d, 28, "spark", 0);
         this.shake(event.strength, target?.id === selfId);
       }
