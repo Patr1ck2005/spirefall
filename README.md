@@ -1,10 +1,10 @@
-# Mayhem Circuit
+# Spirefall
 
 <p align="center">
   <img src="docs/screenshots/match.jpg" alt="A live Fortress duel with tracers, weapon HUD, and body integrity readout" width="840">
 </p>
 
-A clean-room browser arena game set inside a decaying brutalist industrial megastructure. Four pilots battle across three connected sectors of one vertical structure — storm-lashed canopy, defense spine, and foundry floor — with server-authoritative physics, weapons, hazards, and dismemberment. The original SWF is used only as a read-only behavioral reference; no original art, audio, branding, or code is shipped by this project.
+**Spirefall** is a clean-room browser arena shooter set inside a decaying brutalist megastructure. Four pilots battle across three sectors of one vertical spire — storm-lashed canopy, defense spine, and foundry floor — with server-authoritative physics, weapons, hazards, and dismemberment. Knock every rival off the structure; the last pilot standing holds the spire. The original SWF is used only as a read-only behavioral reference; no original art, audio, branding, or code is shipped by this project.
 
 ## Screenshots
 
@@ -32,7 +32,7 @@ For LAN play, other players open `http://<host-ip>:5173` and enter the six-digit
 
 For one-player setup and feel checks, create a room and choose **Solo test**. The sandbox uses the selected map, lives, crates, and weapon set, respawns after falls without declaring a winner, offers a `Test respawn` control, and can return directly to the lobby. Normal multiplayer matches still require at least two pilots.
 
-**Leaving a room** — `Leave circuit` (lobby), `Exit match` (in-game HUD), and `Leave circuit` (results screen) all exit immediately: the slot is released server-side with no reconnect hold, the local session is cleared, and the browser returns to the main menu.
+**Leaving a room** — `Leave spire` (lobby), `Exit match` (in-game HUD), and `Leave spire` (results screen) all exit immediately: the slot is released server-side with no reconnect hold, the local session is cleared, and the browser returns to the main menu.
 
 ## Game systems
 

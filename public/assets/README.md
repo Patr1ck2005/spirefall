@@ -1,6 +1,6 @@
 # Generated runtime art
 
-Original Mayhem Circuit runtime art described in `docs/ART_DIRECTION.md`. All images here are original generations produced from the clean-room prompts in that document (Volcengine Ark / doubao-seedream-5.0-lite); nothing was extracted or traced from the reference SWF.
+Original Spirefall runtime art described in `docs/ART_DIRECTION.md`. All images here are original generations produced from the clean-room prompts in that document (Volcengine Ark / doubao-seedream-5.0-lite); nothing was extracted or traced from the reference SWF.
 
 Contents:
 

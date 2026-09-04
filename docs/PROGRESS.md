@@ -1,4 +1,4 @@
-# Mayhem Circuit 开发进度交接文档
+# Spirefall 开发进度交接文档
 
 > 更新时间：2026-08-23
 > 本文档由 Claude Code 从 Codex 会话 `01a013e4`（2026-08-18，4.8 MB）及磁盘实际状态整理而成，2026-08-23 由 Claude Code 接手后续开发。
@@ -6,7 +6,7 @@
 
 ## 1. 项目定位
 
-- **项目名**：Mayhem Circuit（原 Gun Mayhem Redux 清洁室重做）
+- **项目名**：Spirefall（2026-08-23 由开发代号 Mayhem Circuit 更名，为公开发布与原作《Gun Mayhem Redux》保持品牌距离；原 Gun Mayhem Redux 清洁室重做）
 - **目标**：浏览器联机竞技场游戏，贴近原版手感；第一版只做 4 人自定义对战
 - **清洁室边界（硬约束）**：原版 SWF（`temp_folder/english.swf`）仅作只读行为参考。禁止提取、描摹、模仿、再分发其美术/音频/字体/logo/品牌。所有运行时美术必须原创。
 - **用户角色**：用户只提需求和验收，开发由 AI 完成。
@@ -122,6 +122,17 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
   - 新增回归测试：淘汰冻结（无重复死亡事件、无负命、即时结算）+ leave_room 即时移除
 - 全量回归通过（logic/smoke×3/browser/visual/performance 78.5 FPS）
 
+### M11 更名 Spirefall + 公开发布准备（2026-08-23，Claude Code 发起 / DSH 收尾）
+
+用户决定公开发布 GitHub，要求更名以与原作《Gun Mayhem Redux》保持品牌距离（旧名 Mayhem 中的 "Mayhem" 直接取自原作标题）。候选经搜索查重后用户拍板 **Spirefall**。
+
+- 全套替换：菜单品牌头（M→S 标记，Mayhem Circuit→Spirefall）、主标语 ENTER THE SPIRE、JOIN ACTIVE SPIRE、Active spire、两处 Leave spire、Spire resolved、HOLDS THE SPIRE、HUD 的 SPIRE 前缀与 SPIRE RESOLVED、index.html 标题+meta 描述、package.json/package-lock 名（spirefall）、服务器横幅（Spirefall server）、localStorage 键（spirefall-session / spirefall-visuals）、测试环境变量 MAYHEM_WS→SPIREFALL_WS
+- 保留：docs/ORIGINAL_BEHAVIOR.md 的原作参考标题（清洁室记录）、PROGRESS 历史章节中的旧名（历史事实）；房间码概念改名 "SPIRE xxxxxx"
+- README 画廊 7 张截图全部用改名后跑出的新测试截图重新生成
+- 开发环境切换：Claude Code → DSH（模型 glm-5.3-flash），本节后续提交 trailer 为 `Origin: ai:glm-5.3-flash-dsh`
+- 全量回归通过（tsc/logic/smoke/browser/visual/performance 103.4 FPS）
+- 发布建议：GitHub 仓库名用 `spirefall`；README 已含截图画廊与完整说明
+
 ## 4. 当前真实状态（2026-08-23 第三轮核验）
 
 - ✅ Git：master @ `1e8ccbd`（M9 已提交），工作区含 M10 修复待提交（server/main/style/network-smoke/PROGRESS）
@@ -132,8 +143,8 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 
 ## 5. 未完成事项 / 下一步候选
 
-1. **M10 修复提交**：用户已验收问题不大，待确认 provenance（模型名+agent 名+纯 AI/AI 辅助分类）后带 `Origin:` trailer 提交
-2. **用户复验两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
+1. **GitHub 发布**：新建仓库 `spirefall` 推送本仓库；README 已就绪（截图画廊+完整说明）
+2. **用户复验 M10 两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
 3. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
 4. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
 5. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕

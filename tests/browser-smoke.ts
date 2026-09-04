@@ -75,7 +75,7 @@ await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout:
 await solo.locator("#settings-button").click();
 await solo.locator("label").filter({ has: solo.locator("#gore-toggle") }).click();
 await solo.locator("label").filter({ has: solo.locator("#shake-toggle") }).click();
-const visualPrefs = await solo.evaluate(() => JSON.parse(localStorage.getItem("mayhem-visuals") || "null"));
+const visualPrefs = await solo.evaluate(() => JSON.parse(localStorage.getItem("spirefall-visuals") || "null"));
 if (visualPrefs?.gore !== false || visualPrefs?.shake !== false) throw new Error("Visual preferences were not persisted");
 await solo.locator("#settings-button").click();
 await solo.locator("#sandbox-return").click();

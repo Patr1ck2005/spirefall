@@ -14,7 +14,7 @@ const waitFor = (ws: WebSocket, type: string, timeout = 4000) => new Promise<Mes
   ws.on("message", handler);
 });
 const open = () => new Promise<WebSocket>((resolve, reject) => {
-  const ws = new WebSocket(process.env.MAYHEM_WS || "ws://127.0.0.1:8787");
+  const ws = new WebSocket(process.env.SPIREFALL_WS || "ws://127.0.0.1:8787");
   ws.once("open", () => resolve(ws));
   ws.once("error", reject);
 });

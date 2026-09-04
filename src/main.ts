@@ -67,7 +67,7 @@ app.innerHTML = `
   <div class="app-backdrop" aria-hidden="true"><div></div><i></i><i></i><i></i></div>
   <section class="shell">
     <header class="command-bar">
-      <div class="brand"><span class="brand-mark"><i></i><b>M</b></span><div><p>BRUTAL ARENA SYSTEM</p><h1>Mayhem Circuit</h1></div></div>
+      <div class="brand"><span class="brand-mark"><i></i><b>S</b></span><div><p>BRUTAL ARENA SYSTEM</p><h1>Spirefall</h1></div></div>
       <div class="command-meta"><span id="status" class="status">OFFLINE</span><button id="settings-button" class="icon-command" title="Visual settings" aria-expanded="false">FX</button></div>
       <div id="visual-settings" class="visual-settings hidden">
         <p class="eyebrow">Visual output</p>
@@ -78,12 +78,12 @@ app.innerHTML = `
 
     <main>
       <section id="menu" class="menu-screen">
-        <div class="menu-intro"><p class="kicker">NETWORK COMBAT / 01-04 PILOTS</p><h2>ENTER THE<br><span>MEGASTRUCTURE</span></h2><p>Every sector is still alive. Every machine is hostile.</p><div class="signal-line"><i></i><span>SERVER-LINK READY</span></div></div>
+        <div class="menu-intro"><p class="kicker">NETWORK COMBAT / 01-04 PILOTS</p><h2>ENTER THE<br><span>SPIRE</span></h2><p>Every sector is still alive. Every machine is hostile.</p><div class="signal-line"><i></i><span>SERVER-LINK READY</span></div></div>
         <div class="access-console">
           <div class="console-head"><span>ACCESS NODE 07</span><small>ENCRYPTED LAN</small></div>
           <label class="field" for="name"><span>Pilot callsign</span><input id="name" maxlength="16" value="Player" autocomplete="off" /></label>
           <button id="create" class="primary wide">Create room</button>
-          <div class="join-divider"><span>JOIN ACTIVE CIRCUIT</span></div>
+          <div class="join-divider"><span>JOIN ACTIVE SPIRE</span></div>
           <div class="join-row"><input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" aria-label="Room code" /><button id="join">Join</button></div>
           <p id="error" class="error" role="alert"></p>
           <div class="control-strip"><span>A/D MOVE</span><span>W JUMP</span><span>J PRIMARY</span><span>K SECONDARY</span></div>
@@ -91,14 +91,14 @@ app.innerHTML = `
       </section>
 
       <section id="lobby" class="lobby-screen hidden">
-        <div class="lobby-header"><div><p class="eyebrow">Active circuit</p><div class="room-code"><strong id="room-label">------</strong><button id="copy-code" title="Copy room code">Copy</button></div></div><div class="lobby-state"><i></i><span>PRIVATE LAN SESSION</span></div></div>
+        <div class="lobby-header"><div><p class="eyebrow">Active spire</p><div class="room-code"><strong id="room-label">------</strong><button id="copy-code" title="Copy room code">Copy</button></div></div><div class="lobby-state"><i></i><span>PRIVATE LAN SESSION</span></div></div>
         <div class="lobby-console">
           <section class="roster-column"><div class="section-title"><span>01</span><div><p>DEPLOYMENT</p><h3>Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
           <section class="map-column"><div class="section-title"><span>02</span><div><p>LOCATION</p><h3>Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
           <section class="settings-column"><div class="section-title"><span>03</span><div><p>PARAMETERS</p><h3>Match control</h3></div></div><div class="settings"><label>Sector<select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label>Lives<select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> Supply drops</label><label>AI pilots<select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label>Skill<select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
         </div>
         <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p>ARMORY</p><h3>Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
-        <div class="lobby-actions"><div><button id="start" class="primary">Start match</button><button id="solo-test">Solo test</button></div><button id="leave" class="quiet">Leave circuit</button></div>
+        <div class="lobby-actions"><div><button id="start" class="primary">Start match</button><button id="solo-test">Solo test</button></div><button id="leave" class="quiet">Leave spire</button></div>
       </section>
 
       <div id="game-wrap" class="game-wrap hidden">
@@ -110,7 +110,7 @@ app.innerHTML = `
           <button id="in-match-leave" class="quiet hud-leave">Exit match</button>
         </div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn">Test respawn</button><button id="sandbox-return">Return to lobby</button></div>
-        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Circuit resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave circuit</button></div></div>
+        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Spire resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave spire</button></div></div>
       </div>
     </main>
   </section>`;
@@ -132,7 +132,7 @@ let manualConnectionAction = false;
 let resumeAttempted = false;
 const availablePortraits = new Set<number>();
 
-const savedVisuals = JSON.parse(localStorage.getItem("mayhem-visuals") || "null");
+const savedVisuals = JSON.parse(localStorage.getItem("spirefall-visuals") || "null");
 const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false };
 $<HTMLInputElement>("gore-toggle").checked = visualPrefs.gore;
 $<HTMLInputElement>("shake-toggle").checked = visualPrefs.shake;
@@ -155,7 +155,7 @@ function connect() {
     setStatus("Linked", "good");
     if (!resumeAttempted && !manualConnectionAction) {
       resumeAttempted = true;
-      const saved = JSON.parse(localStorage.getItem("mayhem-session") || "null");
+      const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
       if (saved?.roomCode && saved?.token && saved?.selfId) {
         socket!.send(JSON.stringify({ type: "join", roomCode: saved.roomCode, name: $<HTMLInputElement>("name").value, token: saved.token, playerId: saved.selfId }));
       }
@@ -233,7 +233,7 @@ function handleMessage(message: any) {
       token = message.token;
       selfId = message.selfId || selfId;
       roomCode = message.room.code;
-      localStorage.setItem("mayhem-session", JSON.stringify({ token, selfId, roomCode }));
+      localStorage.setItem("spirefall-session", JSON.stringify({ token, selfId, roomCode }));
     }
     if (message.room) {
       enterLobby(message.room);
@@ -275,7 +275,7 @@ $("create").addEventListener("click", () => {
 $("join").addEventListener("click", () => {
   manualConnectionAction = true;
   showError("");
-  const saved = JSON.parse(localStorage.getItem("mayhem-session") || "null");
+  const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
   const requestedCode = $<HTMLInputElement>("room-code").value.trim();
   send("join", { roomCode: requestedCode, name: $<HTMLInputElement>("name").value, token: saved?.roomCode === requestedCode ? saved.token : undefined, playerId: saved?.roomCode === requestedCode ? saved.selfId : undefined });
 });
@@ -294,7 +294,7 @@ $("in-match-leave").addEventListener("click", leaveRoom);
 function leaveRoom() {
   manualConnectionAction = true;
   send("leave_room");
-  localStorage.removeItem("mayhem-session");
+  localStorage.removeItem("spirefall-session");
   token = "";
   selfId = "";
   roomCode = "";
@@ -324,7 +324,7 @@ for (const id of ["gore-toggle", "shake-toggle"]) {
   $(id).addEventListener("change", () => {
     visualPrefs.gore = $<HTMLInputElement>("gore-toggle").checked;
     visualPrefs.shake = $<HTMLInputElement>("shake-toggle").checked;
-    localStorage.setItem("mayhem-visuals", JSON.stringify(visualPrefs));
+    localStorage.setItem("spirefall-visuals", JSON.stringify(visualPrefs));
     scene?.setVisualPreferences();
   });
 }
@@ -469,7 +469,7 @@ class ArenaScene extends Phaser.Scene {
     const winnerEntry = snapshot.players.find((player) => player.name === snapshot.winner);
     const subtitle = $("result").querySelector("p:last-of-type") as HTMLElement | null;
     if (winnerEntry?.isBot) {
-      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner} HOLDS THE CIRCUIT`; subtitle.classList.add("defeated"); }
+      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner} HOLDS THE SPIRE`; subtitle.classList.add("defeated"); }
       $("result").classList.add("bot-victory");
     } else {
       if (subtitle) { subtitle.textContent = "ONE PILOT REMAINS"; subtitle.classList.remove("defeated"); }
@@ -506,9 +506,9 @@ class ArenaScene extends Phaser.Scene {
   private updateHud(snapshot: ServerSnapshot) {
     const mine = snapshot.players.find((player) => player.id === selfId);
     const map = MAPS[snapshot.config.mapId];
-    $("hud-room").textContent = roomCode ? `CIRCUIT ${roomCode}` : "";
+    $("hud-room").textContent = roomCode ? `SPIRE ${roomCode}` : "";
     $("hud-sector").textContent = map.sector;
-    $("hud-phase").textContent = snapshot.mode === "sandbox" ? "SOLO TEST" : snapshot.phase === "results" ? "CIRCUIT RESOLVED" : "LIVE";
+    $("hud-phase").textContent = snapshot.mode === "sandbox" ? "SOLO TEST" : snapshot.phase === "results" ? "SPIRE RESOLVED" : "LIVE";
     $("hud-roster").innerHTML = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
     if (!mine) return;
     const weapon = WEAPONS[mine.weapon];

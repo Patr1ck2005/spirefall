@@ -762,7 +762,7 @@ function broadcastSnapshot(room: Room) {
 
 const http = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/plain" });
-  response.end("Mayhem server is running\n");
+  response.end("Spirefall server is running\n");
 });
 const wss = new WebSocketServer({ server: http });
 
@@ -800,4 +800,4 @@ setInterval(() => {
 }, 1000 / WORLD.tickRate);
 
 const port = Number(process.env.PORT || 8787);
-http.listen(port, "0.0.0.0", () => console.log(`Mayhem server listening on http://0.0.0.0:${port}`));
+http.listen(port, "0.0.0.0", () => console.log(`Spirefall server listening on http://0.0.0.0:${port}`));
