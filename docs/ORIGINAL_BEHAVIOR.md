@@ -5,7 +5,7 @@ This document separates confirmed observations from design choices. It is not a 
 ## Confirmed observations
 
 - Reference title: Gun Mayhem Redux.
-- Reference file: `temp_folder/english.swf`.
+- Reference file: a local copy of the original SWF was used read-only during early analysis and has since been removed from the repository entirely (clean-room requirement — the binary itself is never redistributed).
 - Stage: approximately 1000 x 560 pixels.
 - Timeline: 35 FPS, ActionScript 2 / AVM1.
 - The SWF contains embedded animation, audio, UI, AI, map, weapon, challenge, and local-save resources.

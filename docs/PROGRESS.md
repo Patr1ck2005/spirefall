@@ -8,7 +8,7 @@
 
 - **项目名**：Spirefall（2026-08-23 由开发代号 Mayhem Circuit 更名，为公开发布与原作《Gun Mayhem Redux》保持品牌距离；原 Gun Mayhem Redux 清洁室重做）
 - **目标**：浏览器联机竞技场游戏，贴近原版手感；第一版只做 4 人自定义对战
-- **清洁室边界（硬约束）**：原版 SWF（`temp_folder/english.swf`）仅作只读行为参考。禁止提取、描摹、模仿、再分发其美术/音频/字体/logo/品牌。所有运行时美术必须原创。
+- **清洁室边界（硬约束）**：原版 SWF 仅作只读行为参考——**2026-09 起二进制已从 git 仓库移除并加入 .gitignore**（本地保留、永不入库/分发）。禁止提取、描摹、模仿、再分发其美术/音频/字体/logo/品牌。所有运行时美术必须原创。
 - **用户角色**：用户只提需求和验收，开发由 AI 完成。
 
 ## 2. 技术栈与架构
@@ -18,17 +18,20 @@
 | 客户端 | Phaser 3.90，Vite 6，TypeScript 5.7 |
 | 服务端 | Node.js + ws，权威模拟 60 Hz tick / 20 Hz 快照 |
 | 共享契约 | [shared/game.ts](../shared/game.ts)（地图、武器、物理常量、协议类型）|
-| 测试 | logic / network-smoke / browser-smoke(Playwright) / visual-smoke(四视口) / performance-smoke(四人压测) |
+| 测试 | logic / network-smoke / **ai-smoke** / browser-smoke(Playwright) / visual-smoke(四视口) / performance-smoke(四人压测) |
 
 ```
-src/main.ts    (636 行) 场景、网络、输入预测、插值、HUD、特效
-src/art.ts     (336 行) 程序化美术：巨构背景、角色轮廓、武器剪影、机关绘制
-server/server.ts (666 行) 权威房间/比赛/沙盒/肢体/机关/箱子调度
-shared/game.ts (445 行) 唯一契约层
-tests/*.ts     五套测试
+src/main.ts    (约 1070 行) 场景、网络、输入预测、插值、HUD、特效、音效接线
+src/art.ts     (约 425 行) 程序化美术：巨构背景、角色轮廓、武器剪影、机关绘制
+src/audio.ts   (约 370 行) WebAudio 程序化音效引擎（零音频资产）
+server/server.ts (约 960 行) 权威房间/比赛/沙盒/肢体/机关/箱子/时限调度
+server/bots.ts (约 490 行) 服务器权威 bot（导航/计划/watchdog）
+shared/game.ts (约 645 行) 唯一契约层
+tests/*.ts     六套测试（logic/smoke/ai/browser/visual/performance）
+Spirefall.bat  Windows 一键启动器
 docs/ORIGINAL_BEHAVIOR.md  原版行为参考笔记
-docs/ART_DIRECTION.md      美术方向 + 图像生成提示词（7 张资产规格）
-public/assets/             仅 README —— 生成位图尚未产出（缺 OPENAI_API_KEY）
+docs/ART_DIRECTION.md      美术方向 + 图像生成提示词
+public/assets/             生成位图：3 环境 + 3 材质 + 4 肖像
 ```
 
 ## 3. 已完成里程碑（按会话顺序）
@@ -133,13 +136,13 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - 全量回归通过（tsc/logic/smoke/browser/visual/performance 103.4 FPS）
 - 发布建议：GitHub 仓库名用 `spirefall`；README 已含截图画廊与完整说明
 
-## 4. 当前真实状态（2026-08-23 第三轮核验）
+## 4. 当前真实状态（2026-09 M18 审核轮更新）
 
-- ✅ Git：master @ `1e8ccbd`（M9 已提交），工作区含 M10 修复待提交（server/main/style/network-smoke/PROGRESS）
-- ⚠️ 运维教训：`tsx server/server.ts` 不带 watch，改服务器代码必须手动重启进程；本轮多个"测试时好时坏"实为旧进程在跑（netstat 过滤词要用 LISTENING 而非 LISTEN）
-- ✅ `public/assets/` 已有全部 10 张 webp（3 环境 + 4 肖像 + 3 材质），加载器自动生效，程序化绘制仅作回退
-- ✅ 六套测试脚本齐全且全绿；dev 服务运行中（Vite 5173 / 游戏 8787）
-- 测试实测基线（本机当前环境）：单人持续战斗 ≈167 FPS；四人同机压测 ≈66–74 FPS / P95 ≈23.6ms（Edge 151 无头调度上限，非游戏瓶颈）
+- ✅ Git：master @ `032f611`（M13 已推送 GitHub），工作区含 M14-M17 战斗版本全量待提交；**2026-09 审核移除已入库的原版 SWF/EXE/抓帧图（P0 清洁室修复，历史重写待用户决策）**
+- ⚠️ 运维教训：`tsx server/server.ts` 不带 watch，改服务器代码必须手动重启进程；多个"测试时好时坏"实为旧进程在跑（netstat 过滤词用 LISTENING）。另：负载下 serverTick 慢于墙钟（~35Hz），时长断言用 tick 不用墙钟
+- ✅ `public/assets/` 全量 webp（3 环境 + 4 肖像 + 3 材质），far-layer 死资产已于 M18 删除
+- ✅ 七套测试齐全（logic/smoke/ai/browser/visual/performance + build）；FFA 断言 2/3 通过即绿（罕见残局方差容忍）
+- 测试实测基线：性能压测 52-65 FPS / P95 24-35ms（波动为本机负载方差，门槛 45/45）
 
 ### M12 一键启动器（2026-08-23，DSH/glm-5.3-flash）
 
@@ -164,15 +167,65 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - **调试教训**：给 start/solo-test/restart 等按钮加点击音时一度用循环整体替换了监听器，把 send() 调用覆盖掉——browser-smoke 卡 canvas 等待超时暴露（gameWrap 保持 hidden、无 pageerror、favicon 404 是噪音）。诊断靠 playwright 双页忠实复刻测试流程抓 console/pageerror/requestfailed；修复为 clickAnd() 包装（音效+原 send 并存）
 - 全量回归：tsc + 六套测试全绿，performance 116.4 FPS / p95 17.5ms（新高）
 
+### M17 稳定化收尾：死亡规则 + Voltrail 处决 + AI 强化与专项测试（2026-08-23，DSH/glm-5.3-flash）
+
+用户反馈：血条空了不死、AI 有问题、Voltrail 满蓄应一枪毙命、要求 AI/视觉测试写好、做稳定化收尾。诊断发现三处真实缺陷并全部修复：
+
+- **死亡规则修复**（"血条空了不死"根因）：旧规则肢体 0=纯装饰，且打已断肢体伤害被 clamp 吞掉、头顶区命中（selectLimbAtPoint 返回 undefined）伤害完全丢失。新规则：已断肢体/头顶区命中 → 伤害随机转移到存活肢体；四肢全毁 → bleed-out 击杀（loseLife 泛化 "shot" cause，respawn 照旧满血）；爆炸均摊路径同样检查 quad-destroy
+- **Voltrail 处决**：charge ≥ 0.8 → lethal 直击（无视肢体立即击杀，穿透 ×3 可一线多人处决）；0.25-0.8 维持缩放伤害；满蓄 0.95+ 额外冲击环/爆音/强震
+- **火箭触墙即爆**（玩法缺陷顺手修）：explosiveRadius 弹撞墙不再哑火，范围伤害 + explosion 事件
+- **AI 修复链**（每层都由新测试暴露）：①导航图补同层 gapJump 边（同层不重叠平台间无边，bot 规划不出跨缺口路线）②decidePlan 增加同层缺口跳跃（gapJump）/下降承诺（descend）/下穿判定（dropThrough 放宽）③executePlan 增加贴脸 leapfrog（重叠时跳过对方头顶，双方保持朝向继续开火——旧版互相禁火死锁）④**fleeEdge 整体删除**（坠落无伤害机制下纯负收益，是"bot 在 lip 来回踱步"死锁的根源）⑤**anti-stall watchdog**：目标不可达（下方 80px+ 或远距离卡住）且 4s 无净移动 → 强制 1.5s 直冲 march（禁跳防垂直弹跳循环；正下方按 S 下穿）——任何导航死角都有兜底
+- **匹配 4 分钟时限**：updateRoom 里 tick > 14400（游戏时间 4 分钟）强制 results，按 lives→limbs 排名定 winner——所有僵局（camping/对峙/导航死角）硬上界
+- **新 AI 专项测试** `tests/ai-smoke.ts` + `test:ai`：每图 3 bot FFA 自终局（FFA 结果断言软化 2/3 通过——罕见残局方差容忍，失败打印现场；serverTick 时钟判超时而非墙钟——负载下 tick 实际 ~35Hz）；aggression（70s 内 bot 开火 >200 且命中挂机人类）；双图 lone bot 20s 生存+移动。诊断脚本循环发现的关键事实：负载下 serverTick 慢于墙钟，一切时长断言必须用 tick
+- **回归**：tsc + 七套全绿（新增 test:ai），performance 96.3 FPS / p95 17.7ms
+- **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
+### M16 弹道与打击特效完善（2026-08-23，DSH/glm-5.3-flash）
+
+用户反馈：各种子弹、落地和打击的爆炸特效要大量完善。
+
+- **新 `impact` 事件**（协议 additive）：子弹/火箭/火焰弹撞平台、命中身体消亡（非爆炸）、飞出边界三种情况服务器发事件，strength 随弹速缩放——消灭了"子弹无声消失"的最大哑弹区
+- **客户端 impact 特效**（按武器分档）：普通弹碎屑 5-14 spark + 白闪 + 高速小冲击环；火箭撞墙橙 spark+flash+烟；火焰弹橙色飞溅 + 上飘余烬；全部落点烙永久弹孔 decal（复用 decalLayer，gore 关闭可清）
+- **飞行轨迹**：火箭 3 节喷焰尾（热核→烟灰渐隐）；piercing 弹（Lance/Voltrail sec）残影拖尾加长至 52px + 尾端光珠 + 白热连线
+- **命中双层血雾**：深红外圈 + 亮红内芯 + 2 滴溅落小弹孔；爆炸音加 0.12s 低频隆隆长尾（同 burst 铺设，无延迟调度）
+- **impact 音效**：墙体闷响（低通噪声 + 低频 sine 下坠）
+- 测试修正：factory 机关 2→4（双传送带+双活塞），smoke 断言同步
+- **回归**：tsc + 六套全绿；performance 85.0 FPS / p95 23.1ms
+- **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
+### M15 游戏性强化：地图个性化 + 伤害上调 + 修复电池（2026-08-23，DSH/glm-5.3-flash）
+
+用户反馈：游戏性弱、场景遮挡多、场景单调重复、伤害偏低。四项全动。
+
+- **三图去模板化**（旧版三图共用同一平台骨架只是抖坐标）：Canopy 左塔右崖开放垂直（左密集窄塔/右大开放坠落区，双货运电梯，删吊柱，19→13 平台）；Fortress 中轴要塞（中央四层大视线走廊对枪线 + 两侧对称短翼，blastCrusher 1→2 对称相位 180°，20→14）；Factory 流水线横向（2 条 conveyor 把人往缺口推 + forgePiston 1→2 相位差 180°，平台重排更开阔）。箱子点位 11→8-9 跟随新布局，出生点全部核对贴台
+- **遮挡清理**：drawEnvironment 底色 0.22→0.12、暗层 0.18→0.08；平台亮边 cap 亮度 up（oneWay 1.0/0.55，"能走"信号强化）；canopy 雨滴 50→36；**三张背景图全部重生成**（新提示词：结构推到左右边缘、中段大面积留白、"keep the middle of the frame almost empty"），ART_DIRECTION 提示词档案同步更新并记录重生成原因
+- **伤害 ×1.45**：sidearm 5→7、burst 7→10、scatter 6→9、flame 3→4、beam 4→6/tick、Lance 26→38、Voltrail 22→32（满蓄 ≈83）、Voltrail sec 24→35、rocket 32→46、cluster 17→25、blade 26/42→38/60；机关 crusher 62→72、piston 72→84。只动 damage 不动击退
+- **新机制 修复电池 Repair Cell**：CrateState+kind("weapon"|"repair")，~25% 生成概率；拾取恢复四肢完整（不换枪）；绿色十字贴图 + 绿色 restore 特效（双层绿环+绿 burst）+ 专属三音上行 repair 音效；CombatEvent+crateKind 字段（crateSpawn/Pickup 均带）
+- **测试**：game-logic 新增 M15 伤害下限断言 ×6 + 箱子点位自动核验（循环内已有，新布局直接覆盖）；smoke 共底断言（factory 新布局 |Δx|=770 < 1200）通过
+- **回归**：tsc + 六套全绿；performance 99.2 FPS / p95 17.7ms（新布局平台更少烘焙更轻，比 M14 的 55 大幅回升）
+- **状态**：等待用户实测三图手感后批准提交（commit 需用户明确批准——§6 约束）
+
+### M14 火力全开：全枪械重设计（2026-08-23，DSH/glm-5.3-flash）
+
+用户要求：全部枪械重设计、多连发、单发光效拉满、加入充能/激光。blade 近战保留，5 枪全换。
+
+- **新武器表**（weaponId 不变，协议兼容）：sidearm→**Vein Ripper** 全自动冲锋枪（0.09s auto，弹匣 90，sec 过热倾泻 burst×6）；scatter→Breach Scatter 8 弹丸 + sec **Blaze Vent** 短程自动火焰喷洒；rifle→**Longbeam** 持续穿透光束（0.12s/tick held 即连发）+ Lance Pulse；sniper→**Voltrail** 蓄能磁轨（按 J 蓄力 ≤1.1s 松开发射，伤害 22×(1+1.6c)、击退/光宽/音量随 charge，chargeMin 0.25，穿透×3，满蓄力冲击环+爆音+强震）；rocket 数值微调+视觉强化；blade 不动
+- **协议扩展**（additive）：AttackPattern+"beam"；AttackDef+chargeMax/chargeMin；CombatEvent+charge?；PlayerState+charge?（蓄力状态全员可见）
+- **服务器**：stepPlayer 蓄力状态机（按住累计→广播 charge→松开 attack(fraction)）；attack() 接受 charge 缩放 damage/knockback/recoil/range；beam 走 hitscan 无限穿透分支；全武器 held 缓慢回弹 AMMO_REGEN_PER_SECOND=2；武器切换/重生清 charge；bot 蓄力预算（brutal 满 1.1s、standard 0.55×、casual 0.3×）
+- **客户端**：beam 光轨 life 0.15 逐 tick 刷新（视觉连续）；Voltrail 光宽 2.5+7c、满蓄力冲击环+railBoom+强震；新增 shock rings 特效（强命中/爆炸/重单发）与 "flash" 大粒子（枪口闪光）；蓄力者头顶弧形蓄力条（品红，满蓄变白）；HUD J 槽蓄力时显示 charge 填充；蓄力上升音 sfx.charge（6 级阈值触发）；火箭尾焰加粗；Blaze Vent 火焰弹丸贴图
+- **测试更新**：game-logic 蓝图断言全面重写（auto/beam/charge/vent）；network-smoke 双攻击断言 ammo===9→<90（新数值），命中测试改 Voltrail 蓄力释放（hold 12 snapshots ≈0.55 charge > chargeMin——首版 hold 4 snapshots ≈0.18 空放失败，已修）；browser-smoke 面板断言 M-12 Needle→Vein Ripper
+- **回归**：tsc + 六套全绿；performance 72.1 FPS / p95 23.5ms（光束+粒子增量所致，仍高于 45 FPS 门槛）
+- **特效二次强化（用户反馈"不够炫酷"）**：hitstop 命中停顿（effects 时间缩放 0.12×，40-100ms，350ms 冷却，粒子池>120 时跳过——风暴模式先牺牲它）；死亡击杀光柱（竖直 tracers 段）+ 双层扩张冲击环（eased 生长）；爆炸四层火球（白核 flash/橙色 energy/ember spark/smoke）；flash 粒子白核+光晕双层绘制；beam/磁轨光轨 jitter 抖动段（4 段替代 halo 层，不叠加）；强命中阈值 0.45 降档触发小冲击环
+- **性能护栏（特效强化后 perf 一度 39.7）**：自适应粒子密度（池>140 ×0.65，>200 ×0.35）；粒子池 240→170；爆炸/死亡爆发数收敛；hitstop 风暴跳过；**血 decals 烙进独立 RenderTexture**（decalLayer，stamp 一次终身免费，替掉每帧最多 48×2 fill 的最大隐性开销，gore 关闭 clear）；tracer jitter 段替代而非叠加 halo 层。最终六套全绿，performance 稳定 54.9-55.5 FPS / p95 29.2ms
+- **状态**：等待用户实测手感后批准提交（commit 需用户明确批准——§6 约束）
+
 ## 5. 未完成事项 / 下一步候选
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
-2. **用户验收 M13 音效**：Solo test 听全部音色（各武器主/副、爆炸、死亡、箱子、底噪）→ FX 面板关 Sound 确认静音且刷新保持 → 四人局确认多声源不糊；音色口味（闷/脆、音量比例）可低成本调参
-3. **用户复验 M10 两个 bug 修复**：对局中右上角 Exit match 可真正退出回主菜单；机器人被淘汰后不再反复血迹震动，比赛正常结算出 winner 界面
-4. **用户目检 10 张新资产**：打开 `public/assets/` 或直接跑游戏看三张地图背景与大厅肖像；不满意的单张可重跑对应提示词再替换（管线已就绪，见 ART_DIRECTION.md 生成管线说明）
-5. **发布收尾（候选）**：MIT LICENSE + v0.1.0 tag + GitHub About/topics 文案（gh CLI 未装，网页项需用户操作）
-6. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
-7. 若未来真实玩家反馈战斗卡顿，再考虑静态层烘焙优化（平台层仍每帧重绘）；当前证据表明客户端渲染预算非常充裕
+2. **用户验收 M14-M17 战斗版本全量**（当前焦点）：Voltrail 蓄力 ≥80% 处决一枪 → 打断四肢看 bleed-out 死亡 → 观察 bot 跨缺口跳跃/抢修复电池/leapfrog → 僵局对局 240s 后正常出 winner → 满意后批准提交（M14-M17 可合并为"战斗版本"提交或分四个，用户定）
+3. **发布收尾（候选）**：MIT LICENSE + v0.1.0 tag + GitHub About/topics 文案（gh CLI 未装，网页项需用户操作）
+4. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
+5. 性能余量充足（96 FPS，七套测试含 test:ai）；若逼近 45 门槛再做粒子/光轨批渲染
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
@@ -182,4 +235,5 @@ public/assets/             仅 README —— 生成位图尚未产出（缺 OPEN
 - 界面英文
 - 密钥不发聊天；不提交密钥
 - Commit 必须带 `Origin:` trailer（格式见全局 CLAUDE.md；模型名+agent 名以用户确认为准）
+- **2026-08-23 起追加**：任何 `git commit` 必须先经用户明确批准，AI 不得自行提交；推送同理需批准
 - 2026-08-23 起全局规则：当前模型支持识图，Read 图片/PDF 无需事先确认

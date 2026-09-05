@@ -45,7 +45,7 @@ let dualAttack = false;
 for (let i = 0; i < 8; i++) {
   const message = await waitFor(host, "snapshot");
   const player = message.snapshot.players.find((p: any) => p.id === created.selfId);
-  if (player?.ammo === 9 && player.primaryCooldown > 0 && player.secondaryCooldown > 0) { dualAttack = true; break; }
+  if (player?.ammo < 90 && player.primaryCooldown > 0 && player.secondaryCooldown > 0) { dualAttack = true; break; }
 }
 assert(dualAttack, "Primary and secondary attack were not processed independently");
 assert(started.snapshot.players.find((p: any) => p.id === created.selfId)?.limbs.leftArm === 100, "Limb integrity did not initialize");
@@ -91,7 +91,7 @@ assert(protectionExpired, "Spawn protection did not expire");
 // Terrain v2 spawn points sit ~770px apart with lethal floor gaps between
 // them, so walking into sidearm range is not practical. Both pilots drop
 // through their one-way ledges onto the shared ground floor (same height),
-// then the host switches to the Rail Lance (weaponSet slot 4, range 1100)
+// then the host switches to the Voltrail (weaponSet slot 4, range 1200)
 // and fires straight across: deterministic geometry.
 guest.send(JSON.stringify({ type: "input", input: { seq: 20, drop: true } }));
 host.send(JSON.stringify({ type: "input", input: { seq: 5, drop: true } }));
@@ -111,8 +111,12 @@ const preShot = (await waitFor(host, "snapshot")).snapshot;
 const preGuest = preShot.players.find((p: any) => p.id === joined.selfId);
 const preHost = preShot.players.find((p: any) => p.id === created.selfId);
 if (preHost.weapon !== "sniper") throw new Error(`Weapon slot switch failed: ${preHost.weapon}`);
-assert(Math.abs(preGuest.x - preHost.x) < 1100 && Math.abs(preGuest.y - preHost.y) < 16, "Pilots are not in a shared-floor sniper line; map geometry broke this test");
+assert(Math.abs(preGuest.x - preHost.x) < 1200 && Math.abs(preGuest.y - preHost.y) < 16, "Pilots are not in a shared-floor sniper line; map geometry broke this test");
+// Voltrail (slot 4) is now a charge weapon: hold primary for ~12 snapshots
+// (~600ms, charge ~0.55 > chargeMin 0.25), then release to fire the shot.
 host.send(JSON.stringify({ type: "input", input: { seq: 3, primary: true, secondary: false } }));
+for (let i = 0; i < 12; i++) await waitFor(host, "snapshot");
+host.send(JSON.stringify({ type: "input", input: { seq: 31, primary: false, secondary: false } }));
 let limbDamaged = false;
 let hitEventSeen = false;
 for (let i = 0; i < 20; i++) {
@@ -125,6 +129,7 @@ for (let i = 0; i < 20; i++) {
 host.send(JSON.stringify({ type: "input", input: { seq: 4, primary: false } }));
 assert(limbDamaged, "Authoritative hit did not damage a limb");
 assert(hitEventSeen, "Authoritative hit did not emit a combat event");
+host.send(JSON.stringify({ type: "input", input: { seq: 32, primary: false } }));
 
 const disconnected = waitFor(host, "room");
 guest.close();
@@ -146,14 +151,14 @@ const soloStarted = await waitFor(solo, "snapshot");
 assert(soloStarted.snapshot.phase === "playing", "Solo sandbox did not start");
 assert(soloStarted.snapshot.mode === "sandbox", "Solo start did not use sandbox mode");
 assert(soloStarted.snapshot.crates.length === 6, "Solo sandbox did not preserve crate settings");
-assert(soloStarted.snapshot.hazards.length === 2, "Solo sandbox did not synchronize map hazards");
+assert(soloStarted.snapshot.hazards.length === 4, "Solo sandbox did not synchronize map hazards");
 
 solo.send(JSON.stringify({ type: "input", input: { seq: 1, left: false, right: false, jump: false, drop: false, primary: true, secondary: true } }));
 let soloDualAttack = false;
 for (let i = 0; i < 8; i++) {
   const message = await waitFor(solo, "snapshot");
   const player = message.snapshot.players.find((p: any) => p.id === soloCreated.selfId);
-  if (player?.ammo === 9 && player.primaryCooldown > 0 && player.secondaryCooldown > 0) { soloDualAttack = true; break; }
+  if (player?.ammo < 90 && player.primaryCooldown > 0 && player.secondaryCooldown > 0) { soloDualAttack = true; break; }
 }
 assert(soloDualAttack, "Solo sandbox did not process J/K attacks independently");
 

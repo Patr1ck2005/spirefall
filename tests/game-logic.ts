@@ -59,10 +59,25 @@ for (const map of Object.values(MAPS)) {
   }
 }
 
-assert(WEAPONS.sidearm.primary.pattern === "burst" && WEAPONS.sidearm.primary.count === 3, "Sidearm burst blueprint changed");
-assert(WEAPONS.scatter.primary.pattern === "pellet" && WEAPONS.scatter.primary.count === 7, "Scatter pellet blueprint changed");
-assert(WEAPONS.rifle.secondary.pattern === "piercing" && WEAPONS.rifle.secondary.pierce === 3, "Rifle piercing blueprint changed");
+// M14 fire-rate redesign blueprints: auto SMG, double-action scatter + flame
+// vent, continuous beam, charge rail, heavy rocket, blade unchanged.
+assert(WEAPONS.sidearm.primary.cooldown <= 0.1 && WEAPONS.sidearm.primary.pattern === "single", "Vein Ripper auto blueprint changed");
+assert(WEAPONS.sidearm.secondary.pattern === "burst" && WEAPONS.sidearm.secondary.count === 6, "Vein Ripper overheat burst blueprint changed");
+assert(WEAPONS.scatter.primary.pattern === "pellet" && WEAPONS.scatter.primary.count === 8, "Scatter pellet blueprint changed");
+assert(WEAPONS.scatter.secondary.pattern === "pellet" && WEAPONS.scatter.secondary.cooldown <= 0.1, "Blaze Vent auto blueprint changed");
+assert(WEAPONS.rifle.primary.pattern === "beam" && WEAPONS.rifle.primary.cooldown <= 0.15, "Longbeam blueprint changed");
+assert(WEAPONS.rifle.secondary.pattern === "piercing" && WEAPONS.rifle.secondary.pierce === 3, "Lance Pulse blueprint changed");
+assert(WEAPONS.sniper.primary.chargeMax !== undefined && WEAPONS.sniper.primary.chargeMax > 0.5, "Voltrail charge blueprint changed");
+assert(WEAPONS.sniper.primary.pattern === "piercing" && WEAPONS.sniper.primary.pierce === 3, "Voltrail pierce blueprint changed");
 assert(WEAPONS.rocket.secondary.pattern === "cluster" && WEAPONS.rocket.secondary.count === 3, "Rocket cluster blueprint changed");
 assert(WEAPONS.blade.secondary.pattern === "dashSlash" && WEAPONS.blade.secondary.dashDistance > 0, "Blade dash blueprint changed");
+
+// M15 damage pass: every weapon deals at least 1.4x the M14 baseline.
+assert(WEAPONS.sidearm.primary.damage >= 7, "Sidearm damage below the M15 floor");
+assert(WEAPONS.scatter.primary.damage >= 9, "Scatter damage below the M15 floor");
+assert(WEAPONS.rifle.primary.damage >= 6, "Beam tick damage below the M15 floor");
+assert(WEAPONS.sniper.primary.damage >= 32, "Voltrail damage below the M15 floor");
+assert(WEAPONS.rocket.primary.damage >= 46, "Rocket damage below the M15 floor");
+assert(WEAPONS.blade.primary.damage >= 38, "Blade damage below the M15 floor");
 
 console.log("game logic tests passed");

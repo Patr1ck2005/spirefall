@@ -1,4 +1,5 @@
 import {
+  LIMB_IDS,
   MAPS,
   WEAPONS,
   buildPlatformGraph,
@@ -6,6 +7,7 @@ import {
   clamp,
   type BotSkill,
   type ClientInput,
+  type LimbIntegrity,
   type MapId,
   type PlayerState,
   type PlatformGraph,
@@ -21,9 +23,9 @@ const randomBetween = (min: number, max: number) => randomInt(min, max + 1);
 
 type Percept = {
   tick: number;
-  self: { x: number; y: number; vx: number; vy: number; facing: 1 | -1; onGround: boolean };
+  self: { x: number; y: number; vx: number; vy: number; facing: 1 | -1; onGround: boolean; limbs: LimbIntegrity };
   target?: { id: string; x: number; y: number; vx: number; vy: number };
-  crate?: { x: number; y: number; weapon: string };
+  crate?: { x: number; y: number; weapon: string; kind?: string };
   hazardZones: Array<{ x: number; y: number; width: number; height: number; phase: string; kind: string }>;
 };
 
@@ -49,10 +51,13 @@ type Plan = {
   targetId?: string;
   waypointX: number;
   chaseJump: boolean;
+  gapJump: boolean;
+  descend: boolean;
   dropThrough: boolean;
+  hopOver: boolean;
   firePrimary: boolean;
   fireSecondary: boolean;
-  fleeEdge: boolean;
+ 
 };
 
 type BotController = {
@@ -64,6 +69,11 @@ type BotController = {
   percepts: Percept[];
   plan: Plan;
   jumpPulse: number;
+  chargeHold: number;
+  stallTicks: number;
+  stallAnchorX: number;
+  forcedDir: number;
+  forcedTicks: number;
 };
 
 export type BotRuntime = {
@@ -101,7 +111,17 @@ export function createBotInput(): ClientInput {
 export function ensureControllers(room: Room) {
   const runtime = runtimeOf(room);
   for (const [playerId, controller] of [...runtime.controllers]) {
-    if (!room.players.has(playerId)) runtime.controllers.delete(playerId);
+    if (!room.players.has(playerId)) {
+      runtime.controllers.delete(playerId);
+      continue;
+    }
+    // Lobby skill changes must reach already-spawned bots, not only new ones.
+    const skill: BotSkill = room.config.botSkill;
+    if (controller.skill !== skill) {
+      controller.skill = skill;
+      controller.tier = BOT_TIERS[skill];
+      controller.chargeHold = 0;
+    }
   }
   for (const player of room.players.values()) {
     if (!player.isBot || runtime.controllers.has(player.id)) continue;
@@ -114,8 +134,13 @@ export function ensureControllers(room: Room) {
       input: createBotInput(),
       countdown: 0,
       percepts: [],
-      plan: { waypointX: player.x, chaseJump: false, dropThrough: false, firePrimary: false, fireSecondary: false, fleeEdge: false },
+      plan: { waypointX: player.x, chaseJump: false, gapJump: false, descend: false, dropThrough: false, hopOver: false, firePrimary: false, fireSecondary: false },
       jumpPulse: 0,
+      chargeHold: 0,
+      stallTicks: 0,
+      stallAnchorX: player.x,
+      forcedDir: 0,
+      forcedTicks: 0,
     });
   }
 }
@@ -173,7 +198,7 @@ function collectPercept(room: Room, self: PlayerState): Percept {
   let target: Percept["target"];
   let bestScore = Infinity;
   for (const other of room.players.values()) {
-    if (other.id === self.id || other.lives <= 0 || other.respawnTimer > 0) continue;
+    if (other.id === self.id || other.lives <= 0 || other.respawnTimer > 0 || other.connected === false) continue;
     const distance = Math.hypot(other.x - self.x, other.y - self.y);
     if (distance < bestScore) {
       bestScore = distance;
@@ -181,17 +206,24 @@ function collectPercept(room: Room, self: PlayerState): Percept {
     }
   }
   let crate: Percept["crate"];
+  let best = Infinity;
+  const hurt = LIMB_IDS.some((limbId) => self.limbs[limbId] < 60);
   for (const candidate of room.crates) {
     if (!candidate.active) continue;
-    crate = { x: candidate.x, y: candidate.y, weapon: candidate.weapon };
-    break;
+    const distance = Math.hypot(candidate.x - self.x, candidate.y - self.y);
+    // Repair cells only register as interesting when damaged (or very close).
+    if (candidate.kind === "repair" && !hurt && distance > 150) continue;
+    if (distance < best) {
+      best = distance;
+      crate = { x: candidate.x, y: candidate.y, weapon: candidate.weapon, kind: candidate.kind };
+    }
   }
   const hazardZones = room.hazards
     .filter((hazard) => hazard.kind === "blastCrusher" || hazard.kind === "forgePiston")
     .map((hazard) => ({ x: hazard.x, y: hazard.y, width: hazard.width, height: hazard.height, phase: hazard.phase, kind: hazard.kind }));
   return {
     tick: room.tick,
-    self: { x: self.x, y: self.y, vx: self.vx, vy: self.vy, facing: self.facing, onGround: self.onGround },
+    self: { x: self.x, y: self.y, vx: self.vx, vy: self.vy, facing: self.facing, onGround: self.onGround, limbs: self.limbs },
     target,
     crate,
     hazardZones,
@@ -211,10 +243,14 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
   let wantCrates = false;
   const mine = room.players.get(controller.playerId)!;
   if (mine.ammo < WEAPONS[mine.weapon].ammo * 0.3 || mine.weapon === "sidearm") wantCrates = true;
+  // Hurt pilots prioritize repair cells over ammo.
+  const hurt = LIMB_IDS.some((limbId) => mine.limbs[limbId] < 60);
+  const perceptCrate = percept.crate as (Percept["crate"] & { kind?: string }) | undefined;
+  if (perceptCrate?.kind === "repair" && hurt) wantCrates = true;
 
-  if (percept.crate && wantCrates && Math.hypot(percept.crate.x - self.x, percept.crate.y - self.y) < 260) {
-    goalX = percept.crate.x;
-    goalY = percept.crate.y;
+  if (perceptCrate && wantCrates && Math.hypot(perceptCrate.x - self.x, perceptCrate.y - self.y) < (perceptCrate.kind === "repair" && hurt ? 460 : 260)) {
+    goalX = perceptCrate.x;
+    goalY = perceptCrate.y;
   } else if (percept.target) {
     goalX = percept.target.x + percept.target.vx * 0.25 * tier.leadFactor;
     goalY = percept.target.y;
@@ -226,38 +262,69 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
   const toIndex = nearestNodeIndex(graph, goalX, goalY);
   const route = routeTo(graph, fromIndex, toIndex);
 
-  const plan: Plan = { waypointX: goalX, chaseJump: false, dropThrough: false, firePrimary: false, fireSecondary: false, fleeEdge: false };
+  const plan: Plan = { waypointX: goalX, chaseJump: false, gapJump: false, descend: false, dropThrough: false, hopOver: false, firePrimary: false, fireSecondary: false };
 
   if (route && route.length) {
     const nextNode = graph.nodes.find((node) => node.index === route[0])!;
     plan.waypointX = (nextNode.left + nextNode.right) / 2;
-    const rising = nextNode.platform.y < (fromNode?.surface ?? self.y);
-    const below = nextNode.platform.y > (fromNode?.surface ?? self.y) + 40;
+    const currentSurface = fromNode?.surface ?? self.y;
+    const rising = nextNode.platform.y < currentSurface;
+    const below = nextNode.platform.y > currentSurface + 40;
     plan.chaseJump = rising && Math.abs(plan.waypointX - self.x) < 90 && self.onGround !== false;
-    plan.dropThrough = below && Math.abs(plan.waypointX - self.x) < 30;
+    plan.descend = below;
+    if (below && fromNode) {
+      const currentPlatform = graph.nodes.find((node) => node.index === fromNode.index)!.platform;
+      const overlaps = self.x > currentPlatform.x && self.x < currentPlatform.x + currentPlatform.width && nextNode.left < currentPlatform.x + currentPlatform.width && nextNode.right > currentPlatform.x;
+      if (overlaps) {
+        // The shelf below is underfoot: drop through it (S) once aligned.
+        plan.dropThrough = true;
+      } else {
+        // The shelf below is beyond the lip: aim 30px past the lip so the bot
+        // actually walks off and falls (falls are free; lingering is a stall).
+        const lip = nextNode.right < currentPlatform.x ? currentPlatform.x : currentPlatform.x + currentPlatform.width;
+        plan.waypointX = lip + Math.sign(lip - self.x || 1) * 30;
+        plan.dropThrough = false;
+      }
+    } else {
+      plan.dropThrough = false;
+    }
+    // Same-height gap crossing: the route's next platform sits level with the
+    // current one but the edges do not touch —hop the gap instead of walking
+    // into it (M15 layouts widened horizontal gaps).
+    const sameLevel = Math.abs(nextNode.platform.y - currentSurface) < 24;
+    if (sameLevel && fromNode) {
+      const currentPlatform = graph.nodes.find((node) => node.index === fromNode.index)!.platform;
+      const gap = nextNode.left > currentPlatform.x + currentPlatform.width
+        ? nextNode.left - (currentPlatform.x + currentPlatform.width)
+        : currentPlatform.x - nextNode.right;
+      const movingTowardGap = (plan.waypointX > self.x && nextNode.left > currentPlatform.x + currentPlatform.width) || (plan.waypointX < self.x && currentPlatform.x > nextNode.right);
+      plan.gapJump = gap > 40 && gap < 220 && movingTowardGap;
+    }
   }
 
-  // Edge guard: probe ahead so pursuit does not become suicide.
-  const heading = Math.sign(plan.waypointX - self.x) || 1;
-  const probeX = self.x + heading * 24;
-  const guard = platformUnder(graph, probeX, self.y + 8);
-  const nearLedge = !guard || guard.surface > self.y + 60;
-  if (nearLedge && !plan.chaseJump && !plan.dropThrough) plan.fleeEdge = Math.random() > tier.mistakeChance * 0.5 ? true : false;
+  // Edge guard removed (M17): with falls being free, backing away from ledges
+  // deadlocked pursuit more often than it saved anyone. Bots walk off edges
+  // naturally; the anti-stall watchdog recovers any pathological drops.
 
   // Combat: face the target and open fire within discipline budget.
   if (percept.target) {
     const dx = percept.target.x - self.x;
     const dy = percept.target.y - self.y;
     const distance = Math.abs(dx);
-    const inFront = Math.sign(dx) === (percept.target.x > self.x ? 1 : -1);
-    void inFront;
+    // Spacing: overlap means a mutual grind-lock —leapfrog over the target
+    // instead (movement keeps facing toward it, so both keep firing mid-hop).
+    if (distance < 24 && Math.abs(dy) < 40) {
+      const toward = Math.sign(dx) || 1;
+      plan.waypointX = percept.target.x + toward * 60;
+      plan.hopOver = true;
+    }
     const ranged = weapon.primary.kind === "hitscan" || weapon.primary.kind === "projectile" || weapon.primary.kind === "explosive";
     if (ranged) {
       const flightTime = weapon.primary.speed > 0 ? distance / weapon.primary.speed : 0.08;
       const predictedX = percept.target.x + percept.target.vx * flightTime * tier.leadFactor;
       const aimError = (randomInt(-100, 100) / 100) * tier.aimNoiseRad;
-      plan.firePrimary = Math.abs(dy) < 46 + aimError * 60 && Math.random() < tier.fireChance;
-      plan.fireSecondary = Math.abs(dy) < 60 && distance > 120 && Math.random() < tier.fireChance * 0.5;
+      plan.firePrimary = Math.abs(dy) < 64 + aimError * 60 && Math.random() < tier.fireChance;
+      plan.fireSecondary = Math.abs(dy) < 70 && distance > 120 && Math.random() < tier.fireChance * 0.5;
     } else {
       plan.firePrimary = distance < weapon.primary.range + 26 && Math.abs(dy) < 34 && Math.random() < tier.fireChance;
       plan.fireSecondary = distance < weapon.secondary.range + 20 && Math.random() < tier.fireChance * 0.6 && controller.skill !== "casual";
@@ -302,28 +369,84 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
   } else if (controller.plan.chaseJump && self.onGround) {
     controller.jumpPulse = 4;
     controller.plan.chaseJump = false;
+  } else if (controller.plan.hopOver && self.onGround && (input.left || input.right)) {
+    // Leapfrog: hopping over an overlapping target separates the duel while
+    // both pilots keep facing and firing.
+    controller.jumpPulse = 3;
+    controller.plan.hopOver = false;
+  } else if (controller.plan.gapJump && self.onGround) {
+    // Running hop at the lip of the gap: jump while still carrying speed.
+    const graph = graphOf(room.config.mapId);
+    const standing = platformUnder(graph, self.x, self.y + 8);
+    if (standing) {
+      const currentPlatform = graph.nodes.find((node) => node.index === standing.index)!.platform;
+      const heading = Math.sign(controller.plan.waypointX - self.x) || 1;
+      const edgeX = heading > 0 ? currentPlatform.x + currentPlatform.width : currentPlatform.x;
+      if (Math.abs(edgeX - self.x) < 34) {
+        controller.jumpPulse = 3;
+        controller.plan.gapJump = false;
+      }
+    }
   }
 
   if (controller.plan.dropThrough && self.onGround) {
     input.drop = true;
     input.jump = false;
   }
-  if (controller.plan.fleeEdge && Math.abs(deltaX) <= 12) {
-    // Back away from the ledge briefly instead of teetering.
-    if (deltaX >= 0) input.left = true;
-    else input.right = true;
-  }
 
   if (percept.target) {
     const shouldFace = percept.target.x > self.x ? 1 : -1;
     const moving = input.right ? 1 : input.left ? -1 : 0;
     if (moving !== -shouldFace) {
-      input.primary = controller.plan.firePrimary;
+      // Charge weapons (Voltrail) hold primary while a shot is planned, then
+      // release once the tier's hold budget elapses; brutal pilots charge full.
+      const mine = room.players.get(controller.playerId);
+      const chargeMax = WEAPONS[mine?.weapon ?? "sidearm"].primary.chargeMax;
+      if (chargeMax !== undefined && controller.plan.firePrimary) {
+        controller.chargeHold++;
+        const budgetTicks = controller.skill === "brutal" ? Math.ceil(chargeMax * 60) : Math.ceil(chargeMax * 60 * (controller.skill === "standard" ? 0.55 : 0.3));
+        if (controller.chargeHold > budgetTicks) controller.chargeHold = 0; // release fired; recharge on later ticks
+        input.primary = controller.chargeHold > 0;
+      } else {
+        controller.chargeHold = 0;
+        input.primary = controller.plan.firePrimary;
+      }
       input.secondary = controller.plan.fireSecondary;
     }
-  } else {
-    input.primary = false;
-    input.secondary = false;
+  }
+
+  // Anti-stall watchdog: an unreachable target (below the bot, or far away on
+  // a stalled nav plan) with no net movement for ~4s commits the bot to a
+  // forced 1.5s march toward the target —through fleeEdge, off lips if
+  // needed. A blind drop is always recoverable; an eternal stalemate is not.
+  const target = percept.target;
+  const stuck = target && (target.y > self.y + 80 || Math.abs(target.x - self.x) > 240) && Math.abs(target.y - self.y) < 400;
+  if (target && stuck && controller.forcedTicks <= 0) {
+    if (Math.abs(self.x - controller.stallAnchorX) < 90) controller.stallTicks++;
+    else {
+      controller.stallTicks = 0;
+      controller.stallAnchorX = self.x;
+    }
+    if (controller.stallTicks > 240) {
+      controller.forcedDir = Math.sign(target.x - self.x) || 1;
+      controller.forcedTicks = 90;
+      controller.stallTicks = 0;
+    }
+  } else if (!stuck) {
+    controller.stallTicks = 0;
+    controller.stallAnchorX = self.x;
+  }
+  if (controller.forcedTicks > 0) {
+    controller.forcedTicks--;
+    // No jumping in a forced march: hops keep the bot bouncing vertically on
+    // its perch instead of walking off the lip toward the target below.
+    input.jump = false;
+    if (target && target.y > self.y + 80 && Math.abs(target.x - self.x) < 20 && self.onGround) {
+      input.drop = true;
+    } else {
+      if (controller.forcedDir > 0) input.right = true;
+      else input.left = true;
+    }
   }
 }
 
@@ -369,8 +492,9 @@ export function clearBotInputs(room: Room) {
   for (const controller of runtime.controllers.values()) {
     controller.input = createBotInput();
     controller.percepts = [];
-    controller.plan = { waypointX: 500, chaseJump: false, dropThrough: false, firePrimary: false, fireSecondary: false, fleeEdge: false };
+    controller.plan = { waypointX: 500, chaseJump: false, gapJump: false, descend: false, dropThrough: false, hopOver: false, firePrimary: false, fireSecondary: false };
     controller.jumpPulse = 0;
+    controller.chargeHold = 0;
   }
 }
 

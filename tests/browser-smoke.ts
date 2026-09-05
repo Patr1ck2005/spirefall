@@ -54,6 +54,66 @@ await solo.locator("#map").selectOption("factory");
 await solo.locator("#solo-test").click();
 await solo.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
 await solo.locator("#hud-phase").filter({ hasText: "SOLO TEST" }).waitFor();
+// Fresh state for the FX checks: respawn first so no residual effects linger.
+await solo.locator("#sandbox-respawn").click();
+await solo.waitForTimeout(1900);
+
+// Switch helpers: the weapon-slot message is sent once per keypress, so a
+// respawn freeze can swallow it — retry until the HUD confirms the switch.
+async function selectWeapon(page: import("playwright").Page, key: string, label: string) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await page.keyboard.press(key);
+    try {
+      await page.locator("#hud-weapon").filter({ hasText: label }).waitFor({ timeout: 1500 });
+      return;
+    } catch { /* swallowed by a respawn freeze — retry */ }
+  }
+  throw new Error(`Weapon switch to ${label} never appeared on the HUD`);
+}
+
+// --- M16/M17 combat-feedback checks first, while the pilot is freshly spawned ---
+// Scatter pellets: projectiles must produce impact events at surfaces.
+await solo.evaluate(() => { (window as unknown as { __spireEvents: unknown[] }).__spireEvents = []; });
+await selectWeapon(solo, "2", "Breach Scatter");
+await solo.keyboard.down("j");
+await solo.waitForTimeout(900);
+await solo.keyboard.up("j");
+const impactSeen = await solo.evaluate(() => {
+  const events = (window as unknown as { __spireEvents?: Array<{ type: string; weaponId?: string }> }).__spireEvents || [];
+  return events.some((event) => event.type === "impact" && event.weaponId === "scatter");
+});
+if (!impactSeen) throw new Error("Scatter pellets produced no impact events at surfaces");
+await solo.screenshot({ path: "test-results/pellet-impact.png", fullPage: true });
+
+// Longbeam: continuous beam attack events while held, plus a screenshot.
+await solo.evaluate(() => { (window as unknown as { __spireEvents: unknown[] }).__spireEvents = []; });
+await selectWeapon(solo, "3", "Longbeam");
+await solo.keyboard.down("j");
+await solo.waitForTimeout(900);
+const beamSeen = await solo.evaluate(() => {
+  const events = (window as unknown as { __spireEvents?: Array<{ type: string; pattern?: string }> }).__spireEvents || [];
+  return events.some((event) => event.type === "attack" && event.pattern === "beam");
+});
+if (!beamSeen) throw new Error("Longbeam produced no beam attack events while held");
+await solo.screenshot({ path: "test-results/beam-impact.png", fullPage: true });
+await solo.keyboard.up("j");
+
+// Rocket at the floor: explosion event + screenshot (poll up to 3s for the hit).
+await solo.evaluate(() => { (window as unknown as { __spireEvents: unknown[] }).__spireEvents = []; });
+await selectWeapon(solo, "5", "Forge Rocket");
+await solo.keyboard.down("j");
+let rocketEvents = false;
+for (let attempt = 0; attempt < 12 && !rocketEvents; attempt++) {
+  await solo.waitForTimeout(300);
+  rocketEvents = await solo.evaluate(() => {
+    const events = (window as unknown as { __spireEvents?: Array<{ type: string }> }).__spireEvents || [];
+    return events.some((event) => event.type === "explosion");
+  });
+}
+await solo.keyboard.up("j");
+if (!rocketEvents) throw new Error("Rocket firing produced no explosion events");
+await solo.screenshot({ path: "test-results/rocket-explosion.png", fullPage: true });
+
 await solo.keyboard.down("j");
 await solo.keyboard.down("k");
 await solo.waitForTimeout(250);
@@ -68,7 +128,7 @@ await solo.screenshot({ path: "test-results/solo.png", fullPage: true });
 await solo.keyboard.down("Tab");
 await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
 const panelText = await solo.locator("#weapon-panel").textContent();
-if (!panelText?.includes("M-12 Needle")) throw new Error("Weapon panel did not list the held weapon");
+if (!panelText?.includes("Vein Ripper")) throw new Error("Weapon panel did not list the held weapon");
 await solo.keyboard.up("Tab");
 await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout: 3000 });
 

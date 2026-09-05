@@ -1,7 +1,7 @@
 import Phaser from "phaser";
-import { MAPS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
+import { MAPS, PLAYER_COLORS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
 
-export const PLAYER_HEX = ["#56d9d0", "#f0715d", "#f0c75e", "#ad80e8"] as const;
+export const PLAYER_HEX = PLAYER_COLORS.map((color) => `#${color.toString(16).padStart(6, "0")}`) as readonly string[];
 
 export const ARCHETYPES = [
   { name: "BREACHER", role: "HEAVY ENTRY", portrait: "/assets/portraits/breacher.webp" },
@@ -20,14 +20,28 @@ const hex = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
 
 export function drawEnvironment(graphics: Phaser.GameObjects.Graphics, mapId: MapId, time: number, rasterLoaded = false) {
   const map = MAPS[mapId];
-  graphics.fillStyle(map.color, rasterLoaded ? 0.22 : 1);
+  // M15: lighter overlays keep the painted backdrop readable as backdrop —
+  // the heavy dims made every map read murky and cluttered.
+  graphics.fillStyle(map.color, rasterLoaded ? 0.12 : 1);
   graphics.fillRect(0, 0, 1000, 560);
   if (!rasterLoaded) {
     drawAtmosphere(graphics, mapId, time);
     drawMegastructure(graphics, mapId, time);
   }
-  graphics.fillStyle(0x05090c, 0.18);
+  graphics.fillStyle(0x05090c, 0.08);
   graphics.fillRect(0, 0, 1000, 560);
+  if (rasterLoaded) {
+    // Per-map readability scrims: suppress painted details that compete with
+    // gameplay (factory's glowing furnace reads as a fake floor; fortress's
+    // white searchlight shafts read as tracers).
+    if (mapId === "factory") {
+      graphics.fillStyle(0x050806, 0.42);
+      graphics.fillRect(0, 430, 1000, 130);
+    } else if (mapId === "fortress") {
+      graphics.fillStyle(0x05070a, 0.16);
+      graphics.fillRect(0, 60, 1000, 340);
+    }
+  }
 }
 
 function drawAtmosphere(graphics: Phaser.GameObjects.Graphics, mapId: MapId, time: number) {
@@ -129,9 +143,12 @@ export function drawPlatformBodies(graphics: Phaser.GameObjects.Graphics, mapId:
 export function drawPlatformCaps(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
   const map = MAPS[mapId];
   for (const platform of map.platforms) {
-    graphics.fillStyle(map.accent, platform.oneWay ? 0.78 : 0.38);
-    graphics.fillRect(platform.x, platform.y, platform.width, 3);
-    graphics.lineStyle(1, 0x849094, 0.32);
+    // Bright cap line is the primary "walkable here" signal — keep it loud.
+    graphics.fillStyle(map.accent, platform.oneWay ? 1 : 0.95);
+    graphics.fillRect(platform.x, platform.y, platform.width, 4.5);
+    graphics.fillStyle(0xf2f5f2, platform.oneWay ? 0.35 : 0.2);
+    graphics.fillRect(platform.x, platform.y, platform.width, 1.2);
+    graphics.lineStyle(1, 0x93a0a4, 0.4);
     graphics.lineBetween(platform.x + 8, platform.y + 7, platform.x + platform.width - 8, platform.y + 7);
   }
 }
@@ -198,26 +215,34 @@ export function drawHazard(graphics: Phaser.GameObjects.Graphics, hazard: Hazard
   }
 }
 
-export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1) {
+export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1, kind: "weapon" | "repair" = "weapon") {
   const weapon = WEAPONS[weaponId];
-  const special = !["sidearm", "scatter", "rifle"].includes(weaponId);
+  const special = kind === "repair" || !["sidearm", "scatter", "rifle"].includes(weaponId);
   const pulse = 0.72 + Math.sin(time * (special ? 0.008 : 0.004) + generation) * (special ? 0.22 : 0.1);
   const bob = Math.sin(time * 0.004 + x) * 3;
+  const tint = kind === "repair" ? 0x4fd07a : weapon.color;
   graphics.fillStyle(0x080b0d, 0.55);
   graphics.fillEllipse(x, y + 20, 38, 10);
-  graphics.fillStyle(special ? 0x1d2425 : 0x242b2e, 1);
+  graphics.fillStyle(kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e, 1);
   graphics.fillRect(x - 16, y - 16 + bob, 32, 32);
-  graphics.lineStyle(special ? 3 : 2, weapon.color, pulse);
+  graphics.lineStyle(special ? 3 : 2, tint, pulse);
   graphics.strokeRect(x - 16, y - 16 + bob, 32, 32);
-  graphics.fillStyle(weapon.color, pulse);
-  graphics.fillRect(x - 12, y - 4 + bob, 24, 8);
-  graphics.fillRect(x - 4, y - 12 + bob, 8, 24);
+  if (kind === "repair") {
+    // Green cross for the repair cell.
+    graphics.fillStyle(tint, pulse);
+    graphics.fillRect(x - 11, y - 3.5 + bob, 22, 7);
+    graphics.fillRect(x - 3.5, y - 11 + bob, 7, 22);
+  } else {
+    graphics.fillStyle(weapon.color, pulse);
+    graphics.fillRect(x - 12, y - 4 + bob, 24, 8);
+    graphics.fillRect(x - 4, y - 12 + bob, 8, 24);
+  }
   graphics.fillStyle(0xf4e1ae, special ? 0.85 : 0.55);
   graphics.fillCircle(x, y + bob, special ? 4 : 2.5);
   if (special) {
-    graphics.lineStyle(1, weapon.color, 0.55);
+    graphics.lineStyle(1, tint, 0.55);
     graphics.lineBetween(x, y - 24 + bob, x, y - 36 + bob);
-    graphics.fillStyle(weapon.color, 0.28 * pulse);
+    graphics.fillStyle(tint, 0.28 * pulse);
     graphics.fillTriangle(x, y - 36 + bob, x - 5, y - 24 + bob, x + 5, y - 24 + bob);
   }
 }
@@ -225,12 +250,36 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
 export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile: { weaponId: WeaponId; secondary: boolean; pattern?: string; x: number; y: number; vx: number; vy: number; radius: number }) {
   const color = WEAPONS[projectile.weaponId].color;
   const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
-  const trailLength = projectile.pattern === "cluster" ? 30 : projectile.pattern === "piercing" ? 38 : projectile.secondary ? 24 : 14;
+  const isRocket = projectile.weaponId === "rocket";
+  const isFlame = projectile.weaponId === "scatter" && projectile.secondary;
+  const trailLength = isRocket ? 46 : isFlame ? 20 : projectile.pattern === "cluster" ? 30 : projectile.pattern === "piercing" ? 52 : projectile.secondary ? 24 : 14;
   const trailX = projectile.x - projectile.vx / speed * trailLength;
   const trailY = projectile.y - projectile.vy / speed * trailLength;
-  graphics.lineStyle(projectile.pattern === "piercing" ? 4 : projectile.secondary ? 5 : 3, color, 0.34);
+  if (isFlame) {
+    graphics.fillStyle(0xf06b2f, 0.55);
+    graphics.fillCircle(projectile.x, projectile.y, projectile.radius + 3 + Math.random() * 2);
+    graphics.fillStyle(0xf0a14a, 0.8);
+    graphics.fillCircle(projectile.x, projectile.y, projectile.radius);
+    return;
+  }
+  // Rocket exhaust: hot core then fading smoke puffs along the tail.
+  if (isRocket) {
+    for (let index = 1; index <= 3; index++) {
+      const t = index / 3;
+      graphics.fillStyle(index === 1 ? 0xffc06a : 0x5c5148, (1 - t) * (index === 1 ? 0.8 : 0.3));
+      graphics.fillCircle(projectile.x - projectile.vx / speed * 14 * index, projectile.y - projectile.vy / speed * 14 * index, 4 - index * 0.8);
+    }
+  }
+  // Piercing rounds streak with a bright afterimage line plus a soft glow bead.
+  if (projectile.pattern === "piercing") {
+    graphics.fillStyle(color, 0.35);
+    graphics.fillCircle(trailX, trailY, 3.5);
+    graphics.lineStyle(1.5, 0xffefc3, 0.5);
+    graphics.lineBetween(projectile.x, projectile.y, trailX, trailY);
+  }
+  graphics.lineStyle(isRocket ? 7 : projectile.pattern === "piercing" ? 4 : projectile.secondary ? 5 : 3, isRocket ? 0xf06b2f : color, 0.34);
   graphics.lineBetween(projectile.x, projectile.y, trailX, trailY);
-  graphics.fillStyle(projectile.pattern === "cluster" ? 0xffc06a : 0xf7e7bd, 1);
+  graphics.fillStyle(isRocket ? 0xffc06a : projectile.pattern === "cluster" ? 0xffc06a : 0xf7e7bd, 1);
   if (projectile.pattern === "piercing") {
     graphics.fillTriangle(projectile.x + projectile.vx / speed * 5, projectile.y + projectile.vy / speed * 5, trailX, trailY + 3, trailX, trailY - 3);
   } else {

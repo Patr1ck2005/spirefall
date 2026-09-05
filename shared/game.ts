@@ -16,14 +16,14 @@ export const MAX_JUMPS = 3;
 export type MapId = "canopy" | "fortress" | "factory";
 export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade";
 export type AttackKind = "projectile" | "hitscan" | "melee" | "explosive";
-export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash";
+export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash" | "beam";
 export type MatchMode = "match" | "sandbox";
 export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
 export type HazardKind = "cargoLift" | "blastCrusher" | "conveyor" | "forgePiston";
 export type HazardPhase = "idle" | "warning" | "active";
-export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup";
+export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact";
 
 export type MatchConfig = {
   mapId: MapId;
@@ -63,6 +63,8 @@ export type PlayerState = {
   ammoByWeapon: Record<WeaponId, number>;
   primaryCooldown: number;
   secondaryCooldown: number;
+  /** 0-1 while holding a charge attack; absent/0 when not charging. */
+  charge?: number;
   invulnerable: number;
   respawnTimer: number;
   hitFlash: number;
@@ -90,10 +92,13 @@ export type ProjectileState = {
   ttl: number;
 };
 
+export type CrateKind = "weapon" | "repair";
+
 export type CrateState = {
   id: number;
   x: number;
   y: number;
+  kind: CrateKind;
   weapon: WeaponId;
   active: boolean;
   respawnTimer: number;
@@ -153,7 +158,10 @@ export type CombatEvent = {
   pattern?: AttackPattern;
   direction?: 1 | -1;
   count?: number;
-  visualSeed?: number;
+  /** Charge fraction (0-1) for charge-release attacks. */
+  charge?: number;
+  /** Crate kind for crateSpawn/cratePickup cues. */
+  crateKind?: CrateKind;
   strength: number;
 };
 
@@ -226,48 +234,40 @@ export type MapDef = {
 };
 
 export const MAPS: Record<MapId, MapDef> = {
+  // M15 布局个性化：Canopy 左塔右崖开放垂直 / Fortress 中轴要塞对枪线 /
+  // Factory 流水线横向推挤。三图不再共用骨架；平台数 13-15，吊柱全部移除。
   canopy: {
     name: "Canopy",
     sector: "CROWN / ALTITUDE 91",
     color: 0x16242a,
-    accent: 0x55d6d0,
+    accent: 0x49c9b8,
     atmosphere: 0x99b7bb,
     backgroundAsset: "/assets/environments/canopy.webp",
     platforms: [
-      { x: 0, y: 530, width: 300, height: 30 },
-      { x: 380, y: 530, width: 240, height: 30 },
-      { x: 740, y: 530, width: 260, height: 30 },
-      { x: 40, y: 440, width: 130, height: 14, oneWay: true },
-      { x: 230, y: 440, width: 120, height: 14, oneWay: true },
-      { x: 420, y: 445, width: 150, height: 14, oneWay: true },
-      { x: 660, y: 440, width: 110, height: 14, oneWay: true },
-      { x: 820, y: 435, width: 140, height: 14, oneWay: true },
-      { x: 160, y: 350, width: 150, height: 14, oneWay: true },
-      { x: 430, y: 345, width: 170, height: 14, oneWay: true },
-      { x: 700, y: 350, width: 160, height: 14, oneWay: true },
-      { x: 50, y: 255, width: 130, height: 14, oneWay: true },
-      { x: 250, y: 250, width: 120, height: 14, oneWay: true },
-      { x: 470, y: 245, width: 130, height: 14, oneWay: true },
-      { x: 660, y: 252, width: 120, height: 14, oneWay: true },
-      { x: 840, y: 258, width: 120, height: 14, oneWay: true },
-      { x: 180, y: 158, width: 130, height: 14, oneWay: true },
-      { x: 400, y: 152, width: 210, height: 14, oneWay: true },
-      { x: 690, y: 158, width: 130, height: 14, oneWay: true },
-      { x: 330, y: 62, width: 340, height: 16, oneWay: true },
-      { x: 296, y: 0, width: 24, height: 64, solid: true },
-      { x: 680, y: 0, width: 24, height: 64, solid: true },
+      { x: 0, y: 530, width: 280, height: 30 },
+      { x: 420, y: 530, width: 200, height: 30 },
+      { x: 780, y: 530, width: 220, height: 30 },
+      { x: 30, y: 445, width: 110, height: 14, oneWay: true },
+      { x: 150, y: 355, width: 100, height: 14, oneWay: true },
+      { x: 60, y: 265, width: 110, height: 14, oneWay: true },
+      { x: 190, y: 175, width: 120, height: 14, oneWay: true },
+      { x: 330, y: 95, width: 130, height: 14, oneWay: true },
+      { x: 560, y: 430, width: 130, height: 14, oneWay: true },
+      { x: 800, y: 350, width: 150, height: 14, oneWay: true },
+      { x: 600, y: 265, width: 120, height: 14, oneWay: true },
+      { x: 420, y: 170, width: 130, height: 14, oneWay: true },
+      { x: 350, y: 62, width: 300, height: 16, oneWay: true },
     ],
-    spawns: [{ x: 105, y: 436 }, { x: 885, y: 431 }, { x: 500, y: 341 }, { x: 285, y: 436 }],
+    spawns: [{ x: 90, y: 526 }, { x: 880, y: 526 }, { x: 470, y: 166 }, { x: 210, y: 171 }],
     crateSockets: [
-      { id: "canopy-ground-west", x: 100, y: 508 }, { id: "canopy-ground-mid", x: 495, y: 508 }, { id: "canopy-ground-east", x: 895, y: 508 },
-      { id: "canopy-west-deck", x: 95, y: 418 }, { id: "canopy-east-deck", x: 875, y: 413 },
-      { id: "canopy-crossing-west", x: 225, y: 328 }, { id: "canopy-crossing-mid", x: 500, y: 323 }, { id: "canopy-crossing-east", x: 765, y: 328 },
-      { id: "canopy-upper-west", x: 305, y: 228 }, { id: "canopy-upper-east", x: 720, y: 230 },
-      { id: "canopy-crown", x: 495, y: 130 },
+      { id: "canopy-ground-west", x: 100, y: 508 }, { id: "canopy-ground-mid", x: 500, y: 508 }, { id: "canopy-ground-east", x: 880, y: 508 },
+      { id: "canopy-tower-mid", x: 200, y: 333 }, { id: "canopy-tower-high", x: 100, y: 243 },
+      { id: "canopy-east-ledge", x: 850, y: 328 }, { id: "canopy-mid-ledge", x: 640, y: 243 },
+      { id: "canopy-crown", x: 490, y: 40 },
     ],
     hazards: [
-      { id: "crown-lift-a", kind: "cargoLift", x: 250, y: 470, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 0, travelY: -205 },
-      { id: "crown-lift-b", kind: "cargoLift", x: 620, y: 265, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 180, travelY: 205 },
+      { id: "crown-lift-a", kind: "cargoLift", x: 520, y: 470, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 0, travelY: -205 },
+      { id: "crown-lift-b", kind: "cargoLift", x: 810, y: 300, width: 120, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 180, travelY: -160 },
     ],
     movers: [
       { id: "canopy-shuttle", x: 560, y: 392, width: 110, height: 14, periodTicks: 420, phaseOffset: 0, travelX: -320 },
@@ -281,41 +281,31 @@ export const MAPS: Record<MapId, MapDef> = {
     atmosphere: 0xa68b7c,
     backgroundAsset: "/assets/environments/fortress.webp",
     platforms: [
-      { x: 0, y: 530, width: 280, height: 30 },
-      { x: 360, y: 530, width: 280, height: 30 },
-      { x: 720, y: 530, width: 280, height: 30 },
-      { x: 60, y: 445, width: 140, height: 14, oneWay: true },
-      { x: 250, y: 440, width: 120, height: 14, oneWay: true },
-      { x: 440, y: 442, width: 130, height: 14, oneWay: true },
-      { x: 640, y: 438, width: 120, height: 14, oneWay: true },
-      { x: 820, y: 445, width: 140, height: 14, oneWay: true },
-      { x: 170, y: 352, width: 150, height: 14, oneWay: true },
-      { x: 420, y: 348, width: 160, height: 14, oneWay: true },
-      { x: 690, y: 352, width: 140, height: 14, oneWay: true },
-      { x: 60, y: 262, width: 120, height: 14, oneWay: true },
-      { x: 260, y: 255, width: 110, height: 14, oneWay: true },
-      { x: 630, y: 258, width: 110, height: 14, oneWay: true },
-      { x: 820, y: 262, width: 120, height: 14, oneWay: true },
-      { x: 180, y: 165, width: 120, height: 14, oneWay: true },
-      { x: 430, y: 158, width: 140, height: 14, oneWay: true },
-      { x: 700, y: 165, width: 120, height: 14, oneWay: true },
-      { x: 400, y: 66, width: 200, height: 14, oneWay: true },
-      { x: 0, y: 380, width: 26, height: 150, solid: true },
-      { x: 974, y: 380, width: 26, height: 150, solid: true },
-      { x: 340, y: 0, width: 24, height: 56, solid: true },
-      { x: 636, y: 0, width: 24, height: 56, solid: true },
+      { x: 0, y: 530, width: 260, height: 30 },
+      { x: 400, y: 530, width: 240, height: 30 },
+      { x: 760, y: 530, width: 240, height: 30 },
+      { x: 410, y: 430, width: 220, height: 14, oneWay: true },
+      { x: 400, y: 320, width: 240, height: 14, oneWay: true },
+      { x: 415, y: 210, width: 210, height: 14, oneWay: true },
+      { x: 405, y: 100, width: 230, height: 16, oneWay: true },
+      { x: 120, y: 415, width: 120, height: 14, oneWay: true },
+      { x: 760, y: 415, width: 120, height: 14, oneWay: true },
+      { x: 60, y: 305, width: 120, height: 14, oneWay: true },
+      { x: 820, y: 305, width: 120, height: 14, oneWay: true },
+      { x: 150, y: 210, width: 120, height: 14, oneWay: true },
+      { x: 730, y: 210, width: 120, height: 14, oneWay: true },
+      { x: 445, y: 40, width: 150, height: 14, oneWay: true },
     ],
-    spawns: [{ x: 120, y: 441 }, { x: 885, y: 441 }, { x: 495, y: 344 }, { x: 305, y: 436 }],
+    spawns: [{ x: 170, y: 411 }, { x: 830, y: 411 }, { x: 500, y: 316 }, { x: 520, y: 526 }],
     crateSockets: [
-      { id: "fortress-ground-west", x: 95, y: 508 }, { id: "fortress-ground-mid", x: 500, y: 508 }, { id: "fortress-ground-east", x: 905, y: 508 },
-      { id: "fortress-west-deck", x: 115, y: 423 }, { id: "fortress-east-deck", x: 885, y: 423 },
-      { id: "fortress-core-west", x: 240, y: 330 }, { id: "fortress-core-mid", x: 495, y: 326 }, { id: "fortress-core-east", x: 755, y: 330 },
-      { id: "fortress-upper-west", x: 315, y: 233 }, { id: "fortress-upper-east", x: 680, y: 236 },
-      { id: "fortress-crown", x: 495, y: 136 },
+      { id: "fortress-ground-west", x: 100, y: 508 }, { id: "fortress-ground-mid", x: 520, y: 508 }, { id: "fortress-ground-east", x: 880, y: 508 },
+      { id: "fortress-wing-low-west", x: 180, y: 393 }, { id: "fortress-wing-low-east", x: 820, y: 393 },
+      { id: "fortress-lane-2", x: 520, y: 298 }, { id: "fortress-wing-mid-west", x: 110, y: 283 }, { id: "fortress-wing-mid-east", x: 880, y: 283 },
+      { id: "fortress-crown", x: 510, y: 18 },
     ],
     hazards: [
-      { id: "bastion-crusher", kind: "blastCrusher", x: 455, y: 45, width: 90, height: 118, periodTicks: 480, warningTicks: 90, activeTicks: 54, phaseOffset: 45, travelY: 175, force: 620, limbDamage: 62 },
-    ],
+      { id: "bastion-crusher-west", kind: "blastCrusher", x: 180, y: 45, width: 90, height: 118, periodTicks: 480, warningTicks: 90, activeTicks: 54, phaseOffset: 45, travelY: 175, force: 620, limbDamage: 72 },
+      { id: "bastion-crusher-east", kind: "blastCrusher", x: 730, y: 45, width: 90, height: 118, periodTicks: 480, warningTicks: 90, activeTicks: 54, phaseOffset: 285, travelY: 175, force: 620, limbDamage: 72 },    ],
     movers: [
       { id: "bastion-elevator", x: 300, y: 300, width: 100, height: 14, periodTicks: 400, phaseOffset: 0, travelY: -180 },
     ],
@@ -328,39 +318,37 @@ export const MAPS: Record<MapId, MapDef> = {
     atmosphere: 0x71806b,
     backgroundAsset: "/assets/environments/factory.webp",
     platforms: [
-      { x: 0, y: 530, width: 260, height: 30 },
-      { x: 380, y: 530, width: 250, height: 30 },
-      { x: 750, y: 530, width: 250, height: 30 },
-      { x: 50, y: 442, width: 130, height: 14, oneWay: true },
-      { x: 240, y: 438, width: 110, height: 14, oneWay: true },
-      { x: 430, y: 440, width: 140, height: 14, oneWay: true },
-      { x: 640, y: 438, width: 120, height: 14, oneWay: true },
-      { x: 820, y: 442, width: 140, height: 14, oneWay: true },
-      { x: 160, y: 350, width: 150, height: 14, oneWay: true },
-      { x: 420, y: 346, width: 170, height: 14, oneWay: true },
-      { x: 690, y: 350, width: 150, height: 14, oneWay: true },
-      { x: 55, y: 258, width: 120, height: 14, oneWay: true },
-      { x: 255, y: 252, width: 115, height: 14, oneWay: true },
-      { x: 635, y: 256, width: 115, height: 14, oneWay: true },
-      { x: 825, y: 260, width: 125, height: 14, oneWay: true },
-      { x: 175, y: 162, width: 120, height: 14, oneWay: true },
-      { x: 415, y: 156, width: 170, height: 14, oneWay: true },
-      { x: 705, y: 162, width: 120, height: 14, oneWay: true },
-      { x: 395, y: 64, width: 210, height: 14, oneWay: true },
-      { x: 268, y: 0, width: 24, height: 58, solid: true },
-      { x: 708, y: 0, width: 24, height: 58, solid: true },
+      { x: 0, y: 530, width: 240, height: 30 },
+      { x: 380, y: 530, width: 260, height: 30 },
+      { x: 780, y: 530, width: 220, height: 30 },
+      { x: 40, y: 445, width: 150, height: 14, oneWay: true },
+      { x: 300, y: 448, width: 170, height: 14, oneWay: true },
+      { x: 590, y: 442, width: 160, height: 14, oneWay: true },
+      { x: 820, y: 448, width: 140, height: 14, oneWay: true },
+      { x: 150, y: 355, width: 190, height: 14, oneWay: true },
+      { x: 480, y: 350, width: 200, height: 14, oneWay: true },
+      { x: 780, y: 358, width: 160, height: 14, oneWay: true },
+      { x: 60, y: 262, width: 160, height: 14, oneWay: true },
+      { x: 350, y: 258, width: 170, height: 14, oneWay: true },
+      { x: 650, y: 264, width: 150, height: 14, oneWay: true },
+      { x: 860, y: 258, width: 110, height: 14, oneWay: true },
+      { x: 200, y: 168, width: 160, height: 14, oneWay: true },
+      { x: 520, y: 162, width: 180, height: 14, oneWay: true },
+      { x: 800, y: 170, width: 130, height: 14, oneWay: true },
+      { x: 420, y: 64, width: 200, height: 16, oneWay: true },
     ],
-    spawns: [{ x: 115, y: 438 }, { x: 885, y: 438 }, { x: 495, y: 342 }, { x: 290, y: 434 }],
+    spawns: [{ x: 110, y: 441 }, { x: 880, y: 444 }, { x: 560, y: 346 }, { x: 270, y: 164 }],
     crateSockets: [
-      { id: "factory-ground-west", x: 95, y: 508 }, { id: "factory-ground-mid", x: 500, y: 508 }, { id: "factory-ground-east", x: 905, y: 508 },
-      { id: "factory-west-deck", x: 110, y: 420 }, { id: "factory-east-deck", x: 885, y: 420 },
-      { id: "factory-assembly-west", x: 245, y: 328 }, { id: "factory-assembly-mid", x: 500, y: 324 }, { id: "factory-assembly-east", x: 760, y: 328 },
-      { id: "factory-upper-west", x: 310, y: 230 }, { id: "factory-upper-east", x: 690, y: 234 },
-      { id: "factory-crown", x: 495, y: 134 },
+      { id: "factory-ground-west", x: 90, y: 508 }, { id: "factory-ground-mid", x: 500, y: 508 }, { id: "factory-ground-east", x: 880, y: 508 },
+      { id: "factory-floor-2-west", x: 230, y: 333 }, { id: "factory-floor-2-east", x: 560, y: 328 },
+      { id: "factory-floor-3-mid", x: 420, y: 236 }, { id: "factory-floor-4-east", x: 590, y: 140 },
+      { id: "factory-crown", x: 510, y: 42 },
     ],
     hazards: [
-      { id: "foundry-belt", kind: "conveyor", x: 380, y: 530, width: 250, height: 16, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 95 },
-      { id: "foundry-piston", kind: "forgePiston", x: 470, y: 222, width: 60, height: 112, periodTicks: 360, warningTicks: 60, activeTicks: 42, phaseOffset: 90, travelY: 170, force: 690, limbDamage: 72 },
+      { id: "foundry-belt", kind: "conveyor", x: 380, y: 530, width: 260, height: 16, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 95 },
+      { id: "foundry-belt-high", kind: "conveyor", x: 480, y: 350, width: 200, height: 14, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 85 },
+      { id: "foundry-piston-a", kind: "forgePiston", x: 430, y: 218, width: 60, height: 112, periodTicks: 360, warningTicks: 60, activeTicks: 42, phaseOffset: 90, travelY: 170, force: 690, limbDamage: 84 },
+      { id: "foundry-piston-b", kind: "forgePiston", x: 690, y: 226, width: 60, height: 112, periodTicks: 360, warningTicks: 60, activeTicks: 42, phaseOffset: 270, travelY: 160, force: 690, limbDamage: 84 },
     ],
     movers: [
       { id: "foundry-shuttle", x: 560, y: 296, width: 100, height: 14, periodTicks: 460, phaseOffset: 200, travelX: -360 },
@@ -385,6 +373,10 @@ export type AttackDef = {
   pierce: number;
   dashDistance: number;
   dashSpeed: number;
+  /** Hold-to-charge seconds; when set the attack fires on release, scaled by charge. */
+  chargeMax?: number;
+  /** Minimum charge fraction (0-1) for the release to count as a shot. */
+  chargeMin?: number;
 };
 
 export type WeaponDef = {
@@ -396,33 +388,64 @@ export type WeaponDef = {
   color: number;
 };
 
-const atk = (
-  kind: AttackKind,
-  cooldown: number,
-  damage: number,
-  knockback: number,
-  recoil: number,
-  range: number,
-  ammoCost: number,
-  speed: number,
-  spread: number,
-  radius: number,
-  explosiveRadius = 0,
-  pattern: AttackPattern = "single",
-  count = 1,
-  pierce = 0,
-  dashDistance = 0,
-  dashSpeed = 0,
-): AttackDef => ({ kind, cooldown, damage, knockback, recoil, range, ammoCost, speed, spread, radius, explosiveRadius, pattern, count, pierce, dashDistance, dashSpeed });
+const atk = (spec: Partial<AttackDef> & Pick<AttackDef, "kind" | "cooldown" | "damage" | "knockback">): AttackDef => ({
+  recoil: 0,
+  range: 0,
+  ammoCost: 1,
+  speed: 0,
+  spread: 0,
+  radius: 3,
+  explosiveRadius: 0,
+  pattern: "single",
+  count: 1,
+  pierce: 0,
+  dashDistance: 0,
+  dashSpeed: 0,
+  ...spec,
+});
 
+// M14火力重设计：Ripper 全自动冲锋枪 / Breach Scatter + Blaze Vent / Longbeam
+// 持续光束 / Voltrail 蓄能磁轨 / Forge Rocket / Cutter Blade。数值全部集中在此表，
+// 手感调参只动这里。
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
-  sidearm: { id: "sidearm", label: "M-12 Needle", ammo: 12, color: 0xd8b45f, primary: atk("hitscan", 0.34, 7, 150, 28, 700, 1, 0, 0.03, 3, 0, "burst", 3), secondary: atk("hitscan", 0.75, 26, 310, 76, 850, 2, 0, 0, 4, 0, "piercing", 1, 2) },
-  scatter: { id: "scatter", label: "Breach Scatter", ammo: 6, color: 0x9fc6d1, primary: atk("projectile", 0.72, 6, 95, 70, 0, 1, 760, 0.24, 4, 0, "pellet", 7), secondary: atk("melee", 1.1, 24, 380, 105, 75, 0, 0, 0, 0, 0, "slash") },
-  rifle: { id: "rifle", label: "Magline Rifle", ammo: 24, color: 0x75c795, primary: atk("projectile", 0.12, 7, 80, 15, 0, 1, 930, 0.02, 3), secondary: atk("hitscan", 0.9, 30, 300, 70, 900, 4, 0, 0, 4, 0, "piercing", 1, 3) },
-  sniper: { id: "sniper", label: "Rail Lance", ammo: 5, color: 0xd797c7, primary: atk("hitscan", 1.0, 52, 430, 120, 1100, 1, 0, 0, 3), secondary: atk("projectile", 1.45, 38, 260, 75, 0, 1, 1050, 0, 5, 0, "piercing", 1, 2) },
-  rocket: { id: "rocket", label: "Forge Rocket", ammo: 4, color: 0xe9793d, primary: atk("explosive", 0.9, 34, 280, 110, 0, 1, 520, 0, 7, 80), secondary: atk("explosive", 1.6, 18, 320, 140, 0, 2, 410, 0.12, 8, 68, "cluster", 3) },
-  blade: { id: "blade", label: "Cutter Blade", ammo: 999, color: 0xbfcbd0, primary: atk("melee", 0.32, 26, 270, 65, 70, 0, 0, 0, 0, 0, "slash"), secondary: atk("melee", 1.0, 42, 520, 110, 130, 0, 0, 0, 0, 0, "dashSlash", 1, 0, 92, 560) },
+  sidearm: {
+    id: "sidearm", label: "Vein Ripper", ammo: 90, color: 0xd8b45f,
+    primary: atk({ kind: "hitscan", cooldown: 0.09, damage: 9, knockback: 55, recoil: 8, range: 640, spread: 0.045, pattern: "single" }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 10, knockback: 95, recoil: 26, range: 700, spread: 0.07, pattern: "burst", count: 6, pierce: 0 }),
+  },
+  scatter: {
+    id: "scatter", label: "Breach Scatter", ammo: 32, color: 0x9fc6d1,
+    primary: atk({ kind: "projectile", cooldown: 0.68, damage: 9, knockback: 95, recoil: 85, speed: 780, spread: 0.26, radius: 4, pattern: "pellet", count: 8 }),
+    secondary: atk({ kind: "projectile", cooldown: 0.08, damage: 4, knockback: 30, recoil: 6, speed: 560, spread: 0.34, radius: 3, range: 260, pattern: "pellet", count: 2 }),
+  },
+  rifle: {
+    id: "rifle", label: "Longbeam", ammo: 90, color: 0x75c795,
+    primary: atk({ kind: "hitscan", cooldown: 0.12, damage: 6, knockback: 22, recoil: 4, range: 620, pattern: "beam" }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.95, damage: 38, knockback: 320, recoil: 70, range: 950, ammoCost: 3, pattern: "piercing", pierce: 3 }),
+  },
+  sniper: {
+    id: "sniper", label: "Voltrail", ammo: 6, color: 0xd797c7,
+    primary: atk({ kind: "hitscan", cooldown: 0.55, damage: 32, knockback: 210, recoil: 60, range: 1200, pattern: "piercing", pierce: 3, chargeMax: 1.1, chargeMin: 0.25 }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 35, knockback: 260, recoil: 55, range: 1050, pattern: "piercing", pierce: 1 }),
+  },
+  rocket: {
+    id: "rocket", label: "Forge Rocket", ammo: 5, color: 0xe9793d,
+    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 46, knockback: 300, recoil: 110, speed: 520, radius: 7, explosiveRadius: 88 }),
+    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 25, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
+  },
+  blade: {
+    id: "blade", label: "Cutter Blade", ammo: 999, color: 0xbfcbd0,
+    primary: atk({ kind: "melee", cooldown: 0.32, damage: 38, knockback: 270, recoil: 65, range: 70, pattern: "slash" }),
+    secondary: atk({ kind: "melee", cooldown: 1.0, damage: 60, knockback: 520, recoil: 110, range: 130, pattern: "dashSlash", dashDistance: 92, dashSpeed: 560 }),
+  },
 };
+
+/** Passive ammo regen per second for every weapon (keeps sustained fire viable). */
+export const AMMO_REGEN_PER_SECOND = 6;
+/** Tick interval that grants one round at AMMO_REGEN_PER_SECOND (60Hz tick). */
+export const AMMO_REGEN_INTERVAL_TICKS = Math.round(WORLD.tickRate / AMMO_REGEN_PER_SECOND);
+/** Matches resolve at this game-time limit (4 minutes) regardless of stalemates. */
+export const MATCH_TIME_LIMIT_TICKS = WORLD.tickRate * 240;
 
 export const DEFAULT_CONFIG: MatchConfig = {
   mapId: "canopy",
@@ -521,7 +544,7 @@ export type PlatformNode = {
 export type NavEdge = {
   from: number;
   to: number;
-  kind: "walk" | "drop" | "jump";
+  kind: "walk" | "drop" | "jump" | "gapJump";
 };
 
 export type PlatformGraph = {
@@ -578,6 +601,11 @@ export const buildPlatformGraph = (map: MapDef): PlatformGraph => {
         const horizontalGap = other.left > node.right ? other.left - node.right : node.left > other.right ? node.left - other.right : 0;
         if (horizontalGap <= NAV_MAX_GAP) pushEdge(node.index, other.index, "jump");
         else if (horizontalGap <= NAV_MAX_GAP + 140 && overlap > -80) pushEdge(node.index, other.index, "jump");
+      } else if (Math.abs(nodeSurface - otherSurface) < 8 && overlap <= 0) {
+        // Same-height gap hop: level platforms separated by a fall gap (M15
+        // layouts lean on these). Bots leapfrog with a running jump.
+        const horizontalGap = other.left > node.right ? other.left - node.right : node.left - other.right;
+        if (horizontalGap > 0 && horizontalGap <= NAV_MAX_GAP + 40) pushEdge(node.index, other.index, "gapJump");
       }
     }
   }

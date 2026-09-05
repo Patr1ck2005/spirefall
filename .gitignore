@@ -4,3 +4,8 @@ test-results/
 *.log
 .DS_Store
 
+# Clean-room boundary: the original game binary and any captures of it are
+# never redistributed. Kept on disk for local behavioral reference only.
+temp_folder/
+flash_capture*.png
+

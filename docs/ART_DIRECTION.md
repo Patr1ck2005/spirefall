@@ -24,20 +24,21 @@ The current build renders a complete procedural fallback, so missing raster asse
 
 ## Image generation prompts
 
-Generation pipeline (2026-08-23): Volcengine Ark `doubao-seedream-5.0-lite` via the local `~/.claude/scripts/genimg.sh` helper, opaque output, then converted to WebP at spec size with Pillow (environments generated 2560 x 1440 -> downsampled to 2048 x 1152; portraits and materials 1920 x 1920 -> 1024 x 1024). The earlier `gpt-image-2` plan was superseded when the local key proved invalid against the official API. Portrait equipment-light colors follow the fixed pilot accents (Breacher cyan, Warden coral, Rigger amber, Hunter violet). Generate each asset as a distinct job. No prompt may use the original game or Armor Games as a style reference.
+Generation pipeline (2026-08-23, environment plates regenerated 2026-09 with open compositions): Volcengine Ark `doubao-seedream-5.0-lite` via the local `~/.claude/scripts/genimg.sh` helper, opaque output, then converted to WebP at spec size with Pillow (environments generated 2560 x 1440 -> downsampled to 2048 x 1152; portraits and materials 1920 x 1920 -> 1024 x 1024). The earlier `gpt-image-2` plan was superseded when the local key proved invalid against the official API. Portrait equipment-light colors follow the fixed pilot accents (Breacher cyan, Warden coral, Rigger amber, Hunter violet). Generate each asset as a distinct job. No prompt may use the original game or Armor Games as a style reference.
 
 ### Canopy environment
 
 ```text
 Use case: stylized-concept
 Asset type: 2D arena game environment background plate
-Primary request: the upper maintenance crown of an immense abandoned brutalist industrial megastructure above a violent storm layer
-Scene/backdrop: colossal concrete load-bearing pylons, suspended freight lift cables, antenna forests, distant maintenance trains, cloud ocean and severe altitude
+Primary request: the upper maintenance crown of an immense abandoned brutalist industrial megastructure high above a violent storm layer
+Scene/backdrop: colossal concrete pylons very far in the distance, thin antenna silhouettes, suspended lift cables fading into fog, a vast softly glowing storm cloud ocean along the bottom
 Style/medium: semi-realistic comic concept art with crisp industrial shapes and restrained painterly texture
-Composition/framing: orthographic-like wide side view, 16:9; deep scale; keep the central gameplay band visually quiet and free of horizontal structures that could look walkable
-Lighting/mood: cold storm daylight, cyan navigation lights, small sodium amber accents, oppressive and weathered
-Materials/textures: wet concrete, oxidized steel, cable bundles, chipped paint, distant fog
-Constraints: original design; no people; no text; no logos; no trademarks; no watermark; no foreground platforms
+Composition/framing: orthographic-like wide side view, 16:9; extremely open composition with a large calm dark blue-grey gradient filling the center, all structural detail dim, distant and pushed to the left and right edges only
+Lighting/mood: cold storm daylight, sparse cyan navigation lights, tiny sodium amber accents, oppressive and weathered
+Materials/textures: wet concrete, oxidized steel, distant fog
+Constraints: original design; no people; no text; no logos; no watermark; no platforms; no foreground structures; no railings crossing the frame; keep the middle of the frame almost empty
+Regenerated 2026-08-23 (M15): the first generation painted dense pylons that read as clutter behind the play area; this prompt pushes structure to the edges and keeps the center calm.
 ```
 
 ### Fortress environment
@@ -46,12 +47,13 @@ Constraints: original design; no people; no text; no logos; no trademarks; no wa
 Use case: stylized-concept
 Asset type: 2D arena game environment background plate
 Primary request: the armored defense spine inside an immense abandoned brutalist industrial megastructure
-Scene/backdrop: monolithic concrete bastions, recessed blast shutters, deep service voids, searchlights, armored conduits and distant defensive machinery
+Scene/backdrop: one symmetric recessed gate corridor receding into deep darkness at the center, flanked by dim monolithic bastion walls washed by narrow searchlight cones
 Style/medium: semi-realistic comic concept art with crisp industrial shapes and restrained painterly texture
-Composition/framing: orthographic-like wide side view, 16:9; symmetrical oppressive depth; keep the central gameplay band dark, quiet and free of false platforms
-Lighting/mood: graphite darkness, emergency red beacons, narrow white searchlights, old dust and smoke
+Composition/framing: orthographic-like wide side view, 16:9; extremely dark low-contrast backdrop with structural detail only near the far left and right edges, the central band a calm near-black void
+Lighting/mood: graphite darkness, red emergency beacons, white searchlight shafts, old dust
 Materials/textures: scarred concrete, blackened armor plate, worn warning paint, soot
-Constraints: original design; no people; no text; no logos; no trademarks; no watermark; no foreground platforms
+Constraints: original design; no people; no text; no logos; no watermark; no platforms; no foreground structures; no railings crossing the frame; keep the middle of the frame almost empty
+Regenerated 2026-08-23 (M15): symmetry plus a dark center keeps the duel lane readable.
 ```
 
 ### Factory environment
@@ -60,12 +62,13 @@ Constraints: original design; no people; no text; no logos; no trademarks; no wa
 Use case: stylized-concept
 Asset type: 2D arena game environment background plate
 Primary request: the foundry and assembly gut deep inside an immense abandoned brutalist industrial megastructure
-Scene/backdrop: furnace mouths, endless conveyor lines, huge pistons, molten ducts, pressure pipes and distant mechanical silhouettes
+Scene/backdrop: a colossal furnace mouth glowing molten orange along the bottom edge, molten ducts and pressure pipes receding into green-black haze in the far distance
 Style/medium: semi-realistic comic concept art with crisp industrial shapes and restrained painterly texture
-Composition/framing: orthographic-like wide side view, 16:9; strong vertical depth; keep the central gameplay band low contrast and free of false walkable ledges
-Lighting/mood: furnace orange from below, petroleum green haze, black iron shadows, dirty heat shimmer
-Materials/textures: burned steel, oily machinery, ceramic furnace brick, corrosion and smoke
-Constraints: original design; no people; no text; no logos; no trademarks; no watermark; no foreground platforms
+Composition/framing: orthographic-like wide side view, 16:9; extremely open composition, the central band a calm dark void with only faint distant machine silhouettes near the top
+Lighting/mood: furnace orange glow from below, petroleum green haze, black iron shadows, dirty heat shimmer
+Materials/textures: burned steel, ceramic furnace brick, corrosion, smoke
+Constraints: original design; no people; no text; no logos; no watermark; no platforms; no foreground structures; no railings crossing the frame; keep the middle of the frame almost empty
+Regenerated 2026-08-23 (M15): furnace band anchors the bottom while the play space stays a calm void.
 ```
 
 ### Character portrait template
@@ -96,20 +99,9 @@ Lighting/mood: neutral reference lighting
 Constraints: seamless; no text; no logos; no symbols; no watermark
 ```
 
-### Far-parallax layer template
+### Far-parallax layers (retired 2026-09)
 
-Generated 2026-08-23 (Volcengine Seedream 5.0 lite, 2560x1440 -> 2048x1152 webp q88) into `public/assets/environments/<map>-far.webp`. Render order: far plate (depth -3) -> environment plate (-2) -> baked platform layer (-1).
-
-```text
-Use case: stylized-concept
-Asset type: 2D arena game far-parallax background layer
-Primary request: <the most distant silhouette of the megastructure above a violent storm layer, seen from the upper maintenance crown | the deepest interior void of the defense spine receding into darkness | the far reaches of the foundry dissolving into smoke and furnace glow>
-Scene/backdrop: layered atmospheric depth fading toward the horizon; faint structural silhouettes only
-Style/medium: semi-realistic comic concept art, heavily atmospheric
-Composition/framing: orthographic-like wide side view, 16:9; darkest background layer behind everything else; keep the entire central gameplay band low contrast and free of walkable-looking horizontal structures
-Lighting/mood: <cold storm haze, muted cyan-grey | graphite darkness with sparse deep-red pinpoints | dim petroleum green haze over faint orange glow from below>
-Constraints: original design; no people; no text; no logos; no trademarks; no watermark; no foreground platforms
-```
+Far-parallax plates (`<map>-far.webp`) were generated on 2026-08-23 but retired in M18: the opaque near plate (106% scale) fully occluded them at runtime, they were never regenerated in the open-composition style, and dropping them removed ~364 KB of dead assets plus per-frame position nudges. The renderer now uses a single background plate per map plus the baked platform layer. If parallax depth is ever reintroduced, regenerate the far layers to the open-composition rules first and make the near plate semi-transparent or sub-100% scale so the layering is actually visible.
 
 ## UI and effect limits
 

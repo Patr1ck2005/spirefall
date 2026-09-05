@@ -2,9 +2,12 @@ import { createServer } from "node:http";
 import { randomInt, randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import {
+  AMMO_REGEN_INTERVAL_TICKS,
+  AMMO_REGEN_PER_SECOND,
   DEFAULT_CONFIG,
   LIMB_IDS,
   MAPS,
+  MATCH_TIME_LIMIT_TICKS,
   MAX_JUMPS,
   PLAYER_BODY_HEIGHT,
   PLAYER_FOOT_OFFSET,
@@ -143,7 +146,14 @@ function joinRoom(client: Client, roomCode: string, name: string) {
   if (room.players.size >= 4) return send(client, "error", { message: "Room is full" });
   client.room = room;
   client.token = randomUUID();
-  const player = makePlayer(client.id, name.slice(0, 16) || "Player", room.players.size, room.config);
+  // Deduplicate display names: results screens key off ids, but identical
+  // labels would still confuse the roster and winner banner.
+  const base = name.slice(0, 16) || "Player";
+  const taken = new Set([...room.players.values()].map((player) => player.name));
+  let display = base;
+  let suffix = 2;
+  while (taken.has(display)) display = `${base.slice(0, 13)}#${suffix++}`;
+  const player = makePlayer(client.id, display, room.players.size, room.config);
   room.players.set(client.id, player);
   room.jumpHeld.set(client.id, false);
   room.tokens.set(client.id, client.token);
@@ -190,7 +200,7 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.players.delete(client.id);
     room.tokens.delete(client.id);
     room.jumpHeld.delete(client.id);
-    // A room with no connected humans (bots only) is dead weight — dissolve it.
+    // A room with no connected humans (bots only) is dead weight 鈥?dissolve it.
     if (humanCount(room) === 0) rooms.delete(room.code);
     broadcastRoom(room);
     client.room = undefined;
@@ -245,6 +255,7 @@ function resetPlayer(room: Room, player: PlayerState, index: number) {
   player.connected = true;
   player.primaryCooldown = 0;
   player.secondaryCooldown = 0;
+  player.charge = 0;
   player.respawnTimer = 0;
   player.hitFlash = 0;
   player.invulnerable = 1.5;
@@ -267,12 +278,14 @@ function spawnCrate(room: Room, crate: CrateState) {
   crate.socketId = socket.id;
   crate.x = socket.x;
   crate.y = socket.y;
+  // ~1 in 4 spawns is a repair cell: restores limbs instead of swapping guns.
+  crate.kind = randomBetween(0, 3) === 0 ? "repair" : "weapon";
   crate.weapon = room.config.weaponSet[randomBetween(0, room.config.weaponSet.length - 1)];
   crate.active = true;
   crate.respawnTimer = 0;
   crate.nextSpawnTick = 0;
   crate.generation += 1;
-  emitEvent(room, "crateSpawn", crate.x, crate.y, 1, { weaponId: crate.weapon, visualSeed: randomBetween(0, 0x7fffffff) });
+  emitEvent(room, "crateSpawn", crate.x, crate.y, 1, { weaponId: crate.weapon, crateKind: crate.kind });
 }
 
 const humanCount = (room: Room) => [...room.players.values()].filter((player) => !player.isBot).length;
@@ -314,7 +327,7 @@ function start(room: Room, mode: MatchMode) {
   room.hazardHits.clear();
   [...room.players.values()].forEach((player, index) => resetPlayer(room, player, index));
   room.crates = room.config.crates
-    ? [0, 1, 2, 3, 4, 5].map((id) => ({ id, x: 0, y: 0, weapon: "sidearm" as WeaponId, active: false, respawnTimer: 0, socketId: "", generation: 0, nextSpawnTick: id < 3 ? randomBetween(60, 180) : Number.MAX_SAFE_INTEGER }))
+    ? [0, 1, 2, 3, 4, 5].map((id) => ({ id, x: 0, y: 0, kind: "weapon" as const, weapon: "sidearm" as WeaponId, active: false, respawnTimer: 0, socketId: "", generation: 0, nextSpawnTick: id < 3 ? randomBetween(60, 180) : Number.MAX_SAFE_INTEGER }))
     : [];
   room.hazards = MAPS[room.config.mapId].hazards.map((def) => calculateHazardState(def, 0));
   room.movers = MAPS[room.config.mapId].movers.map((def) => calculateMoverState(def, 0));
@@ -330,6 +343,7 @@ function returnToLobby(room: Room) {
   room.hazards = [];
   room.movers = [];
   room.events = [];
+  for (const player of room.players.values()) player.charge = 0;
   for (const client of room.clients.values()) {
     client.input = blankInput();
     room.jumpHeld.set(client.id, false);
@@ -348,7 +362,10 @@ function setConfig(room: Room, patch: Partial<MatchConfig>) {
   if (room.phase !== "lobby") return;
   const mapId = patch.mapId && patch.mapId in MAPS ? patch.mapId : room.config.mapId;
   const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 6);
-  if (requestedWeapons && !requestedWeapons.includes("sidearm")) requestedWeapons.unshift("sidearm");
+  if (requestedWeapons && !requestedWeapons.includes("sidearm")) {
+    requestedWeapons.unshift("sidearm");
+    requestedWeapons.length = 6; // re-trim: sidearm may have pushed the set past 6
+  }
   const botSkill = patch.botSkill === "casual" || patch.botSkill === "brutal" ? patch.botSkill : patch.botSkill === "standard" ? patch.botSkill : room.config.botSkill;
   room.config = {
     ...room.config,
@@ -389,41 +406,71 @@ function damage(
   sourceX: number,
   hitX: number,
   hitY: number,
-  details: { actorId?: string; weaponId?: WeaponId; secondary?: boolean; explosive?: boolean } = {},
+  details: { actorId?: string; weaponId?: WeaponId; secondary?: boolean; explosive?: boolean; lethal?: boolean } = {},
 ) {
   if (victim.invulnerable > 0 || victim.respawnTimer > 0 || isEliminated(room, victim)) return;
   victim.vx += (victim.x >= sourceX ? 1 : -1) * force;
   victim.vy -= force * 0.42;
   victim.hitFlash = 0.13;
+  if (details.lethal) {
+    // Execution shots (full-charge Voltrail) bypass limbs entirely.
+    emitEvent(room, "hit", hitX, hitY, 1.4, { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary });
+    loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+    return;
+  }
   if (details.explosive) {
     for (const limbId of LIMB_IDS) applyLimbDamage(room, victim, limbId, amount * 0.5, details);
+    // Explosive splash grinds all four limbs evenly 鈥?check for a bleed-out too.
+    if (LIMB_IDS.every((limbId) => victim.limbs[limbId] <= 0)) {
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      return;
+    }
   } else {
-    const limbId = selectLimbAtPoint(victim, hitX, hitY);
-    if (limbId) applyLimbDamage(room, victim, limbId, amount, details);
+    let limbId = selectLimbAtPoint(victim, hitX, hitY);
+    const living = LIMB_IDS.filter((candidate) => victim.limbs[candidate] > 0);
+    if (!living.length) {
+      // Quad-destroy: a pilot with no intact limbs bleeds out.
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      return;
+    }
+    // Destroyed-limb hits and head-zone hits (no limb resolved) carry over to
+    // a living limb instead of being clamped away 鈥?no invincible stump-tanking.
+    if (!limbId || victim.limbs[limbId] <= 0) {
+      limbId = living[Math.floor(Math.random() * living.length)];
+    }
+    applyLimbDamage(room, victim, limbId, amount, details);
+    if (LIMB_IDS.every((candidate) => victim.limbs[candidate] <= 0)) {
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      return;
+    }
   }
   emitEvent(room, "hit", hitX, hitY, clamp(force / 520, 0.2, 1.4), { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary, limbId: selectLimbAtPoint(victim, hitX, hitY) });
 }
 
-function attack(room: Room, player: PlayerState, secondary: boolean) {
+function attack(room: Room, player: PlayerState, secondary: boolean, chargeFraction = 0) {
   const weapon = WEAPONS[player.weapon];
   const def = secondary ? weapon.secondary : weapon.primary;
   const cooldownKey = secondary ? "secondaryCooldown" : "primaryCooldown";
   if (player[cooldownKey] > 0 || player.respawnTimer > 0 || player.ammo < def.ammoCost) return;
+  // Charge releases below the minimum fraction fizzle (stepPlayer owns charge state).
+  if (!secondary && def.chargeMax !== undefined && chargeFraction < (def.chargeMin ?? 0.25)) return;
+  const chargeScale = !secondary && def.chargeMax !== undefined ? 1 + chargeFraction * 1.6 : 1;
   const modifiers = calculateLimbModifiers(player.limbs);
   player[cooldownKey] = def.cooldown * modifiers.cooldown;
   player.ammo -= def.ammoCost;
   player.ammoByWeapon[player.weapon] = player.ammo;
-  player.vx -= player.facing * def.recoil * modifiers.recoil;
+  player.vx -= player.facing * def.recoil * chargeScale * modifiers.recoil;
+  const range = def.range * (1 + chargeFraction * 0.25);
   const originX = player.x + player.facing * 12;
   const originY = player.y - PLAYER_TARGET_OFFSET;
-  emitEvent(room, "attack", originX, originY, secondary ? 1 : 0.7, {
+  emitEvent(room, "attack", originX, originY, secondary ? 1 : 0.7 * chargeScale, {
     actorId: player.id,
     weaponId: player.weapon,
     secondary,
     pattern: def.pattern,
     direction: player.facing,
     count: def.count,
-    visualSeed: randomBetween(0, 0x7fffffff),
+    charge: def.chargeMax !== undefined ? chargeFraction : undefined,
   });
 
   if (def.kind === "melee") {
@@ -452,12 +499,14 @@ function attack(room: Room, player: PlayerState, secondary: boolean) {
         .filter((other) => {
           const dx = other.x - originX;
           const dy = other.y - PLAYER_TARGET_OFFSET - originY;
-          return other.id !== player.id && directionX * dx + directionY * dy > 0 && Math.abs(dy - Math.tan(angle) * dx) < 16 && Math.abs(dx) < def.range;
+          return other.id !== player.id && directionX * dx + directionY * dy > 0 && Math.abs(dy - Math.tan(angle) * dx) < 16 && Math.abs(dx) < range;
         })
         .sort((a, b) => Math.abs(a.x - originX) - Math.abs(b.x - originX));
-      const limit = def.pattern === "piercing" ? def.pierce + 1 : 1;
+      const limit = def.pattern === "piercing" || def.pattern === "beam" ? (def.pattern === "beam" ? targets.length : def.pierce + 1) : 1;
+      // Charged Voltrail rails (>=0.8) are executions: pierce the whole line.
+      const lethal = !secondary && def.chargeMax !== undefined && chargeFraction >= 0.8;
       for (const other of targets.slice(0, limit)) {
-        damage(room, other, def.damage, def.knockback, player.x, other.x - player.facing * 7, other.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary });
+        damage(room, other, def.damage * chargeScale, def.knockback * chargeScale, player.x, other.x - player.facing * 7, other.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
       }
     }
     return;
@@ -478,8 +527,8 @@ function attack(room: Room, player: PlayerState, secondary: boolean) {
       vx: Math.cos(spread) * player.facing * def.speed,
       vy: Math.sin(spread) * def.speed,
       radius: def.radius,
-      damage: def.damage,
-      knockback: def.knockback,
+      damage: def.damage * chargeScale,
+      knockback: def.knockback * chargeScale,
       explosiveRadius: def.explosiveRadius,
       pierceRemaining: def.pierce,
       pattern: def.pattern,
@@ -494,15 +543,16 @@ function attack(room: Room, player: PlayerState, secondary: boolean) {
 // death events. Sandbox mode never eliminates anyone.
 const isEliminated = (room: Room, player: PlayerState) => room.mode !== "sandbox" && player.lives <= 0;
 
-function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard", emit = true) {
+function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard" | "shot", emit = true) {
   if (player.respawnTimer > 0 || isEliminated(room, player)) return;
   if (room.mode === "sandbox") player.lives = room.config.lives;
   else player.lives -= 1;
   player.vx = 0;
   player.vy = 0;
   player.jumpsUsed = 0;
+  player.charge = 0;
   player.respawnTimer = room.mode === "sandbox" || player.lives > 0 ? 1.5 : 2.5;
-  if (emit) emitEvent(room, "death", x, y, cause === "hazard" ? 1.35 : 1, { targetId: player.id });
+  if (emit) emitEvent(room, "death", x, y, cause === "hazard" ? 1.35 : cause === "shot" ? 1.2 : 1, { targetId: player.id });
 }
 
 function updateHazards(room: Room, previous: HazardState[], dt: number) {
@@ -566,6 +616,7 @@ function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientI
       player.limbs = freshLimbs();
       player.weapon = "sidearm";
       player.ammo = player.ammoByWeapon.sidearm = WEAPONS.sidearm.ammo;
+      player.charge = 0;
       player.invulnerable = 1.4;
       emitEvent(room, "respawn", player.x, player.y - PLAYER_TARGET_OFFSET, 1, { targetId: player.id });
     }
@@ -577,8 +628,17 @@ function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientI
     if (next && next !== player.weapon) {
       player.weapon = next;
       player.ammo = player.ammoByWeapon[next];
+      player.charge = 0;
     }
     input.weaponSlot = undefined;
+  }
+
+  // Held-weapon ammo slowly regenerates so sustained fire stays viable.
+  // Integer grants on a tick cadence keep ammo a clean integer for the HUD.
+  const heldMax = WEAPONS[player.weapon].ammo;
+  if (room.tick % AMMO_REGEN_INTERVAL_TICKS === 0 && player.ammo < heldMax) {
+    player.ammo = Math.min(heldMax, player.ammo + 1);
+    player.ammoByWeapon[player.weapon] = player.ammo;
   }
 
   const modifiers = calculateLimbModifiers(player.limbs);
@@ -624,8 +684,39 @@ function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientI
     }
   }
 
-  if (player.y > WORLD.height + 80) loseLife(room, player, player.x, WORLD.height, "fall");
-  if (input.primary) attack(room, player, false);
+  if (player.y > WORLD.height + 80) {
+    // Fresh respawns get one free rescue instead of an instant re-death loop:
+    // bot or player, falling twice in a row right after spawning is a nav
+    // failure, not a kill. Teleport back to the spawn pad.
+    if (player.invulnerable > 0.9) {
+      const index = [...room.players.keys()].indexOf(player.id);
+      const spawn = map.spawns[index % 4];
+      player.x = spawn.x;
+      player.y = spawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.jumpsUsed = 0;
+    } else {
+      loseLife(room, player, player.x, WORLD.height, "fall");
+    }
+  }
+  // Charge weapons accumulate while held and release on the press; everything
+  // else keeps the classic hold-to-fire gate.
+  const primaryDef = WEAPONS[player.weapon].primary;
+  if (primaryDef.chargeMax !== undefined) {
+    if (input.primary) {
+      player.charge = Math.min(1, (player.charge ?? 0) + dt / primaryDef.chargeMax);
+    } else if (player.charge) {
+      const released = player.charge;
+      player.charge = 0;
+      attack(room, player, false, released);
+    } else {
+      player.charge = 0;
+    }
+  } else {
+    player.charge = 0;
+    if (input.primary) attack(room, player, false);
+  }
   if (input.secondary) attack(room, player, true);
 }
 
@@ -688,13 +779,17 @@ function updateRoom(room: Room, dt: number) {
     }
     for (const player of room.players.values()) {
       if (player.respawnTimer <= 0 && Math.hypot(player.x - crate.x, player.y - crate.y) < 34) {
-        player.weapon = crate.weapon;
-        player.ammoByWeapon[player.weapon] = WEAPONS[player.weapon].ammo;
-        player.ammo = player.ammoByWeapon[player.weapon];
+        if (crate.kind === "repair") {
+          player.limbs = freshLimbs();
+        } else {
+          player.weapon = crate.weapon;
+          player.ammoByWeapon[player.weapon] = WEAPONS[player.weapon].ammo;
+          player.ammo = player.ammoByWeapon[player.weapon];
+        }
         crate.active = false;
         crate.nextSpawnTick = room.tick + randomBetween(360, 720);
         crate.respawnTimer = (crate.nextSpawnTick - room.tick) / WORLD.tickRate;
-        emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, weaponId: crate.weapon, visualSeed: randomBetween(0, 0x7fffffff) });
+        emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, weaponId: crate.weapon, crateKind: crate.kind });
         break;
       }
     }
@@ -706,7 +801,22 @@ function updateRoom(room: Room, dt: number) {
     projectile.vy += 720 * dt;
     projectile.ttl -= dt;
     for (const platform of map.platforms) {
-      if (projectile.y > platform.y - 8 && projectile.y < platform.y + platform.height + 8 && projectile.x > platform.x && projectile.x < platform.x + platform.width) projectile.ttl = 0;
+      if (projectile.y > platform.y - 8 && projectile.y < platform.y + platform.height + 8 && projectile.x > platform.x && projectile.x < platform.x + platform.width) {
+        const speed = Math.hypot(projectile.vx, projectile.vy);
+        if (projectile.explosiveRadius) {
+          // Rockets detonate on any surface, not just bodies.
+          emitEvent(room, "explosion", projectile.x, projectile.y, clamp(projectile.explosiveRadius / 90, 0.6, 1.5), { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary });
+          for (const nearby of room.players.values()) {
+            if (nearby.id === projectile.ownerId || nearby.respawnTimer > 0 || isEliminated(room, nearby)) continue;
+            const distance = Math.hypot(nearby.x - projectile.x, nearby.y - PLAYER_TARGET_OFFSET - projectile.y);
+            if (distance < projectile.explosiveRadius) damage(room, nearby, projectile.damage * 0.7, projectile.knockback * 0.7, projectile.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: true });
+          }
+        } else {
+          // Wall hit: surface dust and debris so no round dies silently.
+          emitEvent(room, "impact", projectile.x, projectile.y, Math.min(1.2, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+        }
+        projectile.ttl = 0;
+      }
     }
     for (const target of room.players.values()) {
       if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target) || !intersectsCircle({ x: projectile.x, y: projectile.y, r: projectile.radius }, { x: target.x, y: target.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) continue;
@@ -721,19 +831,42 @@ function updateRoom(room: Room, dt: number) {
         }
       }
       if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
-      else projectile.ttl = 0;
+      else {
+        // Non-explosive rounds that die on a body still chip the surface behind it.
+        if (!projectile.explosiveRadius) {
+          emitEvent(room, "impact", projectile.x, projectile.y, 0.7, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+        }
+        projectile.ttl = 0;
+      }
       break;
     }
   }
 
+  // Rounds that fly off the map or expire mid-air: faint fizzle for out-of-bounds.
+  for (const projectile of room.projectiles) {
+    const leaving = projectile.x <= -100 || projectile.x >= WORLD.width + 100 || projectile.y >= WORLD.height + 150;
+    if (leaving && projectile.ttl > 0) {
+      emitEvent(room, "impact", projectile.x > 0 && projectile.x < WORLD.width ? projectile.x : Math.max(6, Math.min(WORLD.width - 6, projectile.x)), WORLD.height - 8, 0.4, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+    }
+  }
   room.projectiles = room.projectiles.filter((projectile) => projectile.ttl > 0 && projectile.x > -100 && projectile.x < WORLD.width + 100 && projectile.y < WORLD.height + 150);
   if (room.mode === "match") {
     const alive = [...room.players.values()].filter((player) => !isEliminated(room, player) && (player.lives > 0 || player.respawnTimer > 0));
+    // Match time limit: any stalemate (camping, unreachable standoff) resolves
+    // at 4 minutes 鈥?most lives, then most intact limbs wins. Winner is stored
+    // as the player ID: display names are not unique.
+    if (room.tick > MATCH_TIME_LIMIT_TICKS && alive.length > 1) {
+      room.phase = "results";
+      const ranked = [...alive].sort((a, b) => b.lives - a.lives || (LIMB_IDS.reduce((sum, id) => sum + b.limbs[id], 0) - LIMB_IDS.reduce((sum, id) => sum + a.limbs[id], 0)));
+      room.winner = ranked[0]?.id;
+      broadcastSnapshot(room);
+      return;
+    }
     if (alive.length <= 1) {
       room.phase = "results";
-      room.winner = alive[0]?.name;
+      room.winner = alive[0]?.id;
       // The tick loop freezes at results, so the periodic broadcast may never
-      // fire again — push the final snapshot explicitly so every client
+      // fire again 鈥?push the final snapshot explicitly so every client
       // actually sees the results screen.
       broadcastSnapshot(room);
     }
@@ -784,7 +917,20 @@ wss.on("connection", (ws) => {
     else if (message.type === "return_lobby" && client.room && client.room.mode === "sandbox" && client.id === client.room.hostId) returnToLobby(client.room);
     else if (message.type === "sandbox_respawn" && client.room && client.id === client.room.hostId) respawnSandboxPlayer(client.room, client.id);
     else if (message.type === "config" && client.room && client.id === client.room.hostId) setConfig(client.room, message.patch || {});
-    else if (message.type === "input" && client.room) client.input = { ...client.input, ...message.input };
+    else if (message.type === "input" && client.room) {
+      // Whitelist known input fields 鈥?never trust client payloads wholesale.
+      const raw = message.input || {};
+      client.input = {
+        seq: Number(raw.seq) || client.input.seq + 1,
+        left: raw.left === true,
+        right: raw.right === true,
+        jump: raw.jump === true,
+        drop: raw.drop === true,
+        primary: raw.primary === true,
+        secondary: raw.secondary === true,
+        weaponSlot: raw.weaponSlot === undefined ? undefined : Math.max(1, Math.min(6, Number(raw.weaponSlot) || 0)) || undefined,
+      };
+    }
     else if (message.type === "leave_room" && client.room) leaveRoom(client);
     else if (message.type === "restart" && client.room && client.room.phase === "results" && client.id === client.room.hostId) returnToLobby(client.room);
   });
@@ -800,4 +946,13 @@ setInterval(() => {
 }, 1000 / WORLD.tickRate);
 
 const port = Number(process.env.PORT || 8787);
+http.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`[Spirefall] Port ${port} is already in use 鈥?probably another Spirefall launcher window is still open.`);
+    console.error("[Spirefall] Close that window (or kill the old node process) and start again.");
+  } else {
+    console.error("[Spirefall] Server error:", error);
+  }
+  process.exit(1);
+});
 http.listen(port, "0.0.0.0", () => console.log(`Spirefall server listening on http://0.0.0.0:${port}`));

@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "test:logic": "tsx tests/game-logic.ts",
     "test:smoke": "tsx tests/network-smoke.ts",
+    "test:ai": "tsx tests/ai-smoke.ts",
     "test:browser": "tsx tests/browser-smoke.ts",
     "test:visual": "tsx tests/visual-smoke.ts",
     "test:performance": "tsx tests/performance-smoke.ts",

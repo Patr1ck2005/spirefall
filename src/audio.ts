@@ -163,19 +163,19 @@ function spatialGain(base: number, opts: PlayOptions): number {
 }
 
 const weapons: Record<string, (out: AudioNode, g: number) => void> = {
-  "attack:sidearm:pri": (out, g) => {
-    for (let i = 0; i < 3; i++) noise(0.045, "highpass", 2400, 1800, 1, g * 0.5, out, i * 0.032);
-  },
+  "attack:sidearm:pri": (out, g) => noise(0.045, "highpass", 2400, 1800, 1, g * 0.5, out),
   "attack:sidearm:sec": (out, g) => {
-    noise(0.16, "highpass", 3200, 900, 2, g * 0.6, out);
-    tone("square", 900, 140, 0.16, g * 0.28, out);
+    for (let i = 0; i < 6; i++) noise(0.05, "highpass", 2200, 1500, 1, g * 0.42, out, i * 0.045);
   },
   "attack:scatter:pri": (out, g) => {
     noise(0.24, "lowpass", 1100, 220, 0.8, g * 0.9, out);
     tone("sine", 130, 50, 0.2, g * 0.7, out);
   },
-  "attack:scatter:sec": (out, g) => noise(0.14, "bandpass", 2600, 700, 1.4, g * 0.55, out),
-  "attack:rifle:pri": (out, g) => noise(0.05, "bandpass", 2000, 2600, 1.2, g * 0.42, out),
+  "attack:scatter:sec": (out, g) => noise(0.09, "bandpass", 1400, 800, 0.9, g * 0.34, out),
+  "attack:rifle:pri": (out, g) => {
+    noise(0.11, "bandpass", 1900, 2600, 2.2, g * 0.3, out);
+    tone("sine", 1240, 1180, 0.1, g * 0.12, out);
+  },
   "attack:rifle:sec": (out, g) => {
     noise(0.2, "highpass", 2800, 700, 1.6, g * 0.6, out);
     tone("square", 320, 90, 0.18, g * 0.3, out);
@@ -225,6 +225,8 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
   explosion: (out, g) => {
     noise(0.45, "lowpass", 320, 60, 0.6, g, out);
     tone("sine", 68, 27, 0.4, g * 0.9, out);
+    // Rumbling tail layered on the same burst (no delayed scheduling needed).
+    noise(0.55, "lowpass", 180, 40, 0.5, g * 0.5, out, 0.12);
   },
   dismember: (out, g) => {
     noise(0.1, "bandpass", 1600, 900, 1, g * 0.7, out);
@@ -239,10 +241,19 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
     tone("sine", 700, 1280, 0.24, g * 0.24, out, 0.06);
   },
   hazard: (out, g) => clang(210, 0.34, g * 0.75, out),
+  impact: (out, g) => {
+    noise(0.06, "lowpass", 900, 260, 0.8, g * 0.5, out);
+    tone("sine", 170, 70, 0.07, g * 0.4, out);
+  },
   crateSpawn: (out, g) => tone("triangle", 420, 860, 0.14, g * 0.34, out),
   cratePickup: (out, g) => {
     tone("triangle", 640, 1000, 0.09, g * 0.34, out);
     tone("triangle", 960, 1420, 0.1, g * 0.26, out, 0.05);
+  },
+  repair: (out, g) => {
+    tone("sine", 520, 780, 0.14, g * 0.3, out);
+    tone("sine", 780, 1170, 0.16, g * 0.28, out, 0.08);
+    tone("sine", 1170, 1560, 0.18, g * 0.24, out, 0.16);
   },
 };
 
@@ -250,6 +261,24 @@ export const sfx = {
   /** Create/resume the context from a user gesture so later event sounds can play. */
   unlock() {
     ensureContext();
+  },
+
+  /** Rising charge tone; call repeatedly while holding so pitch tracks charge. */
+  charge(fraction: number, weaponId: string) {
+    const out = outputChannel({});
+    if (!out) return;
+    const base = weaponId === "sniper" ? 180 : 240;
+    const f = Math.max(0.05, Math.min(1, fraction));
+    tone("sawtooth", base + f * 260, base + f * 420, 0.11, 0.05 + f * 0.05, out.node);
+  },
+
+  /** Full-charge rail release: layered boom on top of the normal shot. */
+  railBoom() {
+    const out = outputChannel({});
+    if (!out) return;
+    noise(0.5, "lowpass", 900, 90, 0.8, 0.8, out.node);
+    tone("sine", 90, 34, 0.45, 0.7, out.node);
+    tone("square", 520, 70, 0.3, 0.22, out.node);
   },
 
   setEnabled(enabled: boolean) {

@@ -48,12 +48,14 @@ type FxParticle = {
   size: number;
   color: number;
   gravity: number;
-  kind: "spark" | "blood" | "smoke" | "energy";
+  kind: "spark" | "blood" | "smoke" | "energy" | "flash";
 };
 
 type Decal = { x: number; y: number; radius: number; alpha: number; rotation: number };
 type Gib = { x: number; y: number; vx: number; vy: number; life: number; color: number; limb: LimbId };
-type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; color: number; width: number };
+type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; color: number; width: number; core?: number; jitter?: number };
+type Ring = { x: number; y: number; life: number; maxLife: number; radius: number; color: number; width: number; grow?: number; double?: boolean };
+type Hitstop = { remaining: number; scale: number };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const weaponOptions = Object.values(WEAPONS).map((weapon, index) => `
@@ -184,6 +186,9 @@ function send(type: string, payload: Record<string, unknown> = {}) {
 const humanCountOf = (players: Array<{ isBot?: boolean }>) => players.filter((player) => !player.isBot).length;
 
 function enterLobby(room: RoomMessage) {
+  // Fresh room: drop processed-event ids from any previous room (event ids
+  // restart at 1 per room and would be wrongly treated as duplicates).
+  if (room.code !== currentRoom?.code) scene?.clearProcessedEvents();
   currentRoom = room;
   menu.classList.add("hidden");
   if (room.phase === "lobby") {
@@ -256,6 +261,13 @@ function handleMessage(message: any) {
     }
   }
   if (message.type === "snapshot") {
+    // Test hook: playwright suites preset window.__spireEvents = [] to observe
+    // the combat event stream; the client ignores it otherwise.
+    const hook = (window as unknown as { __spireEvents?: CombatEvent[] }).__spireEvents;
+    if (Array.isArray(hook)) {
+      hook.push(...message.snapshot.events);
+      if (hook.length > 600) hook.splice(0, hook.length - 600);
+    }
     showGame();
     scene?.applySnapshot(message.snapshot);
   }
@@ -416,11 +428,21 @@ class ArenaScene extends Phaser.Scene {
   private decals: Decal[] = [];
   private gibs: Gib[] = [];
   private tracers: Tracer[] = [];
+  private rings: Ring[] = [];
+  private hitstop: Hitstop | undefined;
+  private lastHitstopAt = 0;
   private processedEvents = new Set<number>();
+
+  /** Drop processed-event ids when switching rooms (ids restart per room). */
+  clearProcessedEvents() {
+    this.processedEvents.clear();
+    this.lastChargeStep = -1;
+  }
+  private lastChargeStep = -1;
   private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
-  private farBackgrounds = new Map<MapId, Phaser.GameObjects.Image>();
   private materialsReady = new Set<MapId>();
   private platformLayer?: Phaser.GameObjects.RenderTexture;
+  private decalLayer?: Phaser.GameObjects.RenderTexture;
   private bakedMapId = "";
   private atmosphere: Array<{ x: number; y: number; vx: number; vy: number; kind: "rain" | "dust" | "ember" }> = [];
   private atmosphereMap: MapId | "" = "";
@@ -452,18 +474,31 @@ class ArenaScene extends Phaser.Scene {
     if (!this.graphics) return;
     const predicted = this.renderPositions.get(selfId);
     if (predicted && this.keys) predicted.x += ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * 230 * delta / 1000;
-    // Fake parallax: nudge the two background plates against self movement.
+    // Fake parallax: nudge the background plate against self movement.
     const offsetX = (predicted?.x ?? WORLD.width / 2) - WORLD.width / 2;
-    const far = this.farBackgrounds.get(this.snapshot?.config.mapId ?? "canopy");
     const mid = this.backgrounds.get(this.snapshot?.config.mapId ?? "canopy");
-    far?.setPosition(WORLD.width / 2 - offsetX * 0.06, WORLD.height / 2);
     mid?.setPosition(WORLD.width / 2 - offsetX * 0.03, WORLD.height / 2);
-    this.updateEffects(delta / 1000);
+    // Hitstop: brief effect freeze on heavy impacts sells the punch.
+    if (this.hitstop) {
+      this.hitstop.remaining -= delta;
+      if (this.hitstop.remaining <= 0) this.hitstop = undefined;
+    }
+    this.updateEffects(this.hitstop ? delta / 1000 * this.hitstop.scale : delta / 1000);
     this.draw(time);
     if (time - this.lastSent > 33) {
       this.sendInput();
       this.lastSent = time;
     }
+  }
+
+  private punchHitstop(strength: number) {
+    // Storm guard: when the particle pool is saturated, skip the freeze so
+    // effects keep draining (hitstop is the first juice we sacrifice).
+    if (this.particles.length > 120) return;
+    const now = performance.now();
+    if (now - this.lastHitstopAt < 350) return;
+    this.lastHitstopAt = now;
+    this.hitstop = { remaining: 40 + Math.min(60, strength * 45), scale: 0.12 };
   }
 
   sendInput(slot?: number) {
@@ -484,16 +519,17 @@ class ArenaScene extends Phaser.Scene {
     const finished = snapshot.phase === "results";
     $("result").classList.toggle("hidden", !finished);
     $("sandbox-actions").classList.toggle("hidden", snapshot.mode !== "sandbox" || snapshot.phase !== "playing");
-    const winnerEntry = snapshot.players.find((player) => player.name === snapshot.winner);
+    // Winner is a player id — display names are not unique.
+    const winnerEntry = snapshot.players.find((player) => player.id === snapshot.winner);
     const subtitle = $("result").querySelector("p:last-of-type") as HTMLElement | null;
     if (winnerEntry?.isBot) {
-      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner} HOLDS THE SPIRE`; subtitle.classList.add("defeated"); }
+      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner ? winnerEntry?.name.toUpperCase() : ""} HOLDS THE SPIRE`; subtitle.classList.add("defeated"); }
       $("result").classList.add("bot-victory");
     } else {
       if (subtitle) { subtitle.textContent = "ONE PILOT REMAINS"; subtitle.classList.remove("defeated"); }
       $("result").classList.remove("bot-victory");
     }
-    $("winner").textContent = snapshot.winner || "NO SURVIVOR";
+    $("winner").textContent = (snapshot.winner && winnerEntry?.name) || "NO SURVIVOR";
     $<HTMLButtonElement>("restart").classList.toggle("hidden", selfId !== currentRoom?.hostId);
   }
 
@@ -501,12 +537,12 @@ class ArenaScene extends Phaser.Scene {
     if (snapshot.phase === previousPhase && snapshot.mode === previousMode) return;
     if (snapshot.phase === "playing" && previousPhase !== "playing") {
       sfx.ambient(true);
-      if (previousPhase === "lobby" || previousMode === undefined) sfx.ui("start");
+      if (previousPhase === "lobby" || previousMode === undefined) sfx.ui("ui:start");
     }
     if (snapshot.phase === "results") {
       sfx.ambient(false);
       if (snapshot.mode !== "sandbox" && snapshot.winner) {
-        const winnerEntry = snapshot.players.find((player) => player.name === snapshot.winner);
+        const winnerEntry = snapshot.players.find((player) => player.id === snapshot.winner);
         sfx.ui(winnerEntry?.id === selfId ? "victory" : "defeat");
       }
     }
@@ -532,10 +568,15 @@ class ArenaScene extends Phaser.Scene {
   setVisualPreferences() {
     if (!visualPrefs.gore) {
       this.decals = [];
+      this.decalLayer?.clear();
       this.gibs = [];
       this.particles = this.particles.filter((particle) => particle.kind !== "blood");
     }
   }
+
+  private lastRosterHtml = "";
+  private lastWeaponHtml = "";
+  private lastLimbsHtml = "";
 
   private updateHud(snapshot: ServerSnapshot) {
     const mine = snapshot.players.find((player) => player.id === selfId);
@@ -543,12 +584,40 @@ class ArenaScene extends Phaser.Scene {
     $("hud-room").textContent = roomCode ? `SPIRE ${roomCode}` : "";
     $("hud-sector").textContent = map.sector;
     $("hud-phase").textContent = snapshot.mode === "sandbox" ? "SOLO TEST" : snapshot.phase === "results" ? "SPIRE RESOLVED" : "LIVE";
-    $("hud-roster").innerHTML = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
+    // HUD blocks rebuild only when their content actually changed (names,
+    // lives, weapon, cooldown bars). Cuts three innerHTML parses per snapshot
+    // during steady-state combat — the biggest remaining main-thread cost.
+    const rosterHtml = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
+    if (rosterHtml !== this.lastRosterHtml) {
+      this.lastRosterHtml = rosterHtml;
+      $("hud-roster").innerHTML = rosterHtml;
+    }
     if (!mine) return;
     const weapon = WEAPONS[mine.weapon];
-    $("hud-weapon").innerHTML = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>AMMO</small><div><i style="--cool:${Math.min(1, mine.primaryCooldown / Math.max(0.01, weapon.primary.cooldown))}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown))}">K</i></div></div>`;
+    const chargeReadout = weapon.primary.chargeMax !== undefined ? Math.max(0.02, mine.charge ?? 0) : Math.min(1, mine.primaryCooldown / Math.max(0.01, weapon.primary.cooldown));
+    const weaponHtml = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>AMMO</small><div><i style="--cool:${chargeReadout.toFixed(2)}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown)).toFixed(2)}">K</i></div></div>`;
+    if (weaponHtml !== this.lastWeaponHtml) {
+      this.lastWeaponHtml = weaponHtml;
+      $("hud-weapon").innerHTML = weaponHtml;
+    }
+    // Rising charge tone: fire on charge thresholds so it sweeps without spamming.
+    if (weapon.primary.chargeMax !== undefined) {
+      const charge = mine.charge ?? 0;
+      const step = Math.floor(charge * 6);
+      if (charge > 0.05 && step !== this.lastChargeStep) {
+        this.lastChargeStep = step;
+        sfx.charge(charge, mine.weapon);
+      }
+      this.lastChargeStep = charge > 0.05 ? step : -1;
+    } else {
+      this.lastChargeStep = -1;
+    }
     const limbLabels: Array<[LimbId, string]> = [["leftArm", "LA"], ["rightArm", "RA"], ["leftLeg", "LL"], ["rightLeg", "RL"]];
-    $("hud-limbs").innerHTML = `<span>BODY INTEGRITY</span><div>${limbLabels.map(([id, label]) => `<i class="${mine.limbs[id] <= 0 ? "lost" : ""}"><b>${label}</b><em><u style="width:${mine.limbs[id]}%"></u></em></i>`).join("")}</div>`;
+    const limbsHtml = `<span>BODY INTEGRITY</span><div>${limbLabels.map(([id, label]) => `<i class="${mine.limbs[id] <= 0 ? "lost" : ""}"><b>${label}</b><em><u style="width:${mine.limbs[id]}%"></u></em></i>`).join("")}</div>`;
+    if (limbsHtml !== this.lastLimbsHtml) {
+      this.lastLimbsHtml = limbsHtml;
+      $("hud-limbs").innerHTML = limbsHtml;
+    }
   }
 
   private processEvents(events: CombatEvent[]) {
@@ -564,42 +633,123 @@ class ArenaScene extends Phaser.Scene {
       if (event.type === "attack") {
         sfx.play(`attack:${event.weaponId}:${event.secondary ? "sec" : "pri"}`, at(event.x, event.y));
         const facing = actor?.facing || 1;
-        const length = event.pattern === "piercing" ? 150 : event.pattern === "cluster" ? 44 : event.pattern === "dashSlash" || event.pattern === "slash" ? 34 : event.secondary ? 105 : 72;
-        this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: 0.12, color, width: event.pattern === "piercing" ? 4 : event.pattern === "slash" || event.pattern === "dashSlash" ? 7 : event.secondary ? 5 : 2 });
-        this.spawnBurst(event.x, event.y, color, event.count ? Math.min(18, event.count * 3) : event.secondary ? 11 : 7, event.pattern === "cluster" ? "energy" : "spark", actor?.facing || 1);
-        if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(event.x + facing * 24, event.y - 8, color, 14, "energy", facing);
+        const charge = event.charge ?? 0;
+        // Beam: full-range light line refreshed every tick so held fire reads as one continuous lance.
+        if (event.pattern === "beam") {
+          const range = WEAPONS[event.weaponId!].primary.range;
+          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * range, y2: event.y, life: 0.15, color, width: 3.5, core: 1.6, jitter: 1.6 });
+          this.spawnBurst(event.x + facing * 6, event.y, color, 3, "flash", facing);
+          // Beam impact sparks spray ahead of the muzzle along the beam.
+          if (Math.random() < 0.6) this.spawnBurst(event.x + facing * (60 + Math.random() * 240), event.y, 0xffefc3, 2, "spark", facing);
+          // End-of-beam sparks: the lance chews into whatever stops it.
+          this.spawnBurst(event.x + facing * range, event.y, 0xffefc3, 2, "spark", -facing as 1 | -1 | 0);
+        } else if (event.weaponId === "sniper" && !event.secondary) {
+          // Charged rail: width/glow scale with charge; full release adds a shock ring and boom.
+          const width = 2.5 + charge * 7;
+          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * (300 + charge * 900), y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
+          this.spawnBurst(event.x + facing * 8, event.y, color, 6 + Math.round(charge * 16), "flash", facing);
+          if (charge >= 0.95) {
+            this.rings.push({ x: event.x, y: event.y, life: 0.5, maxLife: 0.5, radius: 12, color, width: 5, grow: 120, double: true });
+            this.spawnBurst(event.x, event.y, 0xffe6f2, 26, "spark", facing);
+            this.spawnBurst(event.x, event.y, 0xffe6f2, 8, "flash", 0);
+            sfx.railBoom();
+            this.shake(1.5, true);
+          }
+        } else {
+          const length = event.pattern === "piercing" ? 170 : event.pattern === "cluster" ? 44 : event.pattern === "dashSlash" || event.pattern === "slash" ? 34 : event.secondary ? 105 : 72;
+          const width = event.pattern === "piercing" ? 4 + charge * 3 : event.pattern === "slash" || event.pattern === "dashSlash" ? 7 : event.secondary ? 5 : 2.5;
+          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: event.pattern === "piercing" ? 0.16 : 0.12, color, width });
+          this.spawnBurst(event.x + facing * 6, event.y, color, event.pattern === "piercing" ? 8 : 3, "flash", facing);
+          if (event.count) this.spawnBurst(event.x, event.y, color, Math.min(18, event.count * 3), event.pattern === "cluster" ? "energy" : "spark", facing);
+          if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(event.x + facing * 24, event.y - 8, color, 14, "energy", facing);
+          // Heavy single shots (scatter pellet volleys, rocket launches) get a muzzle ring.
+          if (event.weaponId === "scatter" && !event.secondary) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 8, color, width: 3 });
+          if (event.weaponId === "rocket") this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 10, color, width: 3 });
+        }
       } else if (event.type === "crateSpawn") {
         sfx.play("crateSpawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y - 16, color, 18, "energy", 0);
         this.tracers.push({ x1: event.x, y1: event.y - 48, x2: event.x, y2: event.y + 4, life: 0.24, color, width: 3 });
       } else if (event.type === "cratePickup") {
-        sfx.play("cratePickup", at(event.x, event.y));
-        this.spawnBurst(event.x, event.y, color, 20, "spark", 0);
-        this.spawnBurst(event.x, event.y - 16, color, 10, "energy", 0);
+        if (event.crateKind === "repair") {
+          sfx.play("repair", at(event.x, event.y));
+          // Green restore flash + rings mark a repair cell grab.
+          this.spawnBurst(event.x, event.y, 0x4fd07a, 26, "energy", 0);
+          this.spawnBurst(event.x, event.y, 0xd8ffe6, 8, "flash", 0);
+          this.rings.push({ x: event.x, y: event.y, life: 0.34, maxLife: 0.34, radius: 8, color: 0x4fd07a, width: 3, grow: 55, double: true });
+        } else {
+          sfx.play("cratePickup", at(event.x, event.y));
+          this.spawnBurst(event.x, event.y, color, 20, "spark", 0);
+          this.spawnBurst(event.x, event.y - 16, color, 10, "energy", 0);
+        }
+      } else if (event.type === "impact") {
+        // Projectile death on a surface: chips, flash, hole — scaled by speed.
+        const isFlame = event.weaponId === "scatter" && event.secondary;
+        const isRocket = event.weaponId === "rocket";
+        const s = event.strength;
+        if (isFlame) {
+          sfx.play("impact", { ...at(event.x, event.y), strength: s });
+          this.spawnBurst(event.x, event.y, 0xf06b2f, 8, "energy", 0);
+          this.spawnBurst(event.x, event.y, 0xf0a14a, 5, "spark", 0);
+          // Lingering embers curl up from the flame splash.
+          this.spawnBurst(event.x, event.y - 4, 0xf0873c, 3, "smoke", 0);
+        } else if (isRocket) {
+          sfx.play("impact", { ...at(event.x, event.y), strength: s });
+          this.spawnBurst(event.x, event.y, 0xf0a14a, 10, "spark", 0);
+          this.spawnBurst(event.x, event.y, 0xffdca0, 5, "flash", 0);
+          this.spawnBurst(event.x, event.y, 0x343b3b, 6, "smoke", 0);
+        } else {
+          sfx.play("impact", { ...at(event.x, event.y), strength: s });
+          this.spawnBurst(event.x, event.y, color, Math.round(5 + s * 9), "spark", 0);
+          this.spawnBurst(event.x, event.y, 0xfff3d0, 2, "flash", 0);
+          if (s >= 0.55) this.rings.push({ x: event.x, y: event.y, life: 0.2, maxLife: 0.2, radius: 3, color, width: 2, grow: 26 });
+        }
+        // Bullet hole stamped permanently next to blood decals.
+        if (visualPrefs.gore) this.stampDecal({ x: event.x, y: event.y + 3, radius: 1.6 + s * 1.6, alpha: 0.5, rotation: Math.random() * Math.PI });
       } else if (event.type === "hit") {
         sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         if (visualPrefs.gore) {
-          this.spawnBurst(event.x, event.y, 0x8d151d, Math.round(10 + event.strength * 10), "blood", target?.facing || 1);
-          this.decals.push({ x: event.x, y: Math.min(520, event.y + 18), radius: 4 + event.strength * 5, alpha: 0.35, rotation: Math.random() * Math.PI });
-          this.decals = this.decals.slice(-48);
-        } else this.spawnBurst(event.x, event.y, 0xe0b66d, 12, "spark", 0);
+          this.spawnBurst(event.x, event.y, 0x8d151d, Math.round(14 + event.strength * 18), "blood", target?.facing || 1);
+          this.spawnBurst(event.x, event.y, 0xd42636, Math.round(5 + event.strength * 6), "blood", target?.facing || 1);
+          this.stampDecal({ x: event.x, y: Math.min(520, event.y + 18), radius: 4 + event.strength * 5, alpha: 0.35, rotation: Math.random() * Math.PI });
+          // Droplets scatter around the main stain.
+          for (let drop = 0; drop < 2; drop++) {
+            this.stampDecal({ x: event.x + (Math.random() - 0.5) * 26, y: Math.min(522, event.y + 14 + Math.random() * 10), radius: 1.2 + Math.random() * 1.8, alpha: 0.3, rotation: Math.random() * Math.PI });
+          }
+        } else this.spawnBurst(event.x, event.y, 0xe0b66d, 14, "spark", 0);
+        this.spawnBurst(event.x, event.y, 0xfff3d0, Math.round(3 + event.strength * 5), "flash", 0);
+        if (event.strength >= 0.45) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 5, color: 0xffd9a0, width: 2.5, grow: 40 + event.strength * 40 });
+        if (event.strength >= 0.6) this.punchHitstop(event.strength);
         this.shake(event.strength, target?.id === selfId);
       } else if (event.type === "explosion") {
         sfx.play("explosion", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
-        this.spawnBurst(event.x, event.y, 0xf06b2f, 40, "energy", 0);
-        this.spawnBurst(event.x, event.y, 0x343b3b, 24, "smoke", 0);
+        // Layered fireball: white-hot core flash, orange fireball ring, embers, smoke.
+        this.spawnBurst(event.x, event.y, 0xfff3d0, 8, "flash", 0);
+        this.spawnBurst(event.x, event.y, 0xf06b2f, 34, "energy", 0);
+        this.spawnBurst(event.x, event.y, 0xf0a14a, 14, "spark", 0);
+        this.spawnBurst(event.x, event.y, 0x343b3b, 18, "smoke", 0);
+        this.rings.push({ x: event.x, y: event.y, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 90, double: true });
+        this.punchHitstop(event.strength);
         this.shake(event.strength, true);
       } else if (event.type === "dismember") {
         sfx.play("dismember", { ...at(event.x, event.y), priority: "high" });
         if (visualPrefs.gore && event.limbId) {
           this.gibs.push({ x: event.x, y: event.y, vx: (Math.random() - 0.5) * 250, vy: -180 - Math.random() * 120, life: 5, color: target?.color || 0x8d151d, limb: event.limbId });
           this.gibs = this.gibs.slice(-16);
-          this.spawnBurst(event.x, event.y, 0x751018, 28, "blood", 0);
+          this.spawnBurst(event.x, event.y, 0x751018, 34, "blood", 0);
+          this.spawnBurst(event.x, event.y, 0xa8182a, 8, "flash", 0);
         }
+        this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 6, color: 0xc22538, width: 3, grow: 60 });
+        this.punchHitstop(0.8);
         this.shake(1.2, target?.id === selfId);
       } else if (event.type === "death") {
         sfx.play("death", { ...at(event.x, event.y), priority: "high" });
-        this.spawnBurst(event.x, event.y, visualPrefs.gore ? 0x6e0d16 : 0xd7aa56, visualPrefs.gore ? 50 : 24, visualPrefs.gore ? "blood" : "spark", 0);
+        this.spawnBurst(event.x, event.y, visualPrefs.gore ? 0x6e0d16 : 0xd7aa56, visualPrefs.gore ? 44 : 26, visualPrefs.gore ? "blood" : "spark", 0);
+        this.spawnBurst(event.x, event.y, 0xfff3d0, 10, "flash", 0);
+        this.rings.push({ x: event.x, y: event.y, life: 0.55, maxLife: 0.55, radius: 10, color: target?.color || 0xf0a14a, width: 4, grow: 130, double: true });
+        // Kill pillar: a vertical light shaft marks the elimination spot.
+        this.tracers.push({ x1: event.x, y1: Math.max(0, event.y - 210), x2: event.x, y2: event.y + 26, life: 0.4, color: target?.color || 0xf0a14a, width: 7, core: 2.6 });
+        this.punchHitstop(1.2);
         this.shake(1.4, true);
       } else if (event.type === "respawn") {
         sfx.play("respawn", at(event.x, event.y));
@@ -613,11 +763,17 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private spawnBurst(x: number, y: number, color: number, count: number, kind: FxParticle["kind"], direction: number) {
-    for (let index = 0; index < count && this.particles.length < 200; index++) {
+    // Adaptive density: solo shots keep full juice, particle storms throttle
+    // instead of melting the frame budget.
+    const pool = this.particles.length;
+    const density = pool > 200 ? 0.35 : pool > 140 ? 0.65 : 1;
+    const scaled = Math.max(1, Math.round(count * density));
+    for (let index = 0; index < scaled && this.particles.length < 170; index++) {
       const angle = direction ? (Math.random() - 0.5) * 1.8 + (direction > 0 ? 0 : Math.PI) : Math.random() * Math.PI * 2;
-      const speed = 45 + Math.random() * (kind === "smoke" ? 80 : 260);
-      const life = kind === "smoke" ? 0.7 + Math.random() * 0.8 : 0.25 + Math.random() * 0.7;
-      this.particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - (kind === "blood" ? 80 : 0), life, maxLife: life, size: kind === "smoke" ? 8 + Math.random() * 12 : 2 + Math.random() * 4, color, gravity: kind === "blood" ? 540 : kind === "spark" ? 260 : kind === "smoke" ? -18 : 40, kind });
+      const speed = kind === "flash" ? 20 + Math.random() * 60 : 45 + Math.random() * (kind === "smoke" ? 80 : 260);
+      const life = kind === "flash" ? 0.1 + Math.random() * 0.08 : kind === "smoke" ? 0.7 + Math.random() * 0.8 : 0.25 + Math.random() * 0.7;
+      const size = kind === "flash" ? 7 + Math.random() * 9 : kind === "smoke" ? 8 + Math.random() * 12 : 2 + Math.random() * 4;
+      this.particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - (kind === "blood" ? 80 : 0), life, maxLife: life, size, color, gravity: kind === "blood" ? 540 : kind === "spark" ? 260 : kind === "smoke" ? -18 : kind === "flash" ? -30 : 40, kind });
     }
   }
 
@@ -651,6 +807,8 @@ class ArenaScene extends Phaser.Scene {
     this.gibs = this.gibs.filter((gib) => gib.life > 0);
     for (const tracer of this.tracers) tracer.life -= dt;
     this.tracers = this.tracers.filter((tracer) => tracer.life > 0);
+    for (const ring of this.rings) ring.life -= dt;
+    this.rings = this.rings.filter((ring) => ring.life > 0);
   }
 
   private draw(time: number) {
@@ -658,7 +816,6 @@ class ArenaScene extends Phaser.Scene {
     if (!snapshot) return;
     const map = MAPS[snapshot.config.mapId];
     for (const [mapId, background] of this.backgrounds) background.setVisible(mapId === snapshot.config.mapId);
-    for (const [mapId, far] of this.farBackgrounds) far.setVisible(mapId === snapshot.config.mapId);
     this.graphics.clear();
     drawEnvironment(this.graphics, snapshot.config.mapId, time, this.backgrounds.has(snapshot.config.mapId));
     this.drawDecals();
@@ -669,7 +826,7 @@ class ArenaScene extends Phaser.Scene {
     }
     for (const hazard of snapshot.hazards) drawHazard(this.graphics, hazard, map.accent, time);
     for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
-    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation);
+    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind);
     for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile);
     this.drawTracers();
     this.drawParticles();
@@ -695,14 +852,6 @@ class ArenaScene extends Phaser.Scene {
         this.backgrounds.set(mapId, background);
       };
       source.src = MAPS[mapId].backgroundAsset;
-      const farSource = new Image();
-      farSource.onload = () => {
-        const key = `far-${mapId}`;
-        if (!this.textures.exists(key)) this.textures.addImage(key, farSource);
-        const far = this.add.image(WORLD.width / 2, WORLD.height / 2, key).setDisplaySize(WORLD.width * 1.12, WORLD.height * 1.12).setDepth(-3).setVisible(this.snapshot?.config.mapId === mapId);
-        this.farBackgrounds.set(mapId, far);
-      };
-      farSource.src = `/assets/environments/${mapId}-far.webp`;
       const materialSource = new Image();
       materialSource.onload = () => {
         const key = `material-${mapId}`;
@@ -749,6 +898,22 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 
+  // Decals are static once placed: stamp them into a persistent RenderTexture
+  // instead of redrawing up to 48 ellipses every frame.
+  private stampDecal(decal: Decal) {
+    try {
+      this.decalLayer ||= this.add.renderTexture(0, 0, WORLD.width, WORLD.height).setOrigin(0, 0).setDepth(-0.5);
+      const brush = this.make.graphics({ x: 0, y: 0 }, false);
+      brush.fillStyle(0x5e0a12, decal.alpha);
+      brush.fillEllipse(decal.x, decal.y, decal.radius * 2.4, decal.radius * 0.8);
+      brush.fillCircle(decal.x + Math.cos(decal.rotation) * decal.radius, decal.y, decal.radius * 0.35);
+      this.decalLayer.draw(brush);
+      brush.destroy();
+    } catch {
+      // RenderTexture unavailable: drop the decal rather than break the frame.
+    }
+  }
+
   private drawAtmosphere(time: number) {
     const snapshot = this.snapshot;
     if (!snapshot) return;
@@ -757,7 +922,7 @@ class ArenaScene extends Phaser.Scene {
       this.atmosphereMap = mapId;
       this.atmosphere = [];
       if (mapId === "canopy") {
-        for (let index = 0; index < 50; index++) this.atmosphere.push({ x: Math.random() * (WORLD.width + 200), y: Math.random() * WORLD.height, vx: -140, vy: 460, kind: "rain" });
+        for (let index = 0; index < 36; index++) this.atmosphere.push({ x: Math.random() * (WORLD.width + 200), y: Math.random() * WORLD.height, vx: -140, vy: 460, kind: "rain" });
       } else if (mapId === "fortress") {
         for (let index = 0; index < 35; index++) this.atmosphere.push({ x: Math.random() * WORLD.width, y: Math.random() * WORLD.height, vx: 6 + Math.random() * 10, vy: -5 - Math.random() * 9, kind: "dust" });
       } else {
@@ -793,7 +958,8 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private drawDecals() {
-    if (!visualPrefs.gore) return;
+    // Fallback only: decals are stamped into decalLayer when available.
+    if (!visualPrefs.gore || this.decalLayer) return;
     for (const decal of this.decals) {
       this.graphics.fillStyle(0x5e0a12, decal.alpha);
       this.graphics.fillEllipse(decal.x, decal.y, decal.radius * 2.4, decal.radius * 0.8);
@@ -803,10 +969,37 @@ class ArenaScene extends Phaser.Scene {
 
   private drawTracers() {
     for (const tracer of this.tracers) {
-      this.graphics.lineStyle(tracer.width + 4, tracer.color, Math.min(0.22, tracer.life * 2));
+      // Beams and charged rails crackle: jittered segments replace the plain halo pass.
+      if (tracer.jitter) {
+        const segments = 4;
+        const stepX = (tracer.x2 - tracer.x1) / segments;
+        for (let index = 0; index < segments; index++) {
+          const x1 = tracer.x1 + stepX * index;
+          const y1 = tracer.y1 + (Math.random() - 0.5) * tracer.jitter * 4;
+          const x2 = tracer.x1 + stepX * (index + 1);
+          const y2 = tracer.y1 + (Math.random() - 0.5) * tracer.jitter * 4;
+          this.graphics.lineStyle(tracer.width + 7, tracer.color, Math.min(0.22, tracer.life * 1.6));
+          this.graphics.lineBetween(x1, y1, x2, y2);
+        }
+      } else {
+        this.graphics.lineStyle(tracer.width + 6, tracer.color, Math.min(0.32, tracer.life * 2));
+        this.graphics.lineBetween(tracer.x1, tracer.y1, tracer.x2, tracer.y2);
+      }
+      this.graphics.lineStyle(tracer.width, tracer.color, Math.min(0.9, tracer.life * 5));
       this.graphics.lineBetween(tracer.x1, tracer.y1, tracer.x2, tracer.y2);
-      this.graphics.lineStyle(tracer.width, 0xffefc3, Math.min(1, tracer.life * 9));
+      this.graphics.lineStyle(tracer.core ?? tracer.width * 0.5, 0xffefc3, Math.min(1, tracer.life * 9));
       this.graphics.lineBetween(tracer.x1, tracer.y1, tracer.x2, tracer.y2);
+    }
+    for (const ring of this.rings) {
+      const t = 1 - ring.life / ring.maxLife;
+      const eased = 1 - (1 - t) * (1 - t);
+      const radius = ring.radius + eased * (ring.grow ?? 46);
+      this.graphics.lineStyle(ring.width, ring.color, (1 - t) * 0.85);
+      this.graphics.strokeCircle(ring.x, ring.y, radius);
+      if (ring.double) {
+        this.graphics.lineStyle(Math.max(1, ring.width * 0.5), 0xffefc3, (1 - t) * 0.9);
+        this.graphics.strokeCircle(ring.x, ring.y, radius * 0.72);
+      }
     }
   }
 
@@ -819,6 +1012,12 @@ class ArenaScene extends Phaser.Scene {
       } else if (particle.kind === "spark") {
         this.graphics.lineStyle(Math.max(1, particle.size / 2), particle.color, alpha);
         this.graphics.lineBetween(particle.x, particle.y, particle.x - particle.vx * 0.025, particle.y - particle.vy * 0.025);
+      } else if (particle.kind === "flash") {
+        // Hot core with a soft halo reads as a muzzle/explosion flash.
+        this.graphics.fillStyle(particle.color, alpha * 0.28);
+        this.graphics.fillCircle(particle.x, particle.y, particle.size * (2.4 - alpha) + 2);
+        this.graphics.fillStyle(0xfffdf5, alpha * 0.95);
+        this.graphics.fillCircle(particle.x, particle.y, particle.size * alpha * 0.7 + 1);
       } else {
         this.graphics.fillStyle(particle.color, alpha * 0.9);
         this.graphics.fillCircle(particle.x, particle.y, particle.size * alpha + 1);
@@ -855,6 +1054,19 @@ class ArenaScene extends Phaser.Scene {
     label.setText(`${player.name.toUpperCase()}  ${player.lives}`).setPosition(position.x, position.y - 48).setVisible(player.respawnTimer <= 0);
     if (player.respawnTimer > 0) return;
     drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId);
+    if ((player.charge ?? 0) > 0.02) {
+      const charge = player.charge!;
+      const cx = position.x;
+      const cy = position.y - 38;
+      this.graphics.lineStyle(3.5, 0x1c2325, 0.9);
+      this.graphics.beginPath();
+      this.graphics.arc(cx, cy, 11, Math.PI * 0.75, Math.PI * 2.25);
+      this.graphics.strokePath();
+      this.graphics.lineStyle(3.5, charge >= 1 ? 0xffe6f2 : 0xd797c7, 0.95);
+      this.graphics.beginPath();
+      this.graphics.arc(cx, cy, 11, Math.PI * 0.75, Math.PI * 0.75 + Math.PI * 1.5 * charge);
+      this.graphics.strokePath();
+    }
   }
 
   private drawForeground(mapId: MapId, time: number) {
