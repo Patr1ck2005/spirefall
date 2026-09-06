@@ -74,7 +74,14 @@ export type Room = {
   hazardHits: Map<string, number>;
   jumpHeld: Map<string, boolean>;
   winner?: string;
+  /** M20 balance instrumentation: per-weapon shots / hits / damage / kills. */
+  stats: WeaponStats;
 };
+
+type WeaponStats = Record<string, { shots: number; hits: number; damage: number; kills: number }>;
+
+const weaponStatsBucket = (): WeaponStats => ({});
+const statsEntry = (stats: WeaponStats, weaponId: string) => (stats[weaponId] ??= { shots: 0, hits: 0, damage: 0, kills: 0 });
 
 const rooms = new Map<string, Room>();
 const blankInput = (): ClientInput => ({ seq: 0, left: false, right: false, jump: false, drop: false, primary: false, secondary: false });
@@ -133,6 +140,7 @@ function createRoom(client: Client, name: string) {
     reconnectTimers: new Map(),
     hazardHits: new Map(),
     jumpHeld: new Map(),
+    stats: weaponStatsBucket(),
   };
   client.room = room;
   room.players.set(client.id, makePlayer(client.id, name.slice(0, 16) || "Player", 0, room.config));
@@ -202,7 +210,7 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.players.delete(client.id);
     room.tokens.delete(client.id);
     room.jumpHeld.delete(client.id);
-    // A room with no connected humans (bots only) is dead weight 鈥?dissolve it.
+    // A room with no connected humans (bots only) is dead weight �?dissolve it.
     if (humanCount(room) === 0) rooms.delete(room.code);
     broadcastRoom(room);
     client.room = undefined;
@@ -363,10 +371,12 @@ function respawnSandboxPlayer(room: Room, playerId: string) {
 function setConfig(room: Room, patch: Partial<MatchConfig>) {
   if (room.phase !== "lobby") return;
   const mapId = patch.mapId && patch.mapId in MAPS ? patch.mapId : room.config.mapId;
-  const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 6);
+  const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 7);
   if (requestedWeapons && !requestedWeapons.includes("sidearm")) {
     requestedWeapons.unshift("sidearm");
-    requestedWeapons.length = 6; // re-trim: sidearm may have pushed the set past 6
+    // Trim ONLY on overflow: setting length on a shorter array would grow it
+    // with sparse holes, and every WEAPONS[weaponSet[slot]] reader would crash.
+    if (requestedWeapons.length > 7) requestedWeapons.length = 7;
   }
   const botSkill = patch.botSkill === "casual" || patch.botSkill === "brutal" ? patch.botSkill : patch.botSkill === "standard" ? patch.botSkill : room.config.botSkill;
   room.config = {
@@ -390,6 +400,44 @@ function intersectsCircle(a: { x: number; y: number; r: number }, b: { x: number
   return Math.hypot(a.x - b.x, a.y - b.y) <= a.r + b.r;
 }
 
+// Echo Shard ricochet: reflect the shard off the struck platform face using
+// the pre-move position to pick the axis (both on corner strikes) and push it
+// back out of the collision band so the same platform cannot re-trigger on the
+// next tick. Returns false when the shard is already fully embedded (fizzle it).
+function bounceProjectile(projectile: ProjectileState, platform: Platform, dt: number) {
+  const prevX = projectile.x - projectile.vx * dt;
+  const prevY = projectile.y - projectile.vy * dt;
+  const r = projectile.radius;
+  const fromLeft = prevX <= platform.x;
+  const fromRight = prevX >= platform.x + platform.width;
+  const fromAbove = prevY <= platform.y;
+  const fromBelow = prevY >= platform.y + platform.height;
+  let bounced = false;
+  if ((fromLeft && projectile.vx > 0) || (fromRight && projectile.vx < 0)) {
+    projectile.vx = -projectile.vx;
+    projectile.x = fromLeft ? platform.x - r - 0.5 : platform.x + platform.width + r + 0.5;
+    bounced = true;
+  }
+  if ((fromAbove && projectile.vy > 0) || (fromBelow && projectile.vy < 0)) {
+    projectile.vy = -projectile.vy;
+    projectile.y = fromAbove ? platform.y - 8.5 : platform.y + platform.height + 8.5;
+    bounced = true;
+  }
+  if (!bounced) {
+    // Fully embedded (spawned inside the band, corner tunneling): flip along
+    // the dominant velocity axis and rewind to the pre-move spot.
+    if (Math.abs(projectile.vx) >= Math.abs(projectile.vy)) {
+      projectile.vx = -projectile.vx;
+      projectile.x = prevX;
+    } else {
+      projectile.vy = -projectile.vy;
+      projectile.y = prevY;
+    }
+    return true;
+  }
+  return true;
+}
+
 function intersectsPlayerRect(player: PlayerState, rect: { x: number; y: number; width: number; height: number }) {
   return player.x + PLAYER_HALF_WIDTH > rect.x && player.x - PLAYER_HALF_WIDTH < rect.x + rect.width && player.y + PLAYER_FOOT_OFFSET > rect.y && player.y - PLAYER_BODY_HEIGHT < rect.y + rect.height;
 }
@@ -411,20 +459,26 @@ function damage(
   details: { actorId?: string; weaponId?: WeaponId; secondary?: boolean; explosive?: boolean; lethal?: boolean } = {},
 ) {
   if (victim.invulnerable > 0 || victim.respawnTimer > 0 || isEliminated(room, victim)) return;
+  // M20 balance instrumentation: attribute hits/damage/kills to the weapon.
+  if (room.mode === "match" && details.weaponId) {
+    const entry = statsEntry(room.stats, details.weaponId);
+    entry.hits += 1;
+    entry.damage += amount;
+  }
   victim.vx += (victim.x >= sourceX ? 1 : -1) * force;
   victim.vy -= force * 0.42;
   victim.hitFlash = 0.13;
   if (details.lethal) {
     // Execution shots (full-charge Voltrail) bypass limbs entirely.
     emitEvent(room, "hit", hitX, hitY, 1.4, { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary });
-    loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+    loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot", true, details.actorId, details.weaponId);
     return;
   }
   if (details.explosive) {
     for (const limbId of LIMB_IDS) applyLimbDamage(room, victim, limbId, amount * 0.5, details);
-    // Explosive splash grinds all four limbs evenly 鈥?check for a bleed-out too.
+    // Explosive splash grinds all four limbs evenly �?check for a bleed-out too.
     if (LIMB_IDS.every((limbId) => victim.limbs[limbId] <= 0)) {
-      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot", true, details.actorId, details.weaponId);
       return;
     }
   } else {
@@ -432,17 +486,17 @@ function damage(
     const living = LIMB_IDS.filter((candidate) => victim.limbs[candidate] > 0);
     if (!living.length) {
       // Quad-destroy: a pilot with no intact limbs bleeds out.
-      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot", true, details.actorId, details.weaponId);
       return;
     }
     // Destroyed-limb hits and head-zone hits (no limb resolved) carry over to
-    // a living limb instead of being clamped away 鈥?no invincible stump-tanking.
+    // a living limb instead of being clamped away �?no invincible stump-tanking.
     if (!limbId || victim.limbs[limbId] <= 0) {
       limbId = living[Math.floor(Math.random() * living.length)];
     }
     applyLimbDamage(room, victim, limbId, amount, details);
     if (LIMB_IDS.every((candidate) => victim.limbs[candidate] <= 0)) {
-      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot");
+      loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot", true, details.actorId, details.weaponId);
       return;
     }
   }
@@ -474,6 +528,12 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
     count: def.count,
     charge: def.chargeMax !== undefined ? chargeFraction : undefined,
   });
+  // M20 balance instrumentation: one shot per trigger pull (projectiles keep
+  // per-round resolution below, hits are counted in damage()).
+  if (room.mode === "match") {
+    const entry = statsEntry(room.stats, player.weapon);
+    entry.shots += def.kind === "hitscan" && def.pattern === "burst" ? def.count : 1;
+  }
 
   if (def.kind === "melee") {
     if (def.pattern === "dashSlash") {
@@ -498,7 +558,7 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       const angle = (shot - (shots - 1) / 2) * def.spread;
       const directionX = Math.cos(angle) * player.facing;
       const directionY = Math.sin(angle);
-      // M19: the ray stops at the first solid cover — lasers and bullets no
+      // M19: the ray stops at the first solid cover �?lasers and bullets no
       // longer reach (or damage) anything behind a wall.
       const rayEndX = originX + directionX * range;
       const rayEndY = originY + directionY * range;
@@ -549,6 +609,7 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       originX,
       originY,
       travelled: 0,
+      bouncesRemaining: def.bounces ?? 0,
     });
   }
 }
@@ -558,8 +619,8 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
 // death events. Sandbox mode never eliminates anyone.
 const isEliminated = (room: Room, player: PlayerState) => room.mode !== "sandbox" && player.lives <= 0;
 
-function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard" | "shot", emit = true) {
-  if (player.respawnTimer > 0 || isEliminated(room, player)) return;
+function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard" | "shot", emit = true, killerId?: string, killerWeapon?: WeaponId): boolean {
+  if (player.respawnTimer > 0 || isEliminated(room, player)) return false;
   if (room.mode === "sandbox") player.lives = room.config.lives;
   else player.lives -= 1;
   player.vx = 0;
@@ -567,7 +628,12 @@ function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: 
   player.jumpsUsed = 0;
   player.charge = 0;
   player.respawnTimer = room.mode === "sandbox" || player.lives > 0 ? 1.5 : 2.5;
-  if (emit) emitEvent(room, "death", x, y, cause === "hazard" ? 1.35 : cause === "shot" ? 1.2 : 1, { targetId: player.id });
+  // M20 kill feed: shot deaths carry the killer as actorId; hazards and falls
+  // stay unattributed (the feed reads "THE SPIRE").
+  if (emit) emitEvent(room, "death", x, y, cause === "hazard" ? 1.35 : cause === "shot" ? 1.2 : 1, { targetId: player.id, actorId: cause === "shot" ? killerId : undefined });
+  // M20 balance instrumentation: count an attributed kill for the weapon.
+  if (room.mode === "match" && cause === "shot" && killerWeapon) statsEntry(room.stats, killerWeapon).kills += 1;
+  return true;
 }
 
 function updateHazards(room: Room, previous: HazardState[], dt: number) {
@@ -843,6 +909,13 @@ function updateRoom(room: Room, dt: number) {
     let dead = projectile.ttl <= 0;
     if (!dead) for (const platform of map.platforms) {
       if (projectile.y > platform.y - 8 && projectile.y < platform.y + platform.height + 8 && projectile.x > platform.x && projectile.x < platform.x + platform.width) {
+        // Echo Shard ricochet: surviving shards reflect and keep flying.
+        if (projectile.pattern === "bounce" && projectile.bouncesRemaining > 0) {
+          bounceProjectile(projectile, platform, dt);
+          projectile.bouncesRemaining -= 1;
+          emitEvent(room, "impact", projectile.x, projectile.y, Math.min(0.9, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: "bounce", surface: true });
+          break;
+        }
         if (projectile.explosiveRadius) {
           // Rockets detonate on any surface, not just bodies.
           detonate(projectile, projectile.x, projectile.y);
@@ -886,7 +959,7 @@ function updateRoom(room: Room, dt: number) {
   if (room.mode === "match") {
     const alive = [...room.players.values()].filter((player) => !isEliminated(room, player) && (player.lives > 0 || player.respawnTimer > 0));
     // Match time limit: any stalemate (camping, unreachable standoff) resolves
-    // at 4 minutes 鈥?most lives, then most intact limbs wins. Winner is stored
+    // at 4 minutes �?most lives, then most intact limbs wins. Winner is stored
     // as the player ID: display names are not unique.
     if (room.tick > MATCH_TIME_LIMIT_TICKS && alive.length > 1) {
       room.phase = "results";
@@ -899,7 +972,7 @@ function updateRoom(room: Room, dt: number) {
       room.phase = "results";
       room.winner = alive[0]?.id;
       // The tick loop freezes at results, so the periodic broadcast may never
-      // fire again 鈥?push the final snapshot explicitly so every client
+      // fire again �?push the final snapshot explicitly so every client
       // actually sees the results screen.
       broadcastSnapshot(room);
     }
@@ -927,6 +1000,23 @@ function broadcastSnapshot(room: Room) {
 }
 
 const http = createServer((_request, response) => {
+  // M20 balance instrumentation: GET /stats aggregates per-weapon counters
+  // across every live room (shots / hits / damage / kills).
+  if (_request.url === "/stats") {
+    const aggregate: WeaponStats = {};
+    for (const room of rooms.values()) {
+      for (const [weaponId, entry] of Object.entries(room.stats)) {
+        const target = (aggregate[weaponId] ??= { shots: 0, hits: 0, damage: 0, kills: 0 });
+        target.shots += entry.shots;
+        target.hits += entry.hits;
+        target.damage += Math.round(entry.damage);
+        target.kills += entry.kills;
+      }
+    }
+    response.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    response.end(JSON.stringify(aggregate));
+    return;
+  }
   response.writeHead(200, { "content-type": "text/plain" });
   response.end("Spirefall server is running\n");
 });
@@ -951,7 +1041,7 @@ wss.on("connection", (ws) => {
     else if (message.type === "sandbox_respawn" && client.room && client.id === client.room.hostId) respawnSandboxPlayer(client.room, client.id);
     else if (message.type === "config" && client.room && client.id === client.room.hostId) setConfig(client.room, message.patch || {});
     else if (message.type === "input" && client.room) {
-      // Whitelist known input fields 鈥?never trust client payloads wholesale.
+      // Whitelist known input fields �?never trust client payloads wholesale.
       const raw = message.input || {};
       client.input = {
         seq: Number(raw.seq) || client.input.seq + 1,
@@ -961,7 +1051,7 @@ wss.on("connection", (ws) => {
         drop: raw.drop === true,
         primary: raw.primary === true,
         secondary: raw.secondary === true,
-        weaponSlot: raw.weaponSlot === undefined ? undefined : Math.max(1, Math.min(6, Number(raw.weaponSlot) || 0)) || undefined,
+        weaponSlot: raw.weaponSlot === undefined ? undefined : Math.max(1, Math.min(7, Number(raw.weaponSlot) || 0)) || undefined,
       };
     }
     else if (message.type === "leave_room" && client.room) leaveRoom(client);
@@ -981,7 +1071,7 @@ setInterval(() => {
 const port = Number(process.env.PORT || 8787);
 http.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {
-    console.error(`[Spirefall] Port ${port} is already in use 鈥?probably another Spirefall launcher window is still open.`);
+    console.error(`[Spirefall] Port ${port} is already in use �?probably another Spirefall launcher window is still open.`);
     console.error("[Spirefall] Close that window (or kill the old node process) and start again.");
   } else {
     console.error("[Spirefall] Server error:", error);

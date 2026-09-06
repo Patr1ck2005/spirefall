@@ -152,8 +152,19 @@ export function drawPlatformCaps(graphics: Phaser.GameObjects.Graphics, mapId: M
       for (let y = platform.y + 10; y < platform.y + platform.height - 6; y += 16) {
         graphics.fillRect(platform.x + 4, y, platform.width - 8, 3);
       }
-      graphics.lineStyle(2, map.accent, 0.85);
+      graphics.lineStyle(2, map.accent, 1);
       graphics.strokeRect(platform.x + 1, platform.y + 1, platform.width - 2, platform.height - 2);
+      // Corner brackets: the wall keeps its "blocks shots" silhouette even on
+      // bright backgrounds (Canopy's cloud band) where a thin stroke washes out.
+      graphics.lineStyle(3, map.accent, 0.95);
+      graphics.lineBetween(platform.x - 3, platform.y - 3, platform.x + 7, platform.y - 3);
+      graphics.lineBetween(platform.x - 3, platform.y - 3, platform.x - 3, platform.y + 7);
+      graphics.lineBetween(platform.x + platform.width + 3, platform.y - 3, platform.x + platform.width - 7, platform.y - 3);
+      graphics.lineBetween(platform.x + platform.width + 3, platform.y - 3, platform.x + platform.width + 3, platform.y + 7);
+      graphics.lineBetween(platform.x - 3, platform.y + platform.height + 3, platform.x + 7, platform.y + platform.height + 3);
+      graphics.lineBetween(platform.x - 3, platform.y + platform.height + 3, platform.x - 3, platform.y + platform.height - 7);
+      graphics.lineBetween(platform.x + platform.width + 3, platform.y + platform.height + 3, platform.x + platform.width - 7, platform.y + platform.height + 3);
+      graphics.lineBetween(platform.x + platform.width + 3, platform.y + platform.height + 3, platform.x + platform.width + 3, platform.y + platform.height - 7);
       graphics.fillStyle(0xf2f5f2, 0.5);
       graphics.fillRect(platform.x, platform.y, platform.width, 2);
       continue;
@@ -262,12 +273,13 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
   }
 }
 
-export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile: { weaponId: WeaponId; secondary: boolean; pattern?: string; x: number; y: number; vx: number; vy: number; radius: number }) {
+export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile: { weaponId: WeaponId; secondary: boolean; pattern?: string; x: number; y: number; vx: number; vy: number; radius: number; bouncesRemaining?: number }) {
   const color = WEAPONS[projectile.weaponId].color;
   const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
   const isRocket = projectile.weaponId === "rocket";
   const isFlame = projectile.weaponId === "scatter" && projectile.secondary;
-  const trailLength = isRocket ? 46 : isFlame ? 20 : projectile.pattern === "cluster" ? 30 : projectile.pattern === "piercing" ? 52 : projectile.secondary ? 24 : 14;
+  const isShard = projectile.pattern === "bounce";
+  const trailLength = isRocket ? 46 : isFlame ? 20 : isShard ? 26 : projectile.pattern === "cluster" ? 30 : projectile.pattern === "piercing" ? 52 : projectile.secondary ? 24 : 14;
   const trailX = projectile.x - projectile.vx / speed * trailLength;
   const trailY = projectile.y - projectile.vy / speed * trailLength;
   if (isFlame) {
@@ -275,6 +287,43 @@ export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile
     graphics.fillCircle(projectile.x, projectile.y, projectile.radius + 3 + Math.random() * 2);
     graphics.fillStyle(0xf0a14a, 0.8);
     graphics.fillCircle(projectile.x, projectile.y, projectile.radius);
+    return;
+  }
+  // Echo Shard: spinning resonant shard — an elongated diamond along the
+  // flight vector with twin afterimage ghosts; remaining bounces brighten it.
+  if (isShard) {
+    const ux = projectile.vx / speed;
+    const uy = projectile.vy / speed;
+    const glow = 0.5 + 0.14 * (projectile.bouncesRemaining ?? 0);
+    for (let ghost = 2; ghost >= 1; ghost--) {
+      const gx = projectile.x - ux * 9 * ghost;
+      const gy = projectile.y - uy * 9 * ghost;
+      graphics.fillStyle(color, 0.16 * ghost);
+      graphics.fillCircle(gx, gy, projectile.radius + 1);
+    }
+    graphics.fillStyle(color, glow);
+    graphics.fillPoints([
+      { x: projectile.x + ux * 7, y: projectile.y + uy * 7 },
+      { x: projectile.x - uy * 3, y: projectile.y + ux * 3 },
+      { x: projectile.x - ux * 7, y: projectile.y - uy * 7 },
+      { x: projectile.x + uy * 3, y: projectile.y - ux * 3 },
+    ], true);
+    // Dark under-stroke first: the light-blue shard must hold its silhouette
+    // against Canopy's bright cloud band, not just the dark factory.
+    graphics.lineStyle(2.5, 0x12181c, 0.9);
+    graphics.strokePoints([
+      { x: projectile.x + ux * 7, y: projectile.y + uy * 7 },
+      { x: projectile.x - uy * 3, y: projectile.y + ux * 3 },
+      { x: projectile.x - ux * 7, y: projectile.y - uy * 7 },
+      { x: projectile.x + uy * 3, y: projectile.y - ux * 3 },
+    ], true);
+    graphics.lineStyle(1.5, 0xeaf6ff, 0.85);
+    graphics.strokePoints([
+      { x: projectile.x + ux * 7, y: projectile.y + uy * 7 },
+      { x: projectile.x - uy * 3, y: projectile.y + ux * 3 },
+      { x: projectile.x - ux * 7, y: projectile.y - uy * 7 },
+      { x: projectile.x + uy * 3, y: projectile.y - ux * 3 },
+    ], true);
     return;
   }
   // Rocket exhaust: hot core then fading smoke puffs along the tail.

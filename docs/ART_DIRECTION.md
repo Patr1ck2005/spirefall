@@ -110,3 +110,25 @@ Far-parallax plates (`<map>-far.webp`) were generated on 2026-08-23 but retired 
 - Blood decals: at most 48.
 - Detached visual parts: at most 16, recycled after 5 seconds.
 - The Gore and Camera shake preferences are local-only and default to enabled.
+
+## M20 visual audit (2026-09)
+
+Screenshot review across all three sectors after M19, with fixes:
+
+- **Cover wall silhouette on bright backdrops** — Canopy's cloud band washed
+  out the thin accent stroke, so solid cover now draws its accent at full
+  opacity plus four corner brackets (top/bottom, both sides). The wall keeps
+  its "blocks shots" silhouette against any background.
+- **Echo Shard readability** — the light-blue shard is tinted against Canopy's
+  sky, so the flying shard gained a dark under-stroke beneath its white edge
+  line; the silhouette now reads on every sector.
+- **Fortress searchlight beams** — reviewed; they read as environment light
+  (fixed lamp emitters, angled cones), not tracers. Kept as-is.
+- **Blood fade curve** — the 8-second ×0.85 decay reviewed in live play;
+  pools persist through a duel but a match ends with a clean arena. Kept.
+- **Kill feed / vignette** — new HUD layers styled to the existing panel
+  language (dark slab, 2px accent edge); the vignette is a soft inset glow,
+  not a flat overlay.
+- `docs/screenshots/` regenerated from the current build via
+  `npx tsx tests/tools/refresh-screenshots.ts` (solo sectors, Fortress duel
+  hero shot, four-player load frame).

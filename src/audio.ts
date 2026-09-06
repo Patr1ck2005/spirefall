@@ -197,6 +197,16 @@ const weapons: Record<string, (out: AudioNode, g: number) => void> = {
     noise(0.2, "bandpass", 900, 3800, 1.8, g * 0.6, out);
     tone("sine", 2400, 3300, 0.1, g * 0.16, out, 0.09);
   },
+  // Echo Shard: resonant glass ping (primary volley) and a heavy harmonic
+  // thud with a crystalline tail (secondary slug).
+  "attack:echo:pri": (out, g) => {
+    tone("triangle", 1980, 1240, 0.14, g * 0.24, out);
+    tone("sine", 2640, 2100, 0.1, g * 0.12, out, 0.02);
+  },
+  "attack:echo:sec": (out, g) => {
+    tone("sine", 220, 90, 0.24, g * 0.5, out);
+    tone("triangle", 1560, 780, 0.2, g * 0.2, out, 0.03);
+  },
 };
 
 const ui: Record<string, (out: AudioNode, g: number) => void> = {
@@ -235,6 +245,12 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
   death: (out, g) => {
     tone("sawtooth", 220, 55, 0.5, g * 0.4, out);
     noise(0.42, "lowpass", 900, 120, 0.7, g * 0.6, out);
+  },
+  // M20 kill confirm: a bright two-note rising sting distinct from the victim
+  // death thud — plays only on the killer's client.
+  kill: (out, g) => {
+    tone("triangle", 620, 620, 0.08, g * 0.3, out);
+    tone("triangle", 930, 930, 0.12, g * 0.3, out, 0.07);
   },
   respawn: (out, g) => {
     tone("sine", 480, 920, 0.22, g * 0.3, out);

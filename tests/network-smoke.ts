@@ -250,6 +250,54 @@ const soloLobby = await returnedToLobby;
 assert(soloLobby.room.phase === "lobby", "Solo sandbox did not return to the lobby");
 assert(soloLobby.room.mode === "match", "Returning to the lobby did not reset match mode");
 
+// --- M20: Echo Shard (slot 7) ricochet. Shards fly flat, arc under gravity,
+// strike the ground and reflect — the same projectile must survive the impact
+// with a lower bouncesRemaining budget. ---
+const echoRoom = await open();
+echoRoom.send(JSON.stringify({ type: "create", name: "Echo-Pilot" }));
+const echoCreated = await waitFor(echoRoom, "room");
+// Partial weapon set without sidearm: regression for the M20 sparse-array
+// crash (unshift + unconditional length trim used to grow the set with holes).
+echoRoom.send(JSON.stringify({ type: "config", patch: { mapId: "fortress", lives: 1, crates: false, weaponSet: ["echo"] } }));
+const echoLobby = await waitFor(echoRoom, "room");
+assert(JSON.stringify(echoLobby.room.config.weaponSet) === JSON.stringify(["sidearm", "echo"]), `Partial weapon set was not normalized to [sidearm, echo] (got ${JSON.stringify(echoLobby.room.config.weaponSet)})`);
+// Restore the full armory so slot 7 maps to Echo Shard for the slot checks.
+echoRoom.send(JSON.stringify({ type: "config", patch: { weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo"] } }));
+await waitFor(echoRoom, "room");
+echoRoom.send(JSON.stringify({ type: "start_sandbox" }));
+await waitFor(echoRoom, "snapshot");
+// weaponSlot 7 must select Echo Shard (the old 1-6 clamp rejected it).
+echoRoom.send(JSON.stringify({ type: "input", input: { seq: 10, weaponSlot: 7 } }));
+let echoSelected = false;
+for (let i = 0; i < 10 && !echoSelected; i++) {
+  const message = await waitFor(echoRoom, "snapshot", 5000);
+  echoSelected = message.snapshot.players.find((p: any) => p.id === echoCreated.selfId)?.weapon === "echo";
+}
+assert(echoSelected, "weaponSlot 7 did not select the Echo Shard (clamp still capped at 6?)");
+// weaponSlot 8 clamps to 7 — the weapon stays Echo Shard, never a crash.
+echoRoom.send(JSON.stringify({ type: "input", input: { seq: 11, weaponSlot: 8 } }));
+let echoStillHeld = false;
+for (let i = 0; i < 6 && !echoStillHeld; i++) {
+  const message = await waitFor(echoRoom, "snapshot", 5000);
+  echoStillHeld = message.snapshot.players.find((p: any) => p.id === echoCreated.selfId)?.weapon === "echo";
+}
+assert(echoStillHeld, "weaponSlot 8 did not clamp to slot 7");
+// Fire and watch an echo projectile survive a surface impact.
+let bounceBudgetSpent = false;
+let bounceImpactSeen = false;
+echoRoom.send(JSON.stringify({ type: "input", input: { seq: 12, primary: true } }));
+for (let i = 0; i < 40 && !(bounceBudgetSpent && bounceImpactSeen); i++) {
+  const message = await waitFor(echoRoom, "snapshot", 5000);
+  bounceImpactSeen ||= message.snapshot.events.some((event: any) => event.type === "impact" && event.weaponId === "echo" && event.pattern === "bounce" && event.surface === true);
+  const shard = message.snapshot.projectiles.find((projectile: any) => projectile.weaponId === "echo" && projectile.ttl > 0 && projectile.bouncesRemaining < (projectile.secondary ? 5 : 3));
+  bounceBudgetSpent ||= !!shard;
+}
+echoRoom.send(JSON.stringify({ type: "input", input: { seq: 13, primary: false } }));
+assert(bounceImpactSeen, "Echo Shard produced no bounce impact event at a surface");
+assert(bounceBudgetSpent, "Echo Shard never survived an impact with a spent bounce budget");
+echoRoom.send(JSON.stringify({ type: "return_lobby" }));
+echoRoom.close();
+
 // --- Bot pilots: lobby roster, match start with 1 human + 2 bots, activity ---
 const botHost = await open();
 botHost.send(JSON.stringify({ type: "create", name: "Pilot-Prime" }));

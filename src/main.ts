@@ -1,9 +1,12 @@
 import Phaser from "phaser";
 import { sfx } from "./audio";
 import {
+  LIMB_IDS,
   MAPS,
+  PLAYER_TARGET_OFFSET,
   WEAPONS,
   WORLD,
+  clamp,
   raycastSolids,
   surfaceBelow,
   type CombatEvent,
@@ -112,10 +115,12 @@ app.innerHTML = `
         <div id="game"></div>
         <div class="game-hud">
           <div class="hud-top"><div><span id="hud-room"></span><small id="hud-sector"></small></div><div id="hud-phase" class="hud-phase"></div><div id="hud-roster" class="hud-roster"></div></div>
+          <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
           <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
           <div id="weapon-panel" class="weapon-panel hidden"></div>
           <button id="in-match-leave" class="quiet hud-leave">Exit match</button>
         </div>
+        <div id="vignette" class="vignette" aria-hidden="true"></div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn">Test respawn</button><button id="sandbox-return">Return to lobby</button></div>
         <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Spire resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave spire</button></div></div>
       </div>
@@ -438,6 +443,11 @@ class ArenaScene extends Phaser.Scene {
   private hitstop: Hitstop | undefined;
   private lastHitstopAt = 0;
   private processedEvents = new Set<number>();
+  // M20 combat feedback: inbound-hit direction arcs around the own pilot,
+  // the low-health vignette level, and kill-feed DOM timers.
+  private hitMarkers: Array<{ angle: number; life: number }> = [];
+  private vignetteLevel = 0;
+  private killFeedTimers = new Set<ReturnType<typeof setTimeout>>();
 
   /** Drop processed-event ids when switching rooms (ids restart per room). */
   clearProcessedEvents() {
@@ -445,6 +455,7 @@ class ArenaScene extends Phaser.Scene {
     this.lastChargeStep = -1;
     this.lastSeenTick = 0;
     this.resetGore();
+    this.clearFeedback();
   }
   private lastChargeStep = -1;
   private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
@@ -466,7 +477,7 @@ class ArenaScene extends Phaser.Scene {
     this.input.keyboard!.addCapture("TAB");
     this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown", (event: KeyboardEvent) => {
-      if (event.key >= "1" && event.key <= "6") this.sendInput(Number(event.key));
+      if (event.key >= "1" && event.key <= "7") this.sendInput(Number(event.key));
     });
     this.input.on("wheel", (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
       const mine = this.snapshot?.players.find((player) => player.id === selfId);
@@ -766,6 +777,13 @@ class ArenaScene extends Phaser.Scene {
         if (event.strength >= 0.45) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 5, color: 0xffd9a0, width: 2.5, grow: 40 + event.strength * 40 });
         if (event.strength >= 0.6) this.punchHitstop(event.strength);
         this.shake(event.strength, target?.id === selfId);
+        // M20: when I am the victim, remember the attacker's bearing so a red
+        // arc can pulse around my pilot pointing back at the shooter.
+        if (target?.id === selfId && actor && event.actorId !== selfId) {
+          const angle = Math.atan2(actor.y - (mine?.y ?? 0), actor.x - (mine?.x ?? 0));
+          this.hitMarkers.push({ angle, life: 0.6 });
+          if (this.hitMarkers.length > 6) this.hitMarkers = this.hitMarkers.slice(-6);
+        }
       } else if (event.type === "explosion") {
         sfx.play("explosion", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         // Layered fireball: white-hot core flash, orange fireball ring, embers, smoke.
@@ -798,6 +816,10 @@ class ArenaScene extends Phaser.Scene {
         this.tracers.push({ x1: event.x, y1: Math.max(0, event.y - 210), x2: event.x, y2: event.y + 26, life: 0.4, color: target?.color || 0xf0a14a, width: 7, core: 2.6 });
         this.punchHitstop(1.2);
         this.shake(1.4, true);
+        // M20 kill feed: every client sees the attribution row; the killer's
+        // own client also gets the rising confirm sting.
+        this.addKillFeed(event, target, actor);
+        if (event.actorId && event.actorId === selfId) sfx.play("kill", { priority: "high" });
       } else if (event.type === "respawn") {
         sfx.play("respawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y, target?.color || 0x56d9d0, 32, "energy", 0);
@@ -829,6 +851,53 @@ class ArenaScene extends Phaser.Scene {
     const duration = Math.min(250, 100 + strength * 85);
     const intensity = Math.min(0.012, 0.003 + strength * 0.005);
     this.cameras.main.shake(duration, intensity, true);
+  }
+
+  // M20 kill feed: killer ▸ weapon bar ▸ victim. Hazards and falls arrive
+  // without a killer (actorId undefined) and read as "THE SPIRE".
+  private addKillFeed(event: CombatEvent, victim?: PlayerState, killer?: PlayerState) {
+    const feed = $("kill-feed");
+    if (!feed) return;
+    const weapon = event.weaponId ? WEAPONS[event.weaponId] : undefined;
+    const name = (player?: PlayerState) => player ? `${escapeHtml(player.name)}${player.isBot ? " [BOT]" : ""}` : "—";
+    const killerHtml = killer
+      ? `<b style="--pilot:${colorCss(killer.color)}">${name(killer)}</b>`
+      : `<b class="spire-kill">THE SPIRE</b>`;
+    const victimHtml = `<b style="--pilot:${colorCss(victim?.color ?? 0xf0a14a)}">${name(victim)}</b>`;
+    const row = document.createElement("div");
+    row.className = "kill-entry";
+    row.innerHTML = `${killerHtml}<i class="kill-arrow">▸</i>${weapon ? `<i class="kill-weapon" style="--weapon:${colorCss(weapon.color)}" title="${weapon.label}"></i>` : ""}<i class="kill-arrow">▸</i>${victimHtml}`;
+    feed.appendChild(row);
+    while (feed.childElementCount > 4) feed.firstElementChild?.remove();
+    const timer = setTimeout(() => {
+      row.classList.add("fading");
+      setTimeout(() => {
+        row.remove();
+        this.killFeedTimers.delete(timer);
+      }, 600);
+    }, 3400);
+    this.killFeedTimers.add(timer);
+  }
+
+  private clearFeedback() {
+    for (const timer of this.killFeedTimers) clearTimeout(timer);
+    this.killFeedTimers.clear();
+    $("kill-feed").replaceChildren();
+    this.hitMarkers = [];
+    this.vignetteLevel = 0;
+    this.lastVignetteValue = -1;
+  }
+
+  private lastVignetteValue = 0;
+
+  private setVignette(level: number) {
+    const vignette = $("vignette");
+    if (!vignette) return;
+    const next = Math.round(clamp(level, 0, 1) * 100) / 100;
+    if (next === this.lastVignetteValue) return;
+    this.lastVignetteValue = next;
+    vignette.style.setProperty("--vignette", next.toFixed(2));
+    vignette.classList.toggle("active", next > 0);
   }
 
   private updateEffects(dt: number) {
@@ -863,6 +932,18 @@ class ArenaScene extends Phaser.Scene {
     this.tracers = this.tracers.filter((tracer) => tracer.life > 0);
     for (const ring of this.rings) ring.life -= dt;
     this.rings = this.rings.filter((ring) => ring.life > 0);
+    for (const marker of this.hitMarkers) marker.life -= dt;
+    this.hitMarkers = this.hitMarkers.filter((marker) => marker.life > 0);
+    // M20 vignette: drive the red overlay from my total limb integrity.
+    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    if (mine) {
+      const total = LIMB_IDS.reduce((sum, limbId) => sum + mine.limbs[limbId], 0);
+      const severity = total < 150 ? clamp((150 - total) / 150, 0, 1) : 0;
+      this.vignetteLevel = severity;
+      this.setVignette(severity * (0.55 + 0.25 * Math.sin(performance.now() / 260)));
+    } else {
+      this.setVignette(0);
+    }
   }
 
   private draw(time: number) {
@@ -884,6 +965,7 @@ class ArenaScene extends Phaser.Scene {
     for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile);
     this.drawTracers();
     this.drawParticles();
+    this.drawHitMarkers();
     this.drawAtmosphere(time);
 
     const visible = new Set<string>();
@@ -1098,6 +1180,26 @@ class ArenaScene extends Phaser.Scene {
       return;
     }
     for (const decal of this.decals) this.paintDecal(this.graphics, decal);
+  }
+
+  /** M20: red bearing arcs around my pilot pointing back at recent shooters. */
+  private drawHitMarkers() {
+    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    if (!mine || !this.hitMarkers.length) return;
+    const cx = mine.x;
+    const cy = mine.y - PLAYER_TARGET_OFFSET;
+    for (const marker of this.hitMarkers) {
+      const alpha = Math.min(0.85, marker.life / 0.6 * 0.85);
+      const radius = 20 + (0.6 - marker.life) * 26;
+      this.graphics.lineStyle(3, 0xe0293c, alpha);
+      this.graphics.beginPath();
+      this.graphics.arc(cx, cy, radius, marker.angle - 0.5, marker.angle + 0.5);
+      this.graphics.strokePath();
+      this.graphics.lineStyle(1.2, 0xff6d7d, alpha * 0.8);
+      this.graphics.beginPath();
+      this.graphics.arc(cx, cy, radius + 4, marker.angle - 0.32, marker.angle + 0.32);
+      this.graphics.strokePath();
+    }
   }
 
   private drawTracers() {

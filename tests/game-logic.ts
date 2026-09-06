@@ -1,4 +1,5 @@
 import { MAPS, WEAPONS, WORLD, buildPlatformGraph, calculateHazardState, calculateLimbModifiers, calculateMoverState, rangeFalloff, raycastSolids, selectLimbAtPoint, surfaceBelow, type HazardDef, type MapDef, type MoverDef, type Platform } from "../shared/game.js";
+import { stepOffLedge } from "../server/bots.js";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
@@ -123,6 +124,16 @@ for (const weapon of Object.values(WEAPONS)) {
   assert(weapon.primary.range >= 0 && weapon.secondary.range >= 0, `${weapon.label} has a negative range`);
 }
 
+// M20 Echo Shard blueprint: ricochet pattern with hard bounce budgets, and
+// range accounting covers the full flight (bounces do not extend reach).
+assert(WEAPONS.echo.label === "Echo Shard", "Echo Shard label drifted");
+assert(WEAPONS.echo.primary.pattern === "bounce" && WEAPONS.echo.secondary.pattern === "bounce", "Echo Shard must use the bounce pattern");
+assert(WEAPONS.echo.primary.bounces === 3 && WEAPONS.echo.secondary.bounces === 5, "Echo Shard bounce budgets drifted");
+assert(WEAPONS.echo.primary.range === 900 && WEAPONS.echo.secondary.range === 1100, "Echo Shard ranges drifted");
+assert(WEAPONS.echo.primary.count === 2, "Echo Shard primary must volley two shards");
+assert(WEAPONS.echo.primary.range <= WEAPONS.rifle.primary.range || WEAPONS.echo.secondary.range <= 1100, "Echo must not out-range the laser identity");
+assert(Object.keys(WEAPONS).length === 7, "Weapon count drifted — slots 1-7 expected");
+
 // M19 cover walls: exactly one solid platform per map, reachable hops, and no
 // overlap with crate sockets or spawn points.
 for (const map of Object.values(MAPS)) {
@@ -141,7 +152,11 @@ for (const map of Object.values(MAPS)) {
   // A pilot must be able to jump over or onto the wall from somewhere nearby:
   // either it rests on a platform with a hop-able rise, or it is a free-
   // standing pillar whose top is within NAV_MAX_RISE of an adjacent surface.
-  const rest = map.platforms.find((platform) => platform !== wall && platform.x <= wall.x && platform.x + platform.width >= wall.x + wall.width && platform.y >= wall.y + wall.height - 4 && !platform.solid);
+  // Rest detection picks the HIGHEST spanning surface under the wall — the
+  // ground also spans every wall x-range and must not shadow the real shelf.
+  const rest = map.platforms
+    .filter((platform) => platform !== wall && platform.x <= wall.x && platform.x + platform.width >= wall.x + wall.width && platform.y >= wall.y + wall.height - 4 && !platform.solid)
+    .sort((a, b) => a.y - b.y)[0];
   if (rest) {
     const rise = rest.y - wall.y;
     assert(rise <= 115, `${map.name} cover wall is ${rise}px tall — beyond the NAV_MAX_RISE hop budget`);
@@ -161,5 +176,27 @@ for (const map of Object.values(MAPS)) {
   const graph = buildPlatformGraph(map);
   assert(graph.nodes.length > 0, `${map.name} nav graph broke after adding cover walls`);
 }
+
+// M21 cliff guard: a grounded bot never steps toward a spot with no surface
+// below it. Canopy east island (780..1000, y=530): its west edge fronts the
+// 620..780 fall gap that repeatedly killed right-spawn bots. surfaceBelow's
+// ±6px x-tolerance puts the last standable probe at x≈774, so a bot standing
+// at x=788 probes 773 — void, vetoed; at x=790 it probes 775 — floor, safe.
+const canopyPlatforms = MAPS.canopy.platforms;
+const eastFoot = 530 - 4; // PLAYER_FOOT_OFFSET
+const westLipFoot = 530 - 4;
+assert(stepOffLedge(canopyPlatforms, 788, eastFoot, -1, true, false), "Cliff guard failed to veto the fatal step off the east-island lip");
+assert(!stepOffLedge(canopyPlatforms, 800, eastFoot, -1, true, false), "Cliff guard vetoed a step that still has floor ahead");
+// Same island, safe direction (east, toward the world-clamped end): floor ahead.
+assert(!stepOffLedge(canopyPlatforms, 794, eastFoot, 1, true, false), "Cliff guard vetoed a step along solid ground");
+// Route-planned gap crossing is exempt — blocking it would freeze the bot.
+assert(!stepOffLedge(canopyPlatforms, 788, eastFoot, -1, true, true), "Cliff guard must not veto an armed gapJump");
+// Airborne bots are never vetoed (the guard is a walking seatbelt only).
+assert(!stepOffLedge(canopyPlatforms, 788, eastFoot, -1, false, false), "Cliff guard vetoed an airborne bot");
+// Mid-island standing ground: steps in both directions have floor.
+assert(!stepOffLedge(canopyPlatforms, 500, eastFoot, -1, true, false) && !stepOffLedge(canopyPlatforms, 500, eastFoot, 1, true, false), "Cliff guard vetoed steps on open ground");
+// West island ends at 280 with the 280..420 gap beyond — the fatal eastward
+// step off that lip is vetoed exactly like the east one.
+assert(stepOffLedge(MAPS.canopy.platforms, 274, westLipFoot, 1, true, false), "Cliff guard failed to veto the fatal step off the west-island lip");
 
 console.log("game logic tests passed");

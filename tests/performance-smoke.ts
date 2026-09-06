@@ -1,8 +1,8 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
+import { launchOptions, webUrl } from "./helpers/runtime.js";
 
-const edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
-const browser = await chromium.launch({ headless: true, executablePath: edge });
+const browser = await chromium.launch(launchOptions());
 
 // The browser must close even when an assertion throws, otherwise every failed
 // run leaks a four-page headless session that drags down later measurements.
@@ -10,14 +10,14 @@ try {
   const contexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext({ viewport: { width: 1280, height: 820 } })));
   const pages = await Promise.all(contexts.map((context) => context.newPage()));
 
-  await pages[0].goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+  await pages[0].goto(webUrl(), { waitUntil: "networkidle" });
   await pages[0].locator("#name").fill("Load-1");
   await pages[0].locator("#create").click();
   await pages[0].locator("#lobby:not(.hidden)").waitFor();
   const roomCode = (await pages[0].locator("#room-label").textContent())!.trim();
 
   for (let index = 1; index < pages.length; index++) {
-    await pages[index].goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+    await pages[index].goto(webUrl(), { waitUntil: "networkidle" });
     await pages[index].locator("#name").fill(`Load-${index + 1}`);
     await pages[index].locator("#room-code").fill(roomCode);
     await pages[index].locator("#join").click();

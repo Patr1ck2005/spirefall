@@ -247,6 +247,71 @@ public/assets/             生成位图：3 环境 + 3 材质 + 4 肖像
 **回归**：tsc/build + 七套全绿；performance **109.8 FPS / p95 13.7ms**（M19 后新高）。运维再验证：8787 旧进程陷阱 + DSH 会话 PORT=3080 继承坑（Start-Process 需显式 EnvironmentVariables["PORT"]="8787"）
 **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
 
+### M20 发布收尾 + 战斗反馈 + 平衡档案 + Echo Shard（2026-09，DSH/glm-5.3-flash）
+
+用户批准 M20 计划（四工作流 + 1 新武器）：MIT + CI 全量七套 + kill feed/受击方向/红晕/击杀确认音 + 平衡档案与有界微调 + 第 7 把武器（弹射类）+ 视觉审计。全部按计划完成：
+
+**A 发布收尾**
+- `LICENSE`（MIT, Wang Keren）；`.github/workflows/ci.yml`：ubuntu + Node 20，build → logic/smoke/ai（阻塞）→ browser/visual（阻塞）→ performance（**非阻塞**，CI runner 噪声大只报告；本地门禁不变）；`tests/helpers/runtime.ts`：`resolveBrowser()`（SPIREFALL_BROWSER > 本机 Edge 存在才用 > Playwright 内置 chromium）+ `webUrl()`/`wsEndpoint()`（SPIREFALL_WEB/WS 环境变量）——三个浏览器套件全部改走助手，本地行为不变，CI 可跑 chromium
+- README：CI + License 徽章、For maintainers 章节（tag 步骤/About 文案/测试环境变量说明）；`docs/RELEASE.md`：可直接粘贴的 About 描述 + topics + release note 模板 + 发布核对清单
+
+**C 战斗反馈（协议 additive：death 事件 +actorId 击杀者）**
+- 服务器 `loseLife(..., killerId?, killerWeapon?)`：shot 死亡透传击杀者（damage() 四条路径全接），机关/坠落无主（播报 "THE SPIRE"）
+- 客户端：`#kill-feed` HUD（击杀者▸武器色条▸受害者，[BOT] 标记，最多 4 条，4s 淡出+自移除）；受击方向红弧（hit 事件 target=自己时按射手方位画双层弧，0.6s 淡出，canvas 绘制）；残血红晕 `#vignette`（四肢总量 <150/400 时 CSS inset 阴影脉冲，严重度映射 --vignette 0-1）；击杀确认音 `kill`（双音上行 sting，death.actorId===selfId 时触发）
+- 房间切换/重开 clearFeedback()（feed 定时器/方向弧/红晕全清）
+
+**D 平衡档案 + 有界微调**
+- `docs/BALANCE.md`：方法论（kill pool 400/爆炸等效、DPS×falloff 三档、TTK、±25% 中位带微调规则——只动 damage/range，冷却冻结）；全 14 攻击 DPS/TTK 表由 `tests/tools/balance-table.ts` 从 WEAPONS 表生成（数据不是手抄）
+- 微调（规则内）：echo PRI 10→13、SEC 26→34（初版明显偏弱）；Longbeam/Voltrail 线形穿透类按多目标价值豁免并记录；blade/scatter 带缘豁免记录
+- **服务器武器统计**：Room.stats 每武器 shots/hits/damage/kills（仅 match 模式计数），`GET /stats` 聚合端点；`tests/tools/balance-harness.ts` 跑 bot 对局导出每武器命中/击杀表（实测两盘：scatter dmg/shot 19.0×2 kills、blade 27.2×1 kill、sidearm 4.4——与理论档位吻合）
+
+**E 新武器 Echo Shard（第 7 把，弹射反弹）**
+- shared：WeaponId+"echo"、AttackPattern+"bounce"、AttackDef+bounces、ProjectileState+bouncesRemaining；PRI 双碎片齐射（13×2, cd 0.55, 3 反弹, range 900）+ SEC 重型单碎片（34, 击退 300, 5 反弹, range 1100, 弹药 ×2）；DEFAULT weaponSet 含 echo
+- 服务器：`bounceProjectile()` 用 pre-move 位置定反射轴（角点双翻），推离碰撞带防同台连触发；range 硬上限覆盖全部反弹路程；弹药/箱/切枪/机器人全部自动继承
+- **顺手修真 bug（M19 遗留）**：setConfig 的 `length=7` 重裁在短数组上会扩出稀疏洞 → chooseWeapon 遍历 undefined 崩服务器；改为仅溢出时收缩 + chooseWeapon 防御性 continue；weaponSlot 钳制 6→7；network-smoke 新增部分武器集回归（["echo"] → [sidearm, echo] 归一）+ 弹射存活断言（同一弹丸 bouncesRemaining 递减）+ slot7/8 钳制
+- 客户端：菱形碎片贴图（速度向拉长 + 双残影 + **暗色底描边**保亮背景剪影）+ 反弹火花（bounce impact surface:true）；audio 双签名（玻璃 ping / 低音 thud）；按键 1-7；bot ENGAGEMENT_BAND.echo [200,700]
+
+**B 视觉审计**
+- 三图截图审查：fortress 搜索灯束读作环境光（保留）；factory 墙融入好；canopy 墙在云底偏弱 → solid 墙 accent α 1.0 + 四角角标（亮背景剪影）；echo 碎片加暗底描边（canopy 蓝天对比度）
+- 血迹淡出（8s×0.85）复核无需调整；`tests/tools/refresh-screenshots.ts` 一键再生全画廊（solo 三图 + Fortress duel hero + 四人负载帧，System.Drawing 转 JPG q82），docs/screenshots 七张全部更新
+- ART_DIRECTION.md 补 M20 审计记录
+
+**测试教训**：ai-smoke 全程 5-7 分钟（3×FFA 最长 400s + 70s aggression + 40s survival），executor 前台 300s 超时会误杀——放后台跑；tsx `-e` eval 不解析相对 import，探针一律落临时文件
+
+**回归**：build + 七套全绿；echo-only bot 对局验证机器人正确使用新武器
+**状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
+### M21 Bot 悬崖自杀修复（2026-09，DSH/glm-5.3-flash）
+
+用户实测反馈：右下角出生的 AI 老是跳进悬崖自杀（Canopy 东岛 780..1000，西 lip 外是 620..780 致命缺口）。
+
+**根因**（遥测 + 代码审计确认，两条独立致命路径）：
+1. **无崖边感知的走位**：弹道闪避 `waypoint = self.x + side*60`、反卡死强制行军（禁跳盲走 1.5s）、hopOver 落点覆写——全部直接写 waypoint 不看脚下；且 gapJump 豁免最初覆盖"武装后整段行走"，dodge 改向后 bot 带着豁免走出 lip。
+2. **跳跃弧线不足**（受压测试 DEATH 轨迹定位）：bot 跨第一缺口成功（742→553 落中岛），但第二跳起跳点在 532（距 lip 112px 的非 lip 短跳），弧线飞 239px 落在 293——差 13px 没上西岛（岛缘 280），坠亡。接地护栏管不到空中弧线。
+
+**修复**（server/bots.ts，协议零改动）：
+- `stepOffLedge()` 导出纯函数护栏：grounded 且前方 15px 探针（PLAYER_HALF_WIDTH+6）无 surfaceBelow → 否决该方向输入；挂在 executePlan 末尾兜住 dodge/forced march/hopOver/beeline 全部输入源。gapJump 豁免**收窄到起跳窗**（距目标 lip <40px 且 grounded）
+- 闪避方向安全翻转：首选侧无地面时翻向另一侧（真闪避而非原地挨打）
+- hopOver 落点 clamp 到当前导航节点 span 内
+- **空中补跳保险**：airborne + 有水平输入 + 脚下 surfaceBelow undefined（缺口上空）+ 0.33s 冷却到 → input.jump；server 端 jumpsUsed≤3 上限天然防无限跳
+
+**测试**：
+- game-logic 新增 stepOffLedge 单测 ×7（东/西 lip 致命步 veto、地面放行、gapJump 窗口豁免、空中不 veto、开阔地不 veto）——注意 surfaceBelow 的 ±6px x 容差把可站探针边界移到 774，测试几何按探针位置写
+- ai-smoke 新增 **cliff guard 受压测试**：canopy 沙盒，host 用 Echo Shard（slot 7 弹丸类）持续覆盖射击 30s 制造 incoming；断言 bot 坠落死亡 = 0（fall 死亡事件 y=WORLD.height=560 与 shot 死亡 y≈body-14 可区分），死亡时打印最后 40 tick 位置轨迹供取证。该测试两次抓到真实泄漏（blanket 豁免 1 次、短跳弧线 1 次）后归零——修复闭环的关键工具
+- **测试教训**：回归批次里 server 重启与 smoke 启动竞速会撞连接空窗（假失败）——重启后必须等端口就绪再跑批次
+
+**回归**：七套全绿；performance 74.1 FPS / p95 17.7ms
+**状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
+### M22 README 全面更新 + 截图再生 + v0.1.0 发布（2026-09，DSH/glm-5.3-flash）
+
+用户指令：全面更新 README + 全面更新截图 + 准备 git push（计划批准即 commit+push 授权）。
+
+- **README 七处更新**：Seven weapons fourteen attacks（含 Echo Shard 介绍）、honest ballistics 补 ricochet 范围一致性、特效段补 M20 战斗反馈（kill feed/受击方向弧/残血红晕）、音效段补 kill 确认、AI 段补 M21 悬崖护栏（闪避向地面侧翻转 + lip 止步 + 缺口上空补跳）、验证段补 slot7/弹射/受压测试/kill feed 断言、architecture 补 BALANCE/RELEASE、hero alt 与 About description 更新
+- **截图再生**：refresh-screenshots.ts hero 段改为持续开火 + 轮询 `#kill-feed .kill-entry`（≤75s）——新 match.jpg 右上角可见 "THE SPIRE ▸ Gallery" 播报条；7 张全部反映最新构建（墙角标/echo/M20 HUD）
+- **发布流**：单 commit 承载 M20+M21（同一工作树，测试验证的就是该状态）；`v0.1.0` tag 从陈旧的 a1a0c24 force-move 到新 commit（远端同 force 推送）；push master + tag
+- **回归**（推送前最终）：build + 七套全绿；performance 50.3 FPS / p95 29.5ms
+
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
 2. **用户验收 M19 弹道/血迹/AI 版本**（当前焦点）：Tab 面板射程条 → 散弹/火焰/火箭超程消散（火箭空爆）→ Longbeam 900/Voltrail 1400 激光 → 掩体柱挡弹 → 半空血迹不再悬浮、跨局清空 → bot 切枪/不隔墙开火/购箱。满意后批准提交（需 provenance trailer：模型名以用户确认为准）

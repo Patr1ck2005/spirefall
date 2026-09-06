@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PORT: "8787"
+      SPIREFALL_WS: ws://127.0.0.1:8787
+      SPIREFALL_WEB: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Playwright's bundled Chromium: cached by node_modules browser path +
+      # installed deps for headless shells on ubuntu.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Start authoritative game server
+        run: |
+          nohup npx tsx server/server.ts > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8787) 2>/dev/null; then exec 3>&- 3<&-; break; fi
+            sleep 1
+          done
+          (exec 3<>/dev/tcp/127.0.0.1/8787) || (echo "game server did not open port 8787" && cat server.log && exit 1)
+
+      - name: Logic + network + AI suites
+        run: |
+          npm run test:logic
+          npm run test:smoke
+          npm run test:ai
+
+      - name: Start web client
+        run: |
+          nohup npx vite --host 0.0.0.0 > vite.log 2>&1 &
+          echo $! > vite.pid
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5173) 2>/dev/null; then exec 3>&- 3<&-; break; fi
+            sleep 1
+          done
+          (exec 3<>/dev/tcp/127.0.0.1/5173) || (echo "vite did not open port 5173" && cat vite.log && exit 1)
+
+      - name: Browser + visual suites
+        run: |
+          npm run test:browser
+          npm run test:visual
+
+      # CI runners throttle rendering and share CPU with the server process, so
+      # the performance gate is reported but not enforced here. The >=45 FPS /
+      # p95 <=45ms gate is enforced on developer machines by the same suite.
+      - name: Performance suite (report only on CI)
+        continue-on-error: true
+        run: npm run test:performance
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            server.log
+            vite.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop background processes
+        if: always()
+        run: |
+          kill $(cat server.pid 2>/dev/null) 2>/dev/null || true
+          kill $(cat vite.pid 2>/dev/null) 2>/dev/null || true

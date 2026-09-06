@@ -1,15 +1,19 @@
 import {
   LIMB_IDS,
   MAPS,
+  PLAYER_FOOT_OFFSET,
+  PLAYER_HALF_WIDTH,
   WEAPONS,
   buildPlatformGraph,
   calculateHazardState,
   clamp,
   raycastSolids,
+  surfaceBelow,
   type BotSkill,
   type ClientInput,
   type LimbIntegrity,
   type MapId,
+  type Platform,
   type PlayerState,
   type PlatformGraph,
   type WeaponId,
@@ -96,6 +100,8 @@ type BotController = {
   wallStuckTicks: number;
   /** Cooldown (ticks) before the weapon manager may switch again. */
   switchCooldown: number;
+  /** Cooldown (ticks) between mid-air rescue jump inputs (M21). */
+  airRescueCooldown: number;
   /** Most recent attacker seen in events: { id, tick }. */
   lastAttacker: { id: string; tick: number } | undefined;
 };
@@ -167,6 +173,7 @@ export function ensureControllers(room: Room) {
       forcedTicks: 0,
       wallStuckTicks: 0,
       switchCooldown: 0,
+      airRescueCooldown: 0,
       lastAttacker: undefined,
     });
   }
@@ -180,6 +187,27 @@ function platformUnder(graph: PlatformGraph, x: number, footY: number) {
     if (surface >= footY - 14 && (!best || surface < best.surface)) best = { index: node.index, surface };
   }
   return best;
+}
+
+/**
+ * M21 cliff guard: given the bot's stance and an ordered horizontal move,
+ * should the ordered direction be vetoed? True when a grounded bot is about
+ * to step off a ledge — the probe point one half-width+6 ahead has no
+ * surface below it. `gapJumpExempt` passes the route planner's deliberate
+ * lip crossing through untouched (blocking it would freeze the bot outside
+ * its own takeoff window). Exported for direct unit testing.
+ */
+export function stepOffLedge(
+  mapPlatforms: Platform[],
+  x: number,
+  footY: number,
+  heading: -1 | 1,
+  onGround: boolean,
+  gapJumpExempt: boolean,
+): boolean {
+  if (!onGround || gapJumpExempt) return false;
+  const probeX = x + heading * (PLAYER_HALF_WIDTH + 6);
+  return surfaceBelow({ platforms: mapPlatforms }, probeX, footY) === undefined;
 }
 
 function nearestNodeIndex(graph: PlatformGraph, x: number, y: number) {
@@ -229,6 +257,9 @@ const ENGAGEMENT_BAND: Record<WeaponId, [number, number]> = {
   rocket: [250, 700],
   rifle: [250, 900],
   sniper: [500, 1400],
+  // Shards reward angled geometry: bots hold mid-range where a banked bounce
+  // can reach around cover but the direct line is still usable.
+  echo: [200, 700],
 };
 
 const bandScore = (weaponId: WeaponId, distance: number): number => {
@@ -313,6 +344,7 @@ const chooseWeapon = (room: Room, controller: BotController, percept: Percept): 
   for (let slot = 0; slot < weaponSet.length; slot++) {
     const weaponId = weaponSet[slot];
     const def = WEAPONS[weaponId];
+    if (!def) continue; // defensive: never trust the weapon set shape
     const ammo = percept.self.ammoByWeapon[weaponId] ?? 0;
     if (ammo < def.primary.ammoCost) continue;
     let score = bandScore(weaponId, distance);
@@ -428,7 +460,12 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
     // instead (movement keeps facing toward it, so both keep firing mid-hop).
     if (distance < 24 && Math.abs(dy) < 40) {
       const toward = Math.sign(dx) || 1;
-      plan.waypointX = percept.target.x + toward * 60;
+      // M21: the leapfrog landing must stay on the current nav surface —
+      // hopping a target near a lip otherwise arcs the bot over the gap.
+      const standingNode = fromNode && graph.nodes.find((node) => node.index === fromNode.index);
+      plan.waypointX = standingNode
+        ? clamp(percept.target.x + toward * 60, standingNode.left + 10, standingNode.right - 10)
+        : percept.target.x + toward * 60;
       plan.hopOver = true;
     }
 
@@ -469,12 +506,16 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
     // distance; re-evaluate once cover is broken.
   }
 
-  // Bullet dodging (tier-gated): sidestep incoming rounds.
+  // Bullet dodging (tier-gated): sidestep incoming rounds. M21: prefer the
+  // side that actually has floor — a dodge toward a fall gap trades one hit
+  // for a death, so flip the step when the first choice steps off the ledge.
   if (percept.incoming.length && Math.random() < tier.dodgeBullets) {
     const nearest = percept.incoming.reduce((best, candidate) => (candidate.distance < best.distance ? candidate : best));
     // Step perpendicular to the projectile's travel; jump if it hugs the ground.
     const side = nearest.vx > 0 ? -1 : 1;
-    plan.waypointX = self.x + side * 60;
+    const hasFloor = (direction: number) => self.onGround === false || surfaceBelow(map, self.x + direction * (PLAYER_HALF_WIDTH + 6), self.y + PLAYER_FOOT_OFFSET) !== undefined;
+    const dodgeSide = hasFloor(side) ? side : hasFloor(-side) ? -side : side;
+    plan.waypointX = self.x + dodgeSide * 60;
     if (nearest.y > self.y - 30 && self.onGround && Math.random() < 0.5) plan.hopOver = true;
   }
 
@@ -548,6 +589,19 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
     input.jump = false;
   }
 
+  // M21 mid-air rescue: a bot crossing a fall gap with horizontal intent and
+  // no floor beneath it spends its remaining jumps. Covers short hops (bad
+  // takeoff point, dodge-perturbed arcs) that drop the bot into the void
+  // between islands — the triple-jump budget exists precisely for this.
+  if (!self.onGround && (input.left || input.right)) {
+    const overVoid = surfaceBelow(MAPS[room.config.mapId], self.x, self.y + PLAYER_FOOT_OFFSET) === undefined;
+    if (overVoid && controller.airRescueCooldown <= 0) {
+      input.jump = true;
+      controller.airRescueCooldown = 20; // one rescue input per ~0.33s
+    }
+  }
+  if (controller.airRescueCooldown > 0) controller.airRescueCooldown--;
+
   // Weapon switch request: one-shot slot pulse consumed by stepPlayer.
   if (controller.plan.switchTo) {
     input.weaponSlot = controller.plan.switchTo;
@@ -620,6 +674,28 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
       else input.left = true;
     }
   }
+
+  // M21 cliff guard (last, so it sees every input source): a grounded bot
+  // never orders a step toward a spot with no surface below. Bullet dodges,
+  // forced marches and aim overrides all write raw waypoints without ledge
+  // awareness — this seatbelt stops the bot at the lip instead of walking
+  // into a fall gap. The gapJump exemption only applies inside the takeoff
+  // window (within 40px of the lip of the planned hop): a blanket exemption
+  // let a dodged/overwritten waypoint carry the bot off the lip while still
+  // wearing the "about to jump" pass. Descend lip-walks pass naturally (a
+  // shelf below is a surface); drop-through is vertical and unaffected.
+  const guardPlatforms = MAPS[room.config.mapId].platforms;
+  const gapJumpNearLip = (() => {
+    if (!controller.plan.gapJump || !self.onGround) return false;
+    const standing = platformUnder(graphOf(room.config.mapId), self.x, self.y + 8);
+    if (!standing) return false;
+    const span = graphOf(room.config.mapId).nodes.find((node) => node.index === standing.index)!;
+    const heading = Math.sign(controller.plan.waypointX - self.x) || 1;
+    const edgeX = heading > 0 ? span.right : span.left;
+    return Math.abs(edgeX - self.x) < 40;
+  })();
+  if (input.right && stepOffLedge(guardPlatforms, self.x, self.y + PLAYER_FOOT_OFFSET, 1, self.onGround, gapJumpNearLip)) input.right = false;
+  if (input.left && stepOffLedge(guardPlatforms, self.x, self.y + PLAYER_FOOT_OFFSET, -1, self.onGround, gapJumpNearLip)) input.left = false;
 }
 
 export function updateBots(room: Room, dt: number) {

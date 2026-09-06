@@ -14,9 +14,9 @@ export const PLAYER_HIT_RADIUS = 12;
 export const MAX_JUMPS = 3;
 
 export type MapId = "canopy" | "fortress" | "factory";
-export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade";
+export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade" | "echo";
 export type AttackKind = "projectile" | "hitscan" | "melee" | "explosive";
-export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash" | "beam";
+export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash" | "beam" | "bounce";
 export type MatchMode = "match" | "sandbox";
 export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
@@ -95,6 +95,8 @@ export type ProjectileState = {
   originY: number;
   /** Distance travelled from the muzzle; hard range caps kill at `range`. */
   travelled: number;
+  /** Echo Shard: remaining ricochets before the shard fizzles (0 = no bounce). */
+  bouncesRemaining: number;
 };
 
 export type CrateKind = "weapon" | "repair";
@@ -393,6 +395,8 @@ export type AttackDef = {
   chargeMax?: number;
   /** Minimum charge fraction (0-1) for the release to count as a shot. */
   chargeMin?: number;
+  /** Echo Shard ricochet count: how many platform impacts the shard survives. */
+  bounces?: number;
 };
 
 export type WeaponDef = {
@@ -426,6 +430,8 @@ const atk = (spec: Partial<AttackDef> & Pick<AttackDef, "kind" | "cooldown" | "d
 // M19 射程真实化：projectile 类硬上限首次生效（旧版 range 字段被完全忽略），
 // 激光定位超远（Longbeam 900 / Voltrail 1400），散弹收为 CQC。range 超过即
 // 消散（火箭空爆），60%-100% 射程段伤害线性衰减至 0.6。
+// M20 Echo Shard：几何反弹枪 —— 碎片撞平台按法线反射，可绕过掩体与拐角，
+// 奖励对地形/立柱的利用。range 仍是硬上限（含反弹段全部路程）。
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   sidearm: {
     id: "sidearm", label: "Vein Ripper", ammo: 90, color: 0xd8b45f,
@@ -457,6 +463,11 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     primary: atk({ kind: "melee", cooldown: 0.32, damage: 38, knockback: 270, recoil: 65, range: 70, pattern: "slash" }),
     secondary: atk({ kind: "melee", cooldown: 1.0, damage: 60, knockback: 520, recoil: 110, range: 130, pattern: "dashSlash", dashDistance: 92, dashSpeed: 560 }),
   },
+  echo: {
+    id: "echo", label: "Echo Shard", ammo: 48, color: 0x7fb8ff,
+    primary: atk({ kind: "projectile", cooldown: 0.55, damage: 13, knockback: 70, recoil: 20, speed: 620, radius: 4, range: 900, pattern: "bounce", count: 2, bounces: 3 }),
+    secondary: atk({ kind: "projectile", cooldown: 1.1, damage: 34, knockback: 300, recoil: 55, speed: 560, radius: 5, range: 1100, pattern: "bounce", count: 1, bounces: 5, ammoCost: 2 }),
+  },
 };
 
 /** Passive ammo regen per second for every weapon (keeps sustained fire viable). */
@@ -470,7 +481,7 @@ export const DEFAULT_CONFIG: MatchConfig = {
   mapId: "canopy",
   lives: 3,
   crates: true,
-  weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade"],
+  weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo"],
   bots: 0,
   botSkill: "standard",
 };
@@ -694,7 +705,7 @@ export const raycastSolids = (
  * land on (a fall gap). Drives blood-decal anchoring, gib bounces and bot
  * ground queries with one shared truth.
  */
-export const surfaceBelow = (map: MapDef, x: number, y: number): number | undefined => {
+export const surfaceBelow = (map: Pick<MapDef, "platforms">, x: number, y: number): number | undefined => {
   let best: number | undefined;
   for (const platform of map.platforms) {
     if (x < platform.x - 6 || x > platform.x + platform.width + 6) continue;

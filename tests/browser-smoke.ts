@@ -1,20 +1,20 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
+import { launchOptions, webUrl } from "./helpers/runtime.js";
 
-const edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
-const browser = await chromium.launch({ headless: true, executablePath: edge });
+const browser = await chromium.launch(launchOptions());
 const hostContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const guestContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const host = await hostContext.newPage();
 const guest = await guestContext.newPage();
 
-await host.goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+await host.goto(webUrl(), { waitUntil: "networkidle" });
 await host.locator("#name").fill("Alpha");
 await host.locator("#create").click();
 await host.locator("#lobby:not(.hidden)").waitFor();
 const roomCode = (await host.locator("#room-label").textContent())!.trim();
 
-await guest.goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+await guest.goto(webUrl(), { waitUntil: "networkidle" });
 await guest.locator("#name").fill("Bravo");
 await guest.locator("#room-code").fill(roomCode);
 await guest.locator("#join").click();
@@ -44,7 +44,7 @@ await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 })
 
 const soloContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const solo = await soloContext.newPage();
-await solo.goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+await solo.goto(webUrl(), { waitUntil: "networkidle" });
 await solo.locator("#name").fill("Solo");
 await solo.locator("#create").click();
 await solo.locator("#lobby:not(.hidden)").waitFor();
@@ -130,12 +130,26 @@ await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
 const panelText = await solo.locator("#weapon-panel").textContent();
 if (!panelText?.includes("Vein Ripper")) throw new Error("Weapon panel did not list the held weapon");
 // M19: every weapon row carries PRI/SEC range bars driven by --range vars.
+// M20: seven weapons now — Echo Shard joins the panel with its own bars.
+if (!panelText?.includes("Echo Shard")) throw new Error("Weapon panel did not list the Echo Shard (slot 7)");
 const rangeBars = await solo.locator("#weapon-panel .range-bar").count();
-if (rangeBars < 12) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 12 for 6 weapons × PRI/SEC)`);
+if (rangeBars < 14) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 14 for 7 weapons × PRI/SEC)`);
 const firstRange = await solo.locator("#weapon-panel .range-bar em").first().getAttribute("style");
 if (!firstRange?.includes("--range")) throw new Error("Range bar lacks its --range width variable");
 await solo.keyboard.up("Tab");
 await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout: 3000 });
+
+// M20 combat feedback HUD: the kill feed container and vignette overlay ship
+// with the game HUD; the lobby armory exposes all seven weapons.
+if ((await solo.locator("#kill-feed").count()) !== 1) throw new Error("Kill feed HUD container is missing");
+if ((await solo.locator("#vignette").count()) !== 1) throw new Error("Low-health vignette overlay is missing");
+const armoryOptions = await solo.locator("#weapon-options .weapon-option").count();
+if (armoryOptions !== 7) throw new Error(`Lobby armory does not list all seven weapons (found ${armoryOptions})`);
+// Slot 7 selects the Echo Shard in the sandbox (HUD confirms the switch).
+await selectWeapon(solo, "7", "Echo Shard");
+await solo.keyboard.down("j");
+await solo.waitForTimeout(700);
+await solo.keyboard.up("j");
 
 await solo.locator("#settings-button").click();
 await solo.locator("label").filter({ has: solo.locator("#gore-toggle") }).click();

@@ -1,7 +1,6 @@
 import { chromium, type Page } from "playwright";
 import { mkdir } from "node:fs/promises";
-
-const edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+import { launchOptions, webUrl } from "./helpers/runtime.js";
 const viewports = [
   { width: 1024, height: 768, name: "1024x768" },
   { width: 1280, height: 820, name: "1280x820" },
@@ -32,12 +31,12 @@ async function assertNoOverflow(page: Page, viewportName: string) {
 }
 
 await mkdir("test-results/visual", { recursive: true });
-const browser = await chromium.launch({ headless: true, executablePath: edge });
+const browser = await chromium.launch(launchOptions());
 
 for (const viewport of viewports) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:5173", { waitUntil: "networkidle" });
+  await page.goto(webUrl(), { waitUntil: "networkidle" });
   await page.screenshot({ path: `test-results/visual/menu-${viewport.name}.png`, fullPage: true });
   await assertNoOverflow(page, `${viewport.name} menu`);
 

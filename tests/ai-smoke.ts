@@ -175,6 +175,59 @@ async function botSurvival(mapId: string) {
   ws.close();
 }
 
+// 4. M21 cliff guard under fire: the Canopy east island (780..1000) has the
+// 620..780 fall gap on its west lip, and right-spawn bots used to walk off it
+// while dodging (dodge waypoints, forced marches and leapfrog aims all lacked
+// ledge awareness). The host plasters the arena with bouncing Echo Shards so
+// the bot keeps taking incoming fire; fall deaths (event y clamps to world
+// height) must stay at zero for the whole 30s window.
+async function cliffGuardPressure() {
+  const { ws, state } = await hostRoom("CliffGuard", { mapId: "canopy", lives: 3, bots: 1, botSkill: "standard", crates: false });
+  send(ws, "start_sandbox");
+  // Host switches to the Echo Shard (slot 7): projectile primaries are what
+  // trip the bot's dodge reaction, and ricochets keep flying past the lip.
+  send(ws, "input", { input: { seq: 1, left: false, right: false, jump: false, drop: false, primary: false, secondary: false, weaponSlot: 7 } });
+  const started = Date.now();
+  let seq = 2;
+  let scanned = 0;
+  const seenDeathIds = new Set<number>();
+  let botDeaths = 0;
+  let fallDeaths = 0;
+  let botHits = 0;
+  const seenHitIds = new Set<number>();
+  // Telemetry: the bot's position over time, for forensics when a fall leaks.
+  const track: Array<{ t: number; x: number; y: number; onGround: boolean }> = [];
+  while (Date.now() - started < 30_000) {
+    send(ws, "input", { input: { seq: seq++, left: false, right: false, jump: false, drop: false, primary: true, secondary: false } });
+    for (; scanned < state.snapshots.length; scanned++) {
+      const latest = state.snapshots[scanned];
+      const bot = latest.players.find((p: any) => p.isBot);
+      if (bot && track.length < 4000) track.push({ t: latest.serverTick, x: Math.round(bot.x), y: Math.round(bot.y), onGround: !!bot.onGround });
+      for (const event of latest.events) {
+        if (event.type === "death" && String(event.targetId || "").startsWith("bot") && !seenDeathIds.has(event.id)) {
+          seenDeathIds.add(event.id);
+          botDeaths++;
+          // Fall deaths are emitted at WORLD.height (560); shot deaths ride
+          // the victim's body position (<= ~545 on the ground islands).
+          if (event.y >= 555) fallDeaths++;
+          const tail = track.slice(-40);
+          console.log(`  DEATH#${botDeaths} tick=${event.tick} y=${Math.round(event.y)} trail: ${tail.map((s) => `${s.t}:${s.x}${s.onGround ? "g" : "a"}`).join(" ")}`);
+        }
+        if (event.type === "hit" && String(event.targetId || "").startsWith("bot") && !seenHitIds.has(event.id)) {
+          seenHitIds.add(event.id);
+          botHits++;
+        }
+      }
+    }
+    await sleep(40);
+  }
+  send(ws, "input", { input: { seq: seq++, left: false, right: false, jump: false, drop: false, primary: false, secondary: false } });
+  assert(fallDeaths === 0, `Bot walked into a fall gap ${fallDeaths}× under fire — cliff guard is broken`);
+  console.log(`  canopy: cliff guard held — ${botDeaths} bot deaths under shard fire, ${fallDeaths} were falls, ${botHits} hits landed on the bot`);
+  send(ws, "leave_room");
+  ws.close();
+}
+
 console.log("ai smoke: starting bot free-for-all across all maps");
 const resolvedMaps = (await ffaResolves("canopy")) + (await ffaResolves("fortress")) + (await ffaResolves("factory"));
 // Bot duels occasionally deadlock at a long range standoff; 2 of 3 maps
@@ -185,5 +238,7 @@ await botAggression();
 console.log("ai smoke: edge survival checks");
 await botSurvival("factory");
 await botSurvival("canopy");
+console.log("ai smoke: cliff guard pressure check");
+await cliffGuardPressure();
 console.log("ai smoke test passed");
 process.exit(0);
