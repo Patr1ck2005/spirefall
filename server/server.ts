@@ -22,6 +22,8 @@ import {
   clamp,
   freshLimbs,
   makePlayer,
+  rangeFalloff,
+  raycastSolids,
   selectLimbAtPoint,
   type ClientInput,
   type CombatEvent,
@@ -490,23 +492,33 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
   }
 
   if (def.kind === "hitscan") {
+    const platforms = MAPS[room.config.mapId].platforms;
     const shots = def.pattern === "burst" ? def.count : 1;
     for (let shot = 0; shot < shots; shot++) {
       const angle = (shot - (shots - 1) / 2) * def.spread;
       const directionX = Math.cos(angle) * player.facing;
       const directionY = Math.sin(angle);
+      // M19: the ray stops at the first solid cover — lasers and bullets no
+      // longer reach (or damage) anything behind a wall.
+      const rayEndX = originX + directionX * range;
+      const rayEndY = originY + directionY * range;
+      const wallDistance = raycastSolids(platforms, originX, originY, rayEndX, rayEndY) ?? range;
       const targets = [...room.players.values()]
-        .filter((other) => {
+        .map((other) => {
           const dx = other.x - originX;
           const dy = other.y - PLAYER_TARGET_OFFSET - originY;
-          return other.id !== player.id && directionX * dx + directionY * dy > 0 && Math.abs(dy - Math.tan(angle) * dx) < 16 && Math.abs(dx) < range;
+          const along = directionX * dx + directionY * dy;
+          const offset = Math.hypot(dx - directionX * along, dy - directionY * along);
+          return { other, along, offset };
         })
-        .sort((a, b) => Math.abs(a.x - originX) - Math.abs(b.x - originX));
+        .filter(({ other, along, offset }) => other.id !== player.id && along > 0 && along <= wallDistance && offset < 16)
+        .sort((a, b) => a.along - b.along);
       const limit = def.pattern === "piercing" || def.pattern === "beam" ? (def.pattern === "beam" ? targets.length : def.pierce + 1) : 1;
       // Charged Voltrail rails (>=0.8) are executions: pierce the whole line.
       const lethal = !secondary && def.chargeMax !== undefined && chargeFraction >= 0.8;
-      for (const other of targets.slice(0, limit)) {
-        damage(room, other, def.damage * chargeScale, def.knockback * chargeScale, player.x, other.x - player.facing * 7, other.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
+      for (const { other, along } of targets.slice(0, limit)) {
+        const falloff = rangeFalloff(along, range);
+        damage(room, other, def.damage * chargeScale * falloff, def.knockback * chargeScale, player.x, other.x - player.facing * 7, other.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
       }
     }
     return;
@@ -534,6 +546,9 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       pattern: def.pattern,
       hitIds: [],
       ttl: 2.4,
+      originX,
+      originY,
+      travelled: 0,
     });
   }
 }
@@ -795,58 +810,76 @@ function updateRoom(room: Room, dt: number) {
     }
   }
 
+  // Explosive splash with M19 radial falloff: ~0.7x damage and knockback at
+  // the core tapering to 0.2x at the blast edge. One helper for wall
+  // detonations, body detonations and range-cap air bursts.
+  const detonate = (projectile: ProjectileState, x: number, y: number, skipId?: string) => {
+    emitEvent(room, "explosion", x, y, clamp(projectile.explosiveRadius / 90, 0.6, 1.5), { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary });
+    for (const nearby of room.players.values()) {
+      if (nearby.id === projectile.ownerId || nearby.id === skipId || nearby.respawnTimer > 0 || isEliminated(room, nearby)) continue;
+      const distance = Math.hypot(nearby.x - x, nearby.y - PLAYER_TARGET_OFFSET - y);
+      if (distance >= projectile.explosiveRadius) continue;
+      const falloff = clamp(0.7 - 0.5 * (distance / projectile.explosiveRadius), 0.2, 0.7);
+      damage(room, nearby, projectile.damage * falloff, projectile.knockback * falloff, x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: true });
+    }
+  };
+
   for (const projectile of room.projectiles) {
+    const attackDef = WEAPONS[projectile.weaponId][projectile.secondary ? "secondary" : "primary"];
+    const speed = Math.hypot(projectile.vx, projectile.vy);
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
     projectile.vy += 720 * dt;
     projectile.ttl -= dt;
-    for (const platform of map.platforms) {
+    // M19 hard range cap: rounds measure travel from the muzzle. Rockets
+    // air-burst at the cap; every other round fizzles out mid-flight.
+    projectile.travelled += speed * dt;
+    if (attackDef.range > 0 && projectile.travelled >= attackDef.range) {
+      if (projectile.explosiveRadius) detonate(projectile, projectile.x, projectile.y);
+      else emitEvent(room, "impact", projectile.x, projectile.y, 0.4, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: false });
+      projectile.ttl = 0;
+      continue;
+    }
+    let dead = projectile.ttl <= 0;
+    if (!dead) for (const platform of map.platforms) {
       if (projectile.y > platform.y - 8 && projectile.y < platform.y + platform.height + 8 && projectile.x > platform.x && projectile.x < platform.x + platform.width) {
-        const speed = Math.hypot(projectile.vx, projectile.vy);
         if (projectile.explosiveRadius) {
           // Rockets detonate on any surface, not just bodies.
-          emitEvent(room, "explosion", projectile.x, projectile.y, clamp(projectile.explosiveRadius / 90, 0.6, 1.5), { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary });
-          for (const nearby of room.players.values()) {
-            if (nearby.id === projectile.ownerId || nearby.respawnTimer > 0 || isEliminated(room, nearby)) continue;
-            const distance = Math.hypot(nearby.x - projectile.x, nearby.y - PLAYER_TARGET_OFFSET - projectile.y);
-            if (distance < projectile.explosiveRadius) damage(room, nearby, projectile.damage * 0.7, projectile.knockback * 0.7, projectile.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: true });
-          }
+          detonate(projectile, projectile.x, projectile.y);
         } else {
           // Wall hit: surface dust and debris so no round dies silently.
-          emitEvent(room, "impact", projectile.x, projectile.y, Math.min(1.2, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+          emitEvent(room, "impact", projectile.x, projectile.y, Math.min(1.2, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
         }
-        projectile.ttl = 0;
+        dead = true;
+        break;
       }
     }
-    for (const target of room.players.values()) {
+    if (!dead) for (const target of room.players.values()) {
       if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target) || !intersectsCircle({ x: projectile.x, y: projectile.y, r: projectile.radius }, { x: target.x, y: target.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) continue;
       projectile.hitIds.push(target.id);
-      damage(room, target, projectile.damage, projectile.knockback, projectile.x - projectile.vx, projectile.x, projectile.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
+      const travelFalloff = rangeFalloff(projectile.travelled, attackDef.range);
+      damage(room, target, projectile.damage * travelFalloff, projectile.knockback, projectile.x - projectile.vx, projectile.x, projectile.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
       if (projectile.explosiveRadius) {
-        emitEvent(room, "explosion", projectile.x, projectile.y, clamp(projectile.explosiveRadius / 90, 0.6, 1.5), { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary });
-        for (const nearby of room.players.values()) {
-          if (nearby.id === projectile.ownerId || nearby.id === target.id) continue;
-          const distance = Math.hypot(nearby.x - projectile.x, nearby.y - projectile.y);
-          if (distance < projectile.explosiveRadius) damage(room, nearby, projectile.damage * 0.7, projectile.knockback * 0.7, projectile.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: true });
-        }
+        detonate(projectile, projectile.x, projectile.y, target.id);
       }
       if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
       else {
         // Non-explosive rounds that die on a body still chip the surface behind it.
         if (!projectile.explosiveRadius) {
-          emitEvent(room, "impact", projectile.x, projectile.y, 0.7, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+          emitEvent(room, "impact", projectile.x, projectile.y, 0.7, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
         }
-        projectile.ttl = 0;
+        dead = true;
       }
       break;
     }
+    if (dead) projectile.ttl = 0;
   }
 
   // Rounds that fly off the map or expire mid-air: faint fizzle for out-of-bounds.
   for (const projectile of room.projectiles) {
     const leaving = projectile.x <= -100 || projectile.x >= WORLD.width + 100 || projectile.y >= WORLD.height + 150;
     if (leaving && projectile.ttl > 0) {
-      emitEvent(room, "impact", projectile.x > 0 && projectile.x < WORLD.width ? projectile.x : Math.max(6, Math.min(WORLD.width - 6, projectile.x)), WORLD.height - 8, 0.4, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern });
+      emitEvent(room, "impact", projectile.x > 0 && projectile.x < WORLD.width ? projectile.x : Math.max(6, Math.min(WORLD.width - 6, projectile.x)), WORLD.height - 8, 0.4, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: false });
     }
   }
   room.projectiles = room.projectiles.filter((projectile) => projectile.ttl > 0 && projectile.x > -100 && projectile.x < WORLD.width + 100 && projectile.y < WORLD.height + 150);

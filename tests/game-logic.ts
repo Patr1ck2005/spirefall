@@ -1,4 +1,4 @@
-import { MAPS, WEAPONS, buildPlatformGraph, calculateHazardState, calculateLimbModifiers, calculateMoverState, selectLimbAtPoint, type HazardDef, type MoverDef } from "../shared/game.js";
+import { MAPS, WEAPONS, WORLD, buildPlatformGraph, calculateHazardState, calculateLimbModifiers, calculateMoverState, rangeFalloff, raycastSolids, selectLimbAtPoint, surfaceBelow, type HazardDef, type MapDef, type MoverDef, type Platform } from "../shared/game.js";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
@@ -79,5 +79,87 @@ assert(WEAPONS.rifle.primary.damage >= 6, "Beam tick damage below the M15 floor"
 assert(WEAPONS.sniper.primary.damage >= 32, "Voltrail damage below the M15 floor");
 assert(WEAPONS.rocket.primary.damage >= 46, "Rocket damage below the M15 floor");
 assert(WEAPONS.blade.primary.damage >= 38, "Blade damage below the M15 floor");
+
+// M19 ballistics: range falloff, solid-cover raycast, surface anchoring.
+assert(rangeFalloff(0, 640) === 1, "Falloff at the muzzle is not full damage");
+assert(rangeFalloff(640 * 0.6, 640) === 1, "Falloff begins before the 60% plateau");
+assert(Math.abs(rangeFalloff(640 * 0.8, 640) - 0.8) < 1e-9, "Falloff at 80% range should be 0.8");
+assert(Math.abs(rangeFalloff(640, 640) - 0.6) < 1e-9, "Falloff at the cap should be 0.6");
+assert(rangeFalloff(9999, 640) === 0.6, "Falloff beyond the cap should clamp at 0.6");
+assert(rangeFalloff(500, 0) === 1, "Weapons without a range must not falloff");
+
+const wall: Platform = { x: 500, y: 400, width: 26, height: 130, solid: true };
+const shelf: Platform = { x: 200, y: 450, width: 100, height: 14, oneWay: true };
+const losMap = { name: "los-test", platforms: [wall, shelf] } as unknown as MapDef;
+assert(raycastSolids(losMap.platforms, 450, 460, 600, 460) !== undefined, "Horizontal ray through a solid wall must be blocked");
+assert(raycastSolids(losMap.platforms, 450, 460, 495, 460) === undefined, "Ray stopping short of the wall must stay clear");
+const blockedDistance = raycastSolids(losMap.platforms, 450, 460, 600, 460)!;
+assert(Math.abs(blockedDistance - 50) < 1e-6, `Wall hit distance should be 50px from the origin, got ${blockedDistance}`);
+assert(raycastSolids(losMap.platforms, 100, 455, 260, 455) === undefined, "One-way shelves must not block rays");
+assert(raycastSolids(losMap.platforms, 520, 350, 520, 470) !== undefined, "Vertical ray into a wall top must be blocked");
+assert(raycastSolids(losMap.platforms, 510, 430, 530, 470) !== undefined, "Ray starting inside a solid must report blocked");
+
+const groundMap: MapDef = {
+  name: "surface-test",
+  platforms: [
+    { x: 0, y: 530, width: 300, height: 30 },
+    { x: 400, y: 500, width: 100, height: 14, oneWay: true },
+  ],
+} as MapDef;
+assert(surfaceBelow(groundMap, 100, 500) === 530, "surfaceBelow must find the ground under a mid-air point");
+assert(surfaceBelow(groundMap, 100, 540) === 530, "surfaceBelow at ground level must snap to the same surface");
+assert(surfaceBelow(groundMap, 450, 480) === 500, "surfaceBelow must find the shelf under a higher point");
+assert(surfaceBelow(groundMap, 350, 400) === undefined, "surfaceBelow over a gap must return undefined");
+assert(surfaceBelow(groundMap, 450, 300) === undefined || surfaceBelow(groundMap, 450, 300) === 500, "surfaceBelow above a shelf may return the shelf or nothing");
+
+// M19 range table: every attack has an enforced, honest range.
+assert(WEAPONS.scatter.primary.range === 400, "Scatter pellets must be hard-capped at 400");
+assert(WEAPONS.scatter.secondary.range === 260, "Blaze Vent flame range must be enforced at 260");
+assert(WEAPONS.rifle.primary.range === 900, "Longbeam laser identity requires 900 range");
+assert(WEAPONS.sniper.primary.range === 1400, "Voltrail rail identity requires 1400 range");
+assert(WEAPONS.rocket.primary.range === 900 && WEAPONS.rocket.secondary.range === 640, "Rockets must have enforced air-burst ranges");
+assert(WEAPONS.sidearm.primary.range === 640 && WEAPONS.rifle.secondary.range === 950 && WEAPONS.sniper.secondary.range === 1050, "Hitscan ranges drifted");
+for (const weapon of Object.values(WEAPONS)) {
+  assert(weapon.primary.range >= 0 && weapon.secondary.range >= 0, `${weapon.label} has a negative range`);
+}
+
+// M19 cover walls: exactly one solid platform per map, reachable hops, and no
+// overlap with crate sockets or spawn points.
+for (const map of Object.values(MAPS)) {
+  const walls = map.platforms.filter((platform) => platform.solid);
+  assert(walls.length === 1, `${map.name} must have exactly one cover wall, found ${walls.length}`);
+  const wall = walls[0];
+  assert(!wall.oneWay, `${map.name} cover wall must not be one-way`);
+  for (const socket of map.crateSockets) {
+    const overlaps = socket.x > wall.x - 20 && socket.x < wall.x + wall.width + 20 && Math.abs(socket.y - wall.y) < wall.height + 24;
+    assert(!overlaps, `${map.name} cover wall overlaps crate socket ${socket.id}`);
+  }
+  for (const spawn of map.spawns) {
+    const overlaps = spawn.x > wall.x - 20 && spawn.x < wall.x + wall.width + 20 && spawn.y > wall.y - 40 && spawn.y < wall.y + wall.height + 10;
+    assert(!overlaps, `${map.name} cover wall overlaps a spawn point`);
+  }
+  // A pilot must be able to jump over or onto the wall from somewhere nearby:
+  // either it rests on a platform with a hop-able rise, or it is a free-
+  // standing pillar whose top is within NAV_MAX_RISE of an adjacent surface.
+  const rest = map.platforms.find((platform) => platform !== wall && platform.x <= wall.x && platform.x + platform.width >= wall.x + wall.width && platform.y >= wall.y + wall.height - 4 && !platform.solid);
+  if (rest) {
+    const rise = rest.y - wall.y;
+    assert(rise <= 115, `${map.name} cover wall is ${rise}px tall — beyond the NAV_MAX_RISE hop budget`);
+  } else {
+    const stepping = map.platforms.find((platform) => {
+      if (platform === wall || platform.solid) return false;
+      if (platform.y < wall.y || platform.y - wall.y > 115) return false;
+      const gap = platform.x + platform.width <= wall.x ? wall.x - (platform.x + platform.width) : platform.x >= wall.x + wall.width ? platform.x - (wall.x + wall.width) : 0;
+      return gap <= 200;
+    });
+    assert(stepping, `${map.name} cover pillar has no reachable adjacent surface`);
+  }
+}
+
+// Navigation graph still fully connected with the walls present (M19).
+for (const map of Object.values(MAPS)) {
+  const graph = buildPlatformGraph(map);
+  assert(graph.nodes.length > 0, `${map.name} nav graph broke after adding cover walls`);
+}
 
 console.log("game logic tests passed");

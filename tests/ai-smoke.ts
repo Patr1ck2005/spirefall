@@ -92,26 +92,56 @@ async function ffaResolves(mapId: string): Promise<boolean> {
 
 // 2. A bot engages in combat: it fires actively and lands hits within a minute.
 // (Traversing the M15 layouts to reach the human takes ~30s on its own.)
+// M19 weapon-manager proof: the loadout is restricted to sidearm + blade.
+// Crates then only hand out blades, and a bot holding a blade with the human
+// far away MUST switch back to sidearm (band [0,70] vs [80,640]). Seeing
+// blade and then sidearm again is the deterministic switching signal.
 async function botAggression() {
-  const { ws, state } = await hostRoom("Target", { mapId: "fortress", lives: 3, bots: 1, botSkill: "standard", crates: true });
+  const { ws, state } = await hostRoom("Target", { mapId: "fortress", lives: 3, bots: 1, botSkill: "standard", crates: true, weaponSet: ["sidearm", "blade"] });
   send(ws, "start");
   const started = Date.now();
   let attacks = 0;
   let damaged = false;
+  let sawBlade = false;
+  let sidearmAfterBlade = false;
+  let scanned = 0;
+  const seenPickupIds = new Set<number>();
+  const seenAttackIds = new Set<number>();
   while (Date.now() - started < 70_000) {
-    const latest = state.snapshots[state.snapshots.length - 1];
-    if (latest) {
-      attacks += latest.events.filter((event: any) => event.type === "attack").length;
+    // Scan EVERY new snapshot (20Hz stream, ~100ms poll): the blade hold can
+    // be as short as one decision cycle, so sparse sampling misses it. Events
+    // live for a full second, so dedupe by id — the same attack would
+    // otherwise be counted ~20 times.
+    for (; scanned < state.snapshots.length; scanned++) {
+      const latest = state.snapshots[scanned];
+      for (const event of latest.events) {
+        if (event.type === "attack" && !seenAttackIds.has(event.id)) {
+          seenAttackIds.add(event.id);
+          attacks++;
+        }
+        if (event.type === "cratePickup" && !seenPickupIds.has(event.id)) {
+          seenPickupIds.add(event.id);
+          if (event.weaponId === "blade" && String(event.actorId || "").startsWith("bot")) sawBlade = true;
+        }
+      }
       const me = latest.players.find((p: any) => !p.isBot);
-      if (me && LIMBS_TOTAL(me.limbs) < 400) { damaged = true; break; }
+      if (me && LIMBS_TOTAL(me.limbs) < 400) damaged = true;
+      const bot = latest.players.find((p: any) => p.isBot);
+      if (bot) {
+        if (bot.weapon === "blade") sawBlade = true;
+        else if (bot.weapon === "sidearm" && sawBlade) sidearmAfterBlade = true;
+      }
     }
+    if (damaged && sawBlade && sidearmAfterBlade) break;
     await sleep(100);
   }
-  // Damage landing is the real engagement signal (nav distance dominates shot
-  // counts); the 50-shot floor only guards against a fully idle bot.
-  assert(attacks > 50, `Bot fired only ${attacks} shots in 70s — aggression is broken`);
+  // M19 fire discipline intentionally trades shot volume for hit quality:
+  // bots only pull the trigger inside the weapon's true range with line of
+  // sight, so a ~70s duel logs far fewer attacks than the old fire-at-
+  // everything loop. Real engagement = limbs actually grinding down.
   assert(damaged, "Bot never damaged the idle human within 70s");
-  console.log(`  fortress: bot fired ${attacks} shots and engaged the human`);
+  assert(sawBlade && sidearmAfterBlade, `Weapon manager never cycled blade→sidearm (sawBlade=${sawBlade}) — smart switching is broken`);
+  console.log(`  fortress: bot fired ${attacks} disciplined shots, ground the human down, cycled blade→sidearm`);
   send(ws, "leave_room");
   ws.close();
 }

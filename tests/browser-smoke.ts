@@ -129,6 +129,11 @@ await solo.keyboard.down("Tab");
 await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
 const panelText = await solo.locator("#weapon-panel").textContent();
 if (!panelText?.includes("Vein Ripper")) throw new Error("Weapon panel did not list the held weapon");
+// M19: every weapon row carries PRI/SEC range bars driven by --range vars.
+const rangeBars = await solo.locator("#weapon-panel .range-bar").count();
+if (rangeBars < 12) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 12 for 6 weapons × PRI/SEC)`);
+const firstRange = await solo.locator("#weapon-panel .range-bar em").first().getAttribute("style");
+if (!firstRange?.includes("--range")) throw new Error("Range bar lacks its --range width variable");
 await solo.keyboard.up("Tab");
 await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout: 3000 });
 

@@ -1,4 +1,7 @@
 import WebSocket from "ws";
+import { WEAPONS } from "../shared/game.js";
+
+const WEAPONS_SIDEARM_AMMO = WEAPONS.sidearm.ammo;
 
 type Message = { type: string; [key: string]: any };
 const waitFor = (ws: WebSocket, type: string, timeout = 4000) => new Promise<Message>((resolve, reject) => {
@@ -130,6 +133,62 @@ host.send(JSON.stringify({ type: "input", input: { seq: 4, primary: false } }));
 assert(limbDamaged, "Authoritative hit did not damage a limb");
 assert(hitEventSeen, "Authoritative hit did not emit a combat event");
 host.send(JSON.stringify({ type: "input", input: { seq: 32, primary: false } }));
+
+// --- M19: solid cover blocks shots. Canopy spawns seat both pilots on their
+// ground platforms at identical height with the cover wall (452..478, 452..530)
+// squarely on the chest-height line between them — zero driving required.
+// The host fires the Lance Pulse (slot 3, range 950 > 790px line) so only the
+// wall can explain zero damage, then the sidearm (640 < 790px, capped anyway).
+const coverHost = await open();
+coverHost.send(JSON.stringify({ type: "create", name: "Cover-Alpha" }));
+const coverCreated = await waitFor(coverHost, "room");
+coverHost.send(JSON.stringify({ type: "config", patch: { mapId: "canopy", lives: 2, crates: false, bots: 0 } }));
+await waitFor(coverHost, "room");
+const coverGuest = await open();
+coverGuest.send(JSON.stringify({ type: "join", roomCode: coverCreated.room.code, name: "Cover-Bravo" }));
+const coverJoined = await waitFor(coverGuest, "room");
+coverHost.send(JSON.stringify({ type: "start" }));
+await waitFor(coverHost, "snapshot");
+let coverSettled = false;
+for (let i = 0; i < 30 && !coverSettled; i++) {
+  const message = await waitFor(coverHost, "snapshot", 5000);
+  const alpha = message.snapshot.players.find((p: any) => p.id === coverCreated.selfId);
+  coverSettled = !!alpha && alpha.onGround;
+}
+let coverProtectionGone = false;
+for (let i = 0; i < 50 && !coverProtectionGone; i++) {
+  const message = await waitFor(coverHost, "snapshot", 5000);
+  const bravo = message.snapshot.players.find((p: any) => p.id !== coverCreated.selfId);
+  coverProtectionGone = !!bravo && bravo.invulnerable <= 0;
+}
+assert(coverProtectionGone, "Cover-test spawn protection never expired");
+coverHost.send(JSON.stringify({ type: "input", input: { seq: 10, weaponSlot: 3 } }));
+for (let i = 0; i < 6; i++) await waitFor(coverHost, "snapshot", 5000);
+coverHost.send(JSON.stringify({ type: "input", input: { seq: 11, secondary: true } }));
+let coverAmmoBurned = false;
+for (let i = 0; i < 14; i++) {
+  const message = await waitFor(coverHost, "snapshot", 5000);
+  const alpha = message.snapshot.players.find((p: any) => p.id === coverCreated.selfId);
+  coverAmmoBurned ||= alpha.weapon === "rifle" && alpha.ammo < WEAPONS.rifle.ammo;
+}
+coverHost.send(JSON.stringify({ type: "input", input: { seq: 12, secondary: false, primary: true } }));
+for (let i = 0; i < 14; i++) {
+  const message = await waitFor(coverHost, "snapshot", 5000);
+  const alpha = message.snapshot.players.find((p: any) => p.id === coverCreated.selfId);
+  coverAmmoBurned ||= alpha.weapon === "rifle" && alpha.ammo < WEAPONS.rifle.ammo;
+}
+coverHost.send(JSON.stringify({ type: "input", input: { seq: 13, primary: false } }));
+assert(coverAmmoBurned, "Cover-test host never fired through its weapon slot (test setup broken)");
+let coverDamage = false;
+for (let i = 0; i < 20; i++) {
+  const message = await waitFor(coverHost, "snapshot", 5000);
+  const bravo = message.snapshot.players.find((p: any) => p.id !== coverCreated.selfId);
+  coverDamage ||= !!bravo && Object.values(bravo.limbs as Record<string, number>).some((value) => value < 100);
+  if (coverDamage) break;
+}
+assert(!coverDamage, "Shots passed through solid cover — LOS blocking is broken");
+coverHost.close();
+coverGuest.close();
 
 const disconnected = waitFor(host, "room");
 guest.close();

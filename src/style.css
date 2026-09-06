@@ -207,6 +207,12 @@ select { cursor: pointer; }
 .weapon-row small { grid-column: 2 / 4; color: #78848666; color: #788486; font-size: 7.5px; letter-spacing: .6px; }
 .weapon-row.active { background: rgba(23,31,33,.95); outline: 1px solid var(--weapon, var(--cyan)); }
 .weapon-row.active span { color: var(--weapon, var(--cyan)); }
+/* M19 range bars: one per attack, width = range relative to the world width. */
+.weapon-row .range-bars { grid-column: 2 / 4; display: flex; gap: 10px; margin-top: 3px; }
+.weapon-row .range-bar { flex: 1; display: grid; grid-template-columns: 12px 1fr; align-items: center; gap: 4px; }
+.weapon-row .range-bar i { color: #6d7a7c; font-size: 6.5px; font-weight: 900; letter-spacing: .5px; font-style: normal; }
+.weapon-row .range-bar em { display: block; height: 3px; background: rgba(120,132,134,.25); position: relative; overflow: hidden; font-style: normal; }
+.weapon-row .range-bar em::before { content: ""; position: absolute; inset: 0; width: var(--range, 0%); background: var(--weapon, var(--cyan)); opacity: .85; }
 
 @media (max-width: 1100px) {
   .shell { width: min(100% - 24px, 1000px); }

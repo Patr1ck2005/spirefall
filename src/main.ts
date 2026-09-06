@@ -4,6 +4,8 @@ import {
   MAPS,
   WEAPONS,
   WORLD,
+  raycastSolids,
+  surfaceBelow,
   type CombatEvent,
   type LimbId,
   type MapId,
@@ -51,9 +53,9 @@ type FxParticle = {
   kind: "spark" | "blood" | "smoke" | "energy" | "flash";
 };
 
-type Decal = { x: number; y: number; radius: number; alpha: number; rotation: number };
+type Decal = { x: number; y: number; radius: number; alpha: number; rotation: number; dir?: number };
 type Gib = { x: number; y: number; vx: number; vy: number; life: number; color: number; limb: LimbId };
-type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; color: number; width: number; core?: number; jitter?: number };
+type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; color: number; width: number; core?: number; jitter?: number; thin?: boolean };
 type Ring = { x: number; y: number; life: number; maxLife: number; radius: number; color: number; width: number; grow?: number; double?: boolean };
 type Hitstop = { remaining: number; scale: number };
 
@@ -426,6 +428,10 @@ class ArenaScene extends Phaser.Scene {
   private renderPositions = new Map<string, { x: number; y: number }>();
   private particles: FxParticle[] = [];
   private decals: Decal[] = [];
+  /** M19: how many entries of `decals` are already painted into decalLayer. */
+  private decalPainted = 0;
+  private goreFadeTimer = 0;
+  private lastSeenTick = 0;
   private gibs: Gib[] = [];
   private tracers: Tracer[] = [];
   private rings: Ring[] = [];
@@ -437,6 +443,8 @@ class ArenaScene extends Phaser.Scene {
   clearProcessedEvents() {
     this.processedEvents.clear();
     this.lastChargeStep = -1;
+    this.lastSeenTick = 0;
+    this.resetGore();
   }
   private lastChargeStep = -1;
   private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
@@ -511,6 +519,10 @@ class ArenaScene extends Phaser.Scene {
     const previousPhase = this.snapshot?.phase;
     const previousMode = this.snapshot?.mode;
     this.snapshot = snapshot;
+    // M19: a fresh match (phase entry or tick rewind on restart) wipes gore
+    // state — blood and bullet holes never carry across matches.
+    if (snapshot.phase === "playing" && (previousPhase !== "playing" || snapshot.serverTick < this.lastSeenTick)) this.resetGore();
+    this.lastSeenTick = snapshot.serverTick;
     this.processEvents(snapshot.events);
     this.updatePhaseAudio(snapshot, previousPhase, previousMode);
     this.updateHud(snapshot);
@@ -557,7 +569,8 @@ class ArenaScene extends Phaser.Scene {
     panel.innerHTML = `<p class="panel-hint">HOLD TAB — RELEASE TO CLOSE</p>` + snapshot.config.weaponSet.map((weaponId, index) => {
       const weapon = WEAPONS[weaponId];
       const active = weaponId === mine.weapon ? " active" : "";
-      return `<div class="weapon-row${active}" style="--weapon:${colorCss(weapon.color)}"><b>${index + 1}</b><span>${weapon.label}</span><em>${mine.ammoByWeapon[weaponId]}</em><small>PRI ${weapon.primary.pattern}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · SEC ${weapon.secondary.pattern}</small></div>`;
+      const rangeBar = (label: string, range: number) => `<div class="range-bar"><i>${label}</i><em style="--range:${Math.min(100, Math.round(range / WORLD.width * 100))}%"></em></div>`;
+      return `<div class="weapon-row${active}" style="--weapon:${colorCss(weapon.color)}"><b>${index + 1}</b><span>${weapon.label}</span><em>${mine.ammoByWeapon[weaponId]}</em><small>PRI ${weapon.primary.pattern}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · SEC ${weapon.secondary.pattern}</small><div class="range-bars">${rangeBar("PRI", weapon.primary.range)}${rangeBar("SEC", weapon.secondary.range)}</div></div>`;
     }).join("");
   }
 
@@ -566,12 +579,17 @@ class ArenaScene extends Phaser.Scene {
   }
 
   setVisualPreferences() {
-    if (!visualPrefs.gore) {
-      this.decals = [];
-      this.decalLayer?.clear();
-      this.gibs = [];
-      this.particles = this.particles.filter((particle) => particle.kind !== "blood");
-    }
+    if (!visualPrefs.gore) this.resetGore();
+  }
+
+  /** M19: gore lifecycle reset — fresh match, room switch, or gore toggle-off. */
+  private resetGore() {
+    this.decals = [];
+    this.decalPainted = 0;
+    this.decalLayer?.clear();
+    this.gibs = [];
+    this.particles = this.particles.filter((particle) => particle.kind !== "blood");
+    this.goreFadeTimer = 0;
   }
 
   private lastRosterHtml = "";
@@ -634,9 +652,16 @@ class ArenaScene extends Phaser.Scene {
         sfx.play(`attack:${event.weaponId}:${event.secondary ? "sec" : "pri"}`, at(event.x, event.y));
         const facing = actor?.facing || 1;
         const charge = event.charge ?? 0;
+        // M19: hitscan rays stop at solid cover. Client mirrors the server
+        // raycast so every beam/tracer ends exactly where the damage ends.
+        const weaponDef = WEAPONS[event.weaponId!];
+        const trueRange = (pattern: "primary" | "secondary") => {
+          const base = weaponDef[pattern].range;
+          return Math.min(base, raycastSolids(MAPS[this.snapshot!.config.mapId].platforms, event.x, event.y, event.x + facing * base, event.y) ?? base);
+        };
         // Beam: full-range light line refreshed every tick so held fire reads as one continuous lance.
         if (event.pattern === "beam") {
-          const range = WEAPONS[event.weaponId!].primary.range;
+          const range = trueRange("primary");
           this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * range, y2: event.y, life: 0.15, color, width: 3.5, core: 1.6, jitter: 1.6 });
           this.spawnBurst(event.x + facing * 6, event.y, color, 3, "flash", facing);
           // Beam impact sparks spray ahead of the muzzle along the beam.
@@ -644,9 +669,12 @@ class ArenaScene extends Phaser.Scene {
           // End-of-beam sparks: the lance chews into whatever stops it.
           this.spawnBurst(event.x + facing * range, event.y, 0xffefc3, 2, "spark", -facing as 1 | -1 | 0);
         } else if (event.weaponId === "sniper" && !event.secondary) {
-          // Charged rail: width/glow scale with charge; full release adds a shock ring and boom.
+          // Charged rail: length matches the true 1400×(1+0.25c) reach, capped
+          // by cover; full release adds a shock ring and boom.
+          const chargedRange = weaponDef.primary.range * (1 + charge * 0.25);
+          const railLength = Math.min(chargedRange, raycastSolids(MAPS[this.snapshot!.config.mapId].platforms, event.x, event.y, event.x + facing * chargedRange, event.y) ?? chargedRange);
           const width = 2.5 + charge * 7;
-          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * (300 + charge * 900), y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
+          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * railLength, y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
           this.spawnBurst(event.x + facing * 8, event.y, color, 6 + Math.round(charge * 16), "flash", facing);
           if (charge >= 0.95) {
             this.rings.push({ x: event.x, y: event.y, life: 0.5, maxLife: 0.5, radius: 12, color, width: 5, grow: 120, double: true });
@@ -656,9 +684,14 @@ class ArenaScene extends Phaser.Scene {
             this.shake(1.5, true);
           }
         } else {
-          const length = event.pattern === "piercing" ? 170 : event.pattern === "cluster" ? 44 : event.pattern === "dashSlash" || event.pattern === "slash" ? 34 : event.secondary ? 105 : 72;
+          const length = event.pattern === "piercing"
+            ? trueRange("secondary")
+            : event.pattern === "cluster" ? 44 : event.pattern === "dashSlash" || event.pattern === "slash" ? 34 : event.secondary ? 105 : 72;
           const width = event.pattern === "piercing" ? 4 + charge * 3 : event.pattern === "slash" || event.pattern === "dashSlash" ? 7 : event.secondary ? 5 : 2.5;
-          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: event.pattern === "piercing" ? 0.16 : 0.12, color, width });
+          // Bullet-path tracers (single/burst hitscan) draw the real flight
+          // line — honest range readout without laser-grade glow.
+          const thin = event.pattern === "single" || event.pattern === "burst";
+          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: event.pattern === "piercing" ? 0.16 : thin ? 0.07 : 0.12, color, width, thin });
           this.spawnBurst(event.x + facing * 6, event.y, color, event.pattern === "piercing" ? 8 : 3, "flash", facing);
           if (event.count) this.spawnBurst(event.x, event.y, color, Math.min(18, event.count * 3), event.pattern === "cluster" ? "energy" : "spark", facing);
           if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(event.x + facing * 24, event.y - 8, color, 14, "energy", facing);
@@ -687,6 +720,14 @@ class ArenaScene extends Phaser.Scene {
         const isFlame = event.weaponId === "scatter" && event.secondary;
         const isRocket = event.weaponId === "rocket";
         const s = event.strength;
+        if (event.surface === false) {
+          // M19: mid-air death — range cap or off-map fizzle. No surface to
+          // mark: a soft energy dispersal instead of chips or a bullet hole.
+          sfx.play("impact", { ...at(event.x, event.y), strength: 0.25 });
+          this.spawnBurst(event.x, event.y, color, 5, "energy", 0);
+          this.spawnBurst(event.x, event.y, 0xfff3d0, 2, "flash", 0);
+          continue;
+        }
         if (isFlame) {
           sfx.play("impact", { ...at(event.x, event.y), strength: s });
           this.spawnBurst(event.x, event.y, 0xf06b2f, 8, "energy", 0);
@@ -704,18 +745,22 @@ class ArenaScene extends Phaser.Scene {
           this.spawnBurst(event.x, event.y, 0xfff3d0, 2, "flash", 0);
           if (s >= 0.55) this.rings.push({ x: event.x, y: event.y, life: 0.2, maxLife: 0.2, radius: 3, color, width: 2, grow: 26 });
         }
-        // Bullet hole stamped permanently next to blood decals.
-        if (visualPrefs.gore) this.stampDecal({ x: event.x, y: event.y + 3, radius: 1.6 + s * 1.6, alpha: 0.5, rotation: Math.random() * Math.PI });
+        // M19: bullet holes anchor to the surface actually struck, never float.
+        if (visualPrefs.gore) {
+          const map = this.snapshot && MAPS[this.snapshot.config.mapId];
+          const surface = map ? surfaceBelow(map, event.x, event.y + 6) : undefined;
+          if (surface !== undefined) this.stampDecal({ x: event.x, y: surface + 1, radius: 1.6 + s * 1.6, alpha: 0.5, rotation: Math.random() * Math.PI, dir: 0 });
+        }
       } else if (event.type === "hit") {
         sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         if (visualPrefs.gore) {
-          this.spawnBurst(event.x, event.y, 0x8d151d, Math.round(14 + event.strength * 18), "blood", target?.facing || 1);
-          this.spawnBurst(event.x, event.y, 0xd42636, Math.round(5 + event.strength * 6), "blood", target?.facing || 1);
-          this.stampDecal({ x: event.x, y: Math.min(520, event.y + 18), radius: 4 + event.strength * 5, alpha: 0.35, rotation: Math.random() * Math.PI });
-          // Droplets scatter around the main stain.
-          for (let drop = 0; drop < 2; drop++) {
-            this.stampDecal({ x: event.x + (Math.random() - 0.5) * 26, y: Math.min(522, event.y + 14 + Math.random() * 10), radius: 1.2 + Math.random() * 1.8, alpha: 0.3, rotation: Math.random() * Math.PI });
-          }
+          // M19: blood sprays AWAY from the shooter (event carries actorId);
+          // unknown shooter degenerates to a radial splash.
+          const shooter = this.snapshot?.players.find((player) => player.id === event.actorId);
+          const away = shooter && target ? (target.x >= shooter.x ? 1 : -1) as 1 | -1 : 0;
+          this.spawnBurst(event.x, event.y, 0x8d151d, Math.round(14 + event.strength * 18), "blood", away);
+          this.spawnBurst(event.x, event.y, 0xd42636, Math.round(5 + event.strength * 6), "blood", away);
+          this.stampBloodSplash(event.x, event.y, 4 + event.strength * 5, away);
         } else this.spawnBurst(event.x, event.y, 0xe0b66d, 14, "spark", 0);
         this.spawnBurst(event.x, event.y, 0xfff3d0, Math.round(3 + event.strength * 5), "flash", 0);
         if (event.strength >= 0.45) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 5, color: 0xffd9a0, width: 2.5, grow: 40 + event.strength * 40 });
@@ -738,6 +783,7 @@ class ArenaScene extends Phaser.Scene {
           this.gibs = this.gibs.slice(-16);
           this.spawnBurst(event.x, event.y, 0x751018, 34, "blood", 0);
           this.spawnBurst(event.x, event.y, 0xa8182a, 8, "flash", 0);
+          this.stampBloodSplash(event.x, event.y, 7 + event.strength * 4, 0);
         }
         this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 6, color: 0xc22538, width: 3, grow: 60 });
         this.punchHitstop(0.8);
@@ -745,6 +791,7 @@ class ArenaScene extends Phaser.Scene {
       } else if (event.type === "death") {
         sfx.play("death", { ...at(event.x, event.y), priority: "high" });
         this.spawnBurst(event.x, event.y, visualPrefs.gore ? 0x6e0d16 : 0xd7aa56, visualPrefs.gore ? 44 : 26, visualPrefs.gore ? "blood" : "spark", 0);
+        if (visualPrefs.gore) this.stampBloodSplash(event.x, event.y, 10, 0);
         this.spawnBurst(event.x, event.y, 0xfff3d0, 10, "flash", 0);
         this.rings.push({ x: event.x, y: event.y, life: 0.55, maxLife: 0.55, radius: 10, color: target?.color || 0xf0a14a, width: 4, grow: 130, double: true });
         // Kill pillar: a vertical light shaft marks the elimination spot.
@@ -793,18 +840,25 @@ class ArenaScene extends Phaser.Scene {
       particle.vx *= 0.985;
     }
     this.particles = this.particles.filter((particle) => particle.life > 0);
+    this.gibs = this.gibs.filter((gib) => gib.life > 0);
+    // M19: gibs settle on the real platform below, not a hardcoded floor.
     for (const gib of this.gibs) {
+      const map = this.snapshot && MAPS[this.snapshot.config.mapId];
+      const ground = map ? surfaceBelow(map, gib.x, gib.y) : undefined;
       gib.life -= dt;
       gib.x += gib.vx * dt;
       gib.y += gib.vy * dt;
       gib.vy += 620 * dt;
-      if (gib.y > 520) {
-        gib.y = 520;
+      if (ground !== undefined && gib.y > ground) {
+        gib.y = ground;
         gib.vy *= -0.24;
         gib.vx *= 0.7;
+      } else if (gib.y > WORLD.height + 80) {
+        gib.life = 0; // fell into a gap — leave the world
       }
     }
     this.gibs = this.gibs.filter((gib) => gib.life > 0);
+    this.updateGore(dt);
     for (const tracer of this.tracers) tracer.life -= dt;
     this.tracers = this.tracers.filter((tracer) => tracer.life > 0);
     for (const ring of this.rings) ring.life -= dt;
@@ -898,20 +952,97 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 
-  // Decals are static once placed: stamp them into a persistent RenderTexture
-  // instead of redrawing up to 48 ellipses every frame.
+  // M19: gore decals live in `decals` (single source of truth) and are painted
+  // into the decalLayer RenderTexture incrementally. Blood anchors to the real
+  // platform surface below (surfaceBelow); surface hits anchor at the point.
+  private stampBloodSplash(x: number, y: number, radius: number, dir: number) {
+    if (!visualPrefs.gore) return;
+    const map = this.snapshot && MAPS[this.snapshot.config.mapId];
+    const surface = map ? surfaceBelow(map, x, y) : undefined;
+    if (surface === undefined) return; // over a fall gap: the blood leaves the world
+    const dirSign = dir || (Math.random() < 0.5 ? 1 : -1);
+    this.stampDecal({ x, y: surface, radius, alpha: 0.34, rotation: Math.random() * Math.PI, dir: dirSign });
+  }
+
   private stampDecal(decal: Decal) {
+    if (!visualPrefs.gore) return;
+    this.decals.push(decal);
+    if (this.decals.length > 220) {
+      // Over the budget: drop the oldest and repaint the whole layer once.
+      this.decals = this.decals.slice(-200);
+      this.rebuildDecalLayer();
+      return;
+    }
     try {
       this.decalLayer ||= this.add.renderTexture(0, 0, WORLD.width, WORLD.height).setOrigin(0, 0).setDepth(-0.5);
-      const brush = this.make.graphics({ x: 0, y: 0 }, false);
-      brush.fillStyle(0x5e0a12, decal.alpha);
-      brush.fillEllipse(decal.x, decal.y, decal.radius * 2.4, decal.radius * 0.8);
-      brush.fillCircle(decal.x + Math.cos(decal.rotation) * decal.radius, decal.y, decal.radius * 0.35);
-      this.decalLayer.draw(brush);
-      brush.destroy();
+      if (this.decalPainted === this.decals.length - 1) {
+        // No backlog: paint immediately for zero-latency feedback.
+        const brush = this.make.graphics({ x: 0, y: 0 }, false);
+        this.paintDecal(brush, this.decals[this.decals.length - 1]);
+        this.decalLayer.draw(brush);
+        brush.destroy();
+        this.decalPainted = this.decals.length;
+      }
     } catch {
-      // RenderTexture unavailable: drop the decal rather than break the frame.
+      // RenderTexture unavailable: the graphics fallback in drawDecals takes over.
     }
+  }
+
+  /** Organic multi-blob blood stain: directional pool, drag tail, satellites. */
+  private paintDecal(brush: Phaser.GameObjects.Graphics, decal: Decal) {
+    const dir = decal.dir ?? 0;
+    brush.fillStyle(0x5e0a12, decal.alpha);
+    // Main pool: an ellipse lying on the surface, stretched along the spray.
+    brush.fillEllipse(decal.x + dir * decal.radius * 0.35, decal.y, decal.radius * 2.4, decal.radius * 0.8);
+    // Drag tail pointing away from the impact.
+    if (dir) {
+      brush.fillStyle(0x5e0a12, decal.alpha * 0.6);
+      brush.fillEllipse(decal.x + dir * decal.radius * 1.15, decal.y - decal.radius * 0.1, decal.radius * 1.15, decal.radius * 0.4);
+    }
+    // 2-3 satellite droplets + a highlight core.
+    for (let drop = 0; drop < 3; drop++) {
+      const spreadX = (Math.random() - 0.5) * decal.radius * 2.6 + dir * decal.radius * 0.7;
+      brush.fillStyle(0x7a1019, decal.alpha * (0.5 + Math.random() * 0.4));
+      brush.fillCircle(decal.x + spreadX, decal.y - Math.random() * decal.radius * 0.3, 0.8 + Math.random() * decal.radius * 0.28);
+    }
+    brush.fillStyle(0x4a0810, decal.alpha * 0.8);
+    brush.fillCircle(decal.x, decal.y, decal.radius * 0.3);
+  }
+
+  /** Full repaint (fade-out steps and over-budget trims), frame-budgeted. */
+  private rebuildDecalLayer() {
+    try {
+      this.decalLayer ||= this.add.renderTexture(0, 0, WORLD.width, WORLD.height).setOrigin(0, 0).setDepth(-0.5);
+      this.decalLayer.clear();
+      this.decalPainted = 0;
+    } catch {
+      this.decalLayer = undefined;
+    }
+  }
+
+  private updateGore(dt: number) {
+    if (!visualPrefs.gore || !this.decals.length) return;
+    // Slow fade: every 8s the whole layer repaints at 0.85 alpha; decals
+    // below 0.06 fall out. The repaint streams ~30 stamps per frame so a
+    // 220-decal rebuild never spikes one frame.
+    this.goreFadeTimer += dt;
+    if (this.goreFadeTimer < 8) return;
+    this.goreFadeTimer = 0;
+    this.decals = this.decals
+      .map((decal) => ({ ...decal, alpha: decal.alpha * 0.85 }))
+      .filter((decal) => decal.alpha >= 0.06);
+    this.rebuildDecalLayer();
+  }
+
+  /** Stream pending decal paints into the layer (≤30 per frame). */
+  private flushDecalPaint() {
+    if (!this.decalLayer || this.decalPainted >= this.decals.length) return;
+    const brush = this.make.graphics({ x: 0, y: 0 }, false);
+    const target = Math.min(this.decals.length, this.decalPainted + 30);
+    for (let index = this.decalPainted; index < target; index++) this.paintDecal(brush, this.decals[index]);
+    this.decalLayer.draw(brush);
+    brush.destroy();
+    this.decalPainted = target;
   }
 
   private drawAtmosphere(time: number) {
@@ -958,17 +1089,25 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private drawDecals() {
-    // Fallback only: decals are stamped into decalLayer when available.
-    if (!visualPrefs.gore || this.decalLayer) return;
-    for (const decal of this.decals) {
-      this.graphics.fillStyle(0x5e0a12, decal.alpha);
-      this.graphics.fillEllipse(decal.x, decal.y, decal.radius * 2.4, decal.radius * 0.8);
-      this.graphics.fillCircle(decal.x + Math.cos(decal.rotation) * decal.radius, decal.y, decal.radius * 0.35);
+    // Graphics fallback when RenderTexture is unavailable: draw the same
+    // organic shapes straight into the frame. When the layer exists, just
+    // stream any pending paints into it.
+    if (!visualPrefs.gore) return;
+    if (this.decalLayer) {
+      this.flushDecalPaint();
+      return;
     }
+    for (const decal of this.decals) this.paintDecal(this.graphics, decal);
   }
 
   private drawTracers() {
     for (const tracer of this.tracers) {
+      // Thin bullet-path tracers: one honest flight line, no glow stack.
+      if (tracer.thin) {
+        this.graphics.lineStyle(tracer.width, tracer.color, Math.min(0.5, tracer.life * 7));
+        this.graphics.lineBetween(tracer.x1, tracer.y1, tracer.x2, tracer.y2);
+        continue;
+      }
       // Beams and charged rails crackle: jittered segments replace the plain halo pass.
       if (tracer.jitter) {
         const segments = 4;

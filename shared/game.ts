@@ -90,6 +90,11 @@ export type ProjectileState = {
   pattern: AttackPattern;
   hitIds: string[];
   ttl: number;
+  /** Muzzle position where the round was fired — origin for range accounting. */
+  originX: number;
+  originY: number;
+  /** Distance travelled from the muzzle; hard range caps kill at `range`. */
+  travelled: number;
 };
 
 export type CrateKind = "weapon" | "repair";
@@ -162,6 +167,9 @@ export type CombatEvent = {
   charge?: number;
   /** Crate kind for crateSpawn/cratePickup cues. */
   crateKind?: CrateKind;
+  /** impact events: true when the round died on a solid surface (stamp a hole),
+   *  false for out-of-bounds fizzles and air-bursts (nothing to stamp). */
+  surface?: boolean;
   strength: number;
 };
 
@@ -247,6 +255,8 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 0, y: 530, width: 280, height: 30 },
       { x: 420, y: 530, width: 200, height: 30 },
       { x: 780, y: 530, width: 220, height: 30 },
+      // M19 掩体墙：打断地面长视线，激光/子弹在此受挡。跳跃 apex≈136px 可越。
+      { x: 452, y: 452, width: 26, height: 78, solid: true },
       { x: 30, y: 445, width: 110, height: 14, oneWay: true },
       { x: 150, y: 355, width: 100, height: 14, oneWay: true },
       { x: 60, y: 265, width: 110, height: 14, oneWay: true },
@@ -284,6 +294,9 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 0, y: 530, width: 260, height: 30 },
       { x: 400, y: 530, width: 240, height: 30 },
       { x: 760, y: 530, width: 240, height: 30 },
+      // M19 掩体柱：西缺口中的立柱，打断地面穿射线，柱顶可站立兼作垫脚石
+      //（货架层间净空 96px 放不下 78px+跳跃的墙，缺口处无顶棚净空无限）。
+      { x: 320, y: 460, width: 26, height: 100, solid: true },
       { x: 410, y: 430, width: 220, height: 14, oneWay: true },
       { x: 400, y: 320, width: 240, height: 14, oneWay: true },
       { x: 415, y: 210, width: 210, height: 14, oneWay: true },
@@ -321,6 +334,9 @@ export const MAPS: Record<MapId, MapDef> = {
       { x: 0, y: 530, width: 240, height: 30 },
       { x: 380, y: 530, width: 260, height: 30 },
       { x: 780, y: 530, width: 220, height: 30 },
+      // M19 掩体墙：西中层货架上的装甲墙，打断 60→220 层直射线；地面层
+      // 视线保持通畅（跨图对枪线与既有测试依赖它）。
+      { x: 130, y: 178, width: 26, height: 84, solid: true },
       { x: 40, y: 445, width: 150, height: 14, oneWay: true },
       { x: 300, y: 448, width: 170, height: 14, oneWay: true },
       { x: 590, y: 442, width: 160, height: 14, oneWay: true },
@@ -407,6 +423,9 @@ const atk = (spec: Partial<AttackDef> & Pick<AttackDef, "kind" | "cooldown" | "d
 // M14火力重设计：Ripper 全自动冲锋枪 / Breach Scatter + Blaze Vent / Longbeam
 // 持续光束 / Voltrail 蓄能磁轨 / Forge Rocket / Cutter Blade。数值全部集中在此表，
 // 手感调参只动这里。
+// M19 射程真实化：projectile 类硬上限首次生效（旧版 range 字段被完全忽略），
+// 激光定位超远（Longbeam 900 / Voltrail 1400），散弹收为 CQC。range 超过即
+// 消散（火箭空爆），60%-100% 射程段伤害线性衰减至 0.6。
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   sidearm: {
     id: "sidearm", label: "Vein Ripper", ammo: 90, color: 0xd8b45f,
@@ -415,23 +434,23 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   scatter: {
     id: "scatter", label: "Breach Scatter", ammo: 32, color: 0x9fc6d1,
-    primary: atk({ kind: "projectile", cooldown: 0.68, damage: 9, knockback: 95, recoil: 85, speed: 780, spread: 0.26, radius: 4, pattern: "pellet", count: 8 }),
+    primary: atk({ kind: "projectile", cooldown: 0.68, damage: 9, knockback: 95, recoil: 85, speed: 780, spread: 0.26, radius: 4, range: 400, pattern: "pellet", count: 8 }),
     secondary: atk({ kind: "projectile", cooldown: 0.08, damage: 4, knockback: 30, recoil: 6, speed: 560, spread: 0.34, radius: 3, range: 260, pattern: "pellet", count: 2 }),
   },
   rifle: {
     id: "rifle", label: "Longbeam", ammo: 90, color: 0x75c795,
-    primary: atk({ kind: "hitscan", cooldown: 0.12, damage: 6, knockback: 22, recoil: 4, range: 620, pattern: "beam" }),
+    primary: atk({ kind: "hitscan", cooldown: 0.12, damage: 6, knockback: 22, recoil: 4, range: 900, pattern: "beam" }),
     secondary: atk({ kind: "hitscan", cooldown: 0.95, damage: 38, knockback: 320, recoil: 70, range: 950, ammoCost: 3, pattern: "piercing", pierce: 3 }),
   },
   sniper: {
     id: "sniper", label: "Voltrail", ammo: 6, color: 0xd797c7,
-    primary: atk({ kind: "hitscan", cooldown: 0.55, damage: 32, knockback: 210, recoil: 60, range: 1200, pattern: "piercing", pierce: 3, chargeMax: 1.1, chargeMin: 0.25 }),
+    primary: atk({ kind: "hitscan", cooldown: 0.55, damage: 32, knockback: 210, recoil: 60, range: 1400, pattern: "piercing", pierce: 3, chargeMax: 1.1, chargeMin: 0.25 }),
     secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 35, knockback: 260, recoil: 55, range: 1050, pattern: "piercing", pierce: 1 }),
   },
   rocket: {
     id: "rocket", label: "Forge Rocket", ammo: 5, color: 0xe9793d,
-    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 46, knockback: 300, recoil: 110, speed: 520, radius: 7, explosiveRadius: 88 }),
-    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 25, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
+    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 46, knockback: 300, recoil: 110, speed: 520, radius: 7, range: 900, explosiveRadius: 88 }),
+    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 25, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, range: 640, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
   },
   blade: {
     id: "blade", label: "Cutter Blade", ammo: 999, color: 0xbfcbd0,
@@ -610,6 +629,79 @@ export const buildPlatformGraph = (map: MapDef): PlatformGraph => {
     }
   }
   return { nodes, edgesFrom };
+};
+
+// M19 弹道几何：攻击、bot 感知与客户端视觉共用一份实现，杜绝两套真相。
+// 所有函数只读 MapDef/平台数组，可在测试里直接验证。
+
+/**
+ * Damage falloff for a hit at `distance` from the muzzle with a weapon whose
+ * range is `range`. Full damage out to 60% of range, then linear down to 0.6
+ * at the cap; clamped so hits beyond the cap (air-burst splash etc.) floor at
+ * 0.6. Knockback never scales with distance.
+ */
+export const rangeFalloff = (distance: number, range: number): number => {
+  if (range <= 0) return 1;
+  const fraction = clamp(distance / range, 0, 1);
+  if (fraction <= 0.6) return 1;
+  return clamp(1 - (fraction - 0.6) / 0.4 * 0.4, 0.6, 1);
+};
+
+/**
+ * First intersection distance along the segment (x0,y0)->(x1,y1) with the
+ * map's solid platforms, or undefined when the line of sight is clear.
+ * Only `solid: true` platforms block; one-way ledges are shootable-through.
+ */
+export const raycastSolids = (
+  platforms: Platform[],
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): number | undefined => {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  if (dx === 0 && dy === 0) return undefined;
+  let best: number | undefined;
+  for (const platform of platforms) {
+    if (!platform.solid) continue;
+    // Slab method against the platform rect; also catches a start point
+    // already inside a wall.
+    let tEnter = 0;
+    let tExit = 1;
+    if (dx !== 0) {
+      const t1 = (platform.x - x0) / dx;
+      const t2 = (platform.x + platform.width - x0) / dx;
+      tEnter = Math.max(tEnter, Math.min(t1, t2));
+      tExit = Math.min(tExit, Math.max(t1, t2));
+    } else if (x0 < platform.x || x0 > platform.x + platform.width) continue;
+    if (dy !== 0) {
+      const t1 = (platform.y - y0) / dy;
+      const t2 = (platform.y + platform.height - y0) / dy;
+      tEnter = Math.max(tEnter, Math.min(t1, t2));
+      tExit = Math.min(tExit, Math.max(t1, t2));
+    } else if (y0 < platform.y || y0 > platform.y + platform.height) continue;
+    if (tEnter > tExit || tExit < 0 || tEnter > 1) continue;
+    const hit = Math.max(0, tEnter);
+    if (best === undefined || hit < best) best = hit;
+  }
+  return best === undefined ? undefined : best * Math.hypot(dx, dy);
+};
+
+/**
+ * Y coordinate of the nearest standable platform surface strictly below (or
+ * at) `y` at horizontal position `x`, or undefined when there is nothing to
+ * land on (a fall gap). Drives blood-decal anchoring, gib bounces and bot
+ * ground queries with one shared truth.
+ */
+export const surfaceBelow = (map: MapDef, x: number, y: number): number | undefined => {
+  let best: number | undefined;
+  for (const platform of map.platforms) {
+    if (x < platform.x - 6 || x > platform.x + platform.width + 6) continue;
+    if (platform.y < y - 12) continue;
+    if (best === undefined || platform.y < best) best = platform.y;
+  }
+  return best;
 };
 
 export const makePlayer = (id: string, name: string, index: number, config: MatchConfig): PlayerState => {

@@ -1,7 +1,7 @@
 # Spirefall 开发进度交接文档
 
-> 更新时间：2026-08-23
-> 本文档由 Claude Code 从 Codex 会话 `01a013e4`（2026-08-18，4.8 MB）及磁盘实际状态整理而成，2026-08-23 由 Claude Code 接手后续开发。
+> 更新时间：2026-09（M19 后）
+> 本文档由 Claude Code 从 Codex 会话 `01a013e4`（2026-08-18，4.8 MB）及磁盘实际状态整理而成，2026-08-23 由 Claude Code 接手后续开发，M19 由 DSH/glm-5.3-flash 完成。
 > 用途：压缩上下文后接续开发的主参考。**磁盘与 Git 状态优先于本文档；发现冲突时以真实状态为准并回写更新。**
 
 ## 1. 项目定位
@@ -219,13 +219,40 @@ public/assets/             生成位图：3 环境 + 3 材质 + 4 肖像
 - **性能护栏（特效强化后 perf 一度 39.7）**：自适应粒子密度（池>140 ×0.65，>200 ×0.35）；粒子池 240→170；爆炸/死亡爆发数收敛；hitstop 风暴跳过；**血 decals 烙进独立 RenderTexture**（decalLayer，stamp 一次终身免费，替掉每帧最多 48×2 fill 的最大隐性开销，gore 关闭 clear）；tracer jitter 段替代而非叠加 halo 层。最终六套全绿，performance 稳定 54.9-55.5 FPS / p95 29.2ms
 - **状态**：等待用户实测手感后批准提交（commit 需用户明确批准——§6 约束）
 
-## 5. 未完成事项 / 下一步候选
+### M19 射程真实化 + 血迹系统 + AI 行为层重写（2026-09，DSH/glm-5.3-flash）
+
+用户反馈：血迹贴图有问题、AI 逻辑需要全面加强、激光武器射程短且误导。审计确认三类系统性缺陷后，用户拍板：AI 全面重写 + bot 智能切枪 + 硬上限/远距衰减 + 仅实体墙挡弹 + 激光超远定位 + 血迹修复全五项 + Tab 射程条 + 一次性做到底。
+
+**射程与弹道（shared/game.ts + server/server.ts + main.ts）**
+- 三个纯函数进契约层：`rangeFalloff`（60% 射程内全额，线性衰减到 0.6，只乘伤害）、`raycastSolids`（slab 法射线求交，仅 solid 挡）、`surfaceBelow`（x 处 y 之下最近平台表面）
+- projectile 类首次执行 range：ProjectileState +originX/originY/travelled；travelled ≥ range 时火箭空爆、其余消散（impact surface:false）；命中伤害按 travelled 衰减；爆炸溅射径向衰减 0.7×→0.2×
+- 新射程表：scatter 0→400、Blaze Vent 260 生效、Longbeam 620→**900**、Voltrail 1200→**1400**（满蓄 ×1.25≈1750）、rocket 0→900/640；其余不变
+- hitscan 重写：射线垂距判定（替换 `|dy−tan·dx|`）、`along ≤ wallDistance`（墙体截断）、伤害乘 falloff；beam 同样被墙截断
+- 客户端：beam/Voltrail 轨长 = min(真实射程, 本地 raycast 墙距)；piercing 轨从固定 170px 改真实射程；single/burst 改 thin 单层弹道线（诚实射程显示）；surface:false 不烙弹孔；**Tab 面板 PRI/SEC 射程条**（.range-bar + --range var）
+- **掩体墙**：每图 1 面 solid（canopy 452,452,26×78 地面矮墙 / fortress 320,460,26×100 西缺口立柱兼垫脚石 / factory 130,178,26×84 西中层货架）。货架层间净空 96px 放不下 78px 墙+跳跃，故 fortress 用缺口立柱。art.ts solid 分支装甲板+accent 描边。game-logic 断言：每图恰好 1 面、不压箱位/出生点、可跳越（rise ≤ NAV_MAX_RISE）
+
+**血迹系统（main.ts）**
+- 根因修复：血泊/弹孔/残肢全部经 `surfaceBelow` 吸附真实平台表面（旧版烙在 event.y+18 clamp 520——半空悬浮、地面浮空 10px）；无平台（缺口）则不生成/落出世界
+- `decals[]` 数组成为唯一真相源（旧版 RenderTexture 模式下永不填充=回退分支死代码）；decalLayer 增量绘制 + 每帧 ≤30 流式补绘；上限 220 超限重铺；每 8s 全层 ×0.85 淡出；对局开始/tick 回卷/换房 resetGore()
+- 血渍形态重做：方向性拉长主泊 + 拖尾 + 3 卫星滴 + 深色核心（双色）；hit 事件 actorId → 喷溅方向=远离射手（旧版用受击者 facing）
+- 界外 impact（WORLD.height-8 假弹孔）由 surface:false 根治
+
+**AI 行为层重写（server/bots.ts）**
+- 感知升级：self.weapon/ammoByWeapon（修掉 decidePlan 永真条件坏代码）、incoming 弹丸（<280px 逼近 dot>0.6）、losToTarget/targetDistance（共享 raycastSolids）
+- 火控：射程带 ENGAGEMENT_BAND + **开火门=真实射程 ×1.02**（首版 band>0.72 阈值允许 1.39× 射程开火全落空，探针抓出）、LOS 门控（不射墙）、垂直对齐（|dy|>44 时爬层/下穿而非扫射）
+- 武器管理器：band×held×弹药深度评分，切换 1.5s 防抖，蓄力中不切；**购箱行为修复**：弹药 ≤2×cost 时 crateReach 1400（旧版仅 260px 内才绕路——README"低弹药找箱"是吹的）
+- 威胁记忆（2s 内 lastAttacker 优先）、弹道闪避（brutal 0.65/standard 0.25）、卡墙跳（有输入+onGround+|vx|<8 连续 12 tick → jumpPulse，掩体墙前置保障）、蓄力 LOS 门控
+- 测试教训：aggression 测试三次重设计——全量扫描事件须按 id 去重（事件存活 1s，重复计数 1 发变 20）；blade 持有时长可短至一个决策周期（100ms 轮询漏采，改逐快照扫描+cratePickup 事件佐证）；远程磨枪 6 发+近战爆发是新常态，断言改为"实际打残人"+切换序列
+
+**回归**：tsc/build + 七套全绿；performance **109.8 FPS / p95 13.7ms**（M19 后新高）。运维再验证：8787 旧进程陷阱 + DSH 会话 PORT=3080 继承坑（Start-Process 需显式 EnvironmentVariables["PORT"]="8787"）
+**状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
-2. **用户验收 M14-M17 战斗版本全量**（当前焦点）：Voltrail 蓄力 ≥80% 处决一枪 → 打断四肢看 bleed-out 死亡 → 观察 bot 跨缺口跳跃/抢修复电池/leapfrog → 僵局对局 240s 后正常出 winner → 满意后批准提交（M14-M17 可合并为"战斗版本"提交或分四个，用户定）
+2. **用户验收 M19 弹道/血迹/AI 版本**（当前焦点）：Tab 面板射程条 → 散弹/火焰/火箭超程消散（火箭空爆）→ Longbeam 900/Voltrail 1400 激光 → 掩体柱挡弹 → 半空血迹不再悬浮、跨局清空 → bot 切枪/不隔墙开火/购箱。满意后批准提交（需 provenance trailer：模型名以用户确认为准）
 3. **发布收尾（候选）**：MIT LICENSE + v0.1.0 tag + GitHub About/topics 文案（gh CLI 未装，网页项需用户操作）
 4. **联机第一版验收**：4 人自定义对战完整流程由用户组织验收
-5. 性能余量充足（96 FPS，七套测试含 test:ai）；若逼近 45 门槛再做粒子/光轨批渲染
+5. 性能余量充足（109.8 FPS / p95 13.7ms，M19 后新高）；若逼近 45 门槛再做粒子/光轨批渲染
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 

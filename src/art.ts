@@ -143,6 +143,21 @@ export function drawPlatformBodies(graphics: Phaser.GameObjects.Graphics, mapId:
 export function drawPlatformCaps(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
   const map = MAPS[mapId];
   for (const platform of map.platforms) {
+    if (platform.solid) {
+      // M19 cover wall readout: armor plating + hot accent edges so players
+      // learn "this blocks shots" at a glance. Tall solids get rivet bands.
+      graphics.fillStyle(0x2e373a, 1);
+      graphics.fillRect(platform.x, platform.y, platform.width, platform.height);
+      graphics.fillStyle(0x1a2124, 1);
+      for (let y = platform.y + 10; y < platform.y + platform.height - 6; y += 16) {
+        graphics.fillRect(platform.x + 4, y, platform.width - 8, 3);
+      }
+      graphics.lineStyle(2, map.accent, 0.85);
+      graphics.strokeRect(platform.x + 1, platform.y + 1, platform.width - 2, platform.height - 2);
+      graphics.fillStyle(0xf2f5f2, 0.5);
+      graphics.fillRect(platform.x, platform.y, platform.width, 2);
+      continue;
+    }
     // Bright cap line is the primary "walkable here" signal — keep it loud.
     graphics.fillStyle(map.accent, platform.oneWay ? 1 : 0.95);
     graphics.fillRect(platform.x, platform.y, platform.width, 4.5);
