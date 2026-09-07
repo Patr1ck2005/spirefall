@@ -7,6 +7,7 @@ FRP_VERSION="0.61.1"
 TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
 
 echo "== installing frp ${FRP_VERSION} =="
+command -v wget >/dev/null 2>&1 || { apt-get update -y; apt-get install -y wget; }
 cd /tmp
 wget -q "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"
 tar -xzf "frp_${FRP_VERSION}_linux_amd64.tar.gz"
