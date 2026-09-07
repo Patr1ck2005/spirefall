@@ -1,4 +1,4 @@
-﻿import { chromium } from "playwright";
+import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { launchOptions, webUrl } from "./helpers/runtime.js";
 
@@ -71,14 +71,20 @@ await solo.locator("#sandbox-respawn").click();
 await solo.waitForTimeout(1900);
 
 // Switch helpers: the weapon-slot message is sent once per keypress, so a
-// respawn freeze can swallow it 鈥?retry until the HUD confirms the switch.
+// respawn freeze or a dropped synthesized keypress can swallow it — retry
+// until the HUD confirms the switch. CI headless environments drop keys
+// non-deterministically, so the retry budget is generous and each window
+// doubles to tolerate slow HUD refresh under load.
 async function selectWeapon(page: import("playwright").Page, key: string, label: string) {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    // Re-assert page focus: headless CI sessions can leave focus elsewhere
+    // after the lobby interactions, and pressed keys then go nowhere.
+    await page.locator("body").focus();
     await page.keyboard.press(key);
     try {
-      await page.locator("#hud-weapon").filter({ hasText: label }).waitFor({ timeout: 1500 });
+      await page.locator("#hud-weapon").filter({ hasText: label }).waitFor({ timeout: 1000 * (attempt + 1) });
       return;
-    } catch { /* swallowed by a respawn freeze 鈥?retry */ }
+    } catch { /* swallowed by a respawn freeze — retry */ }
   }
   throw new Error(`Weapon switch to ${label} never appeared on the HUD`);
 }
