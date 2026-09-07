@@ -33,14 +33,14 @@ guest.send(JSON.stringify({ type: "join", roomCode, name: "Bravo" }));
 const joined = await waitFor(guest, "room");
 assert(joined.room.players.length === 2, "Guest did not join the room");
 
-host.send(JSON.stringify({ type: "config", patch: { mapId: "factory", lives: 2, crates: true } }));
+host.send(JSON.stringify({ type: "config", patch: { mapId: "factory", lives: 2, crates: false } }));
 await waitFor(host, "room");
 host.send(JSON.stringify({ type: "start" }));
 const started = await waitFor(host, "snapshot");
 assert(started.snapshot.phase === "playing", "Match did not start");
 assert(started.snapshot.mode === "match", "Normal start did not use match mode");
 assert(started.snapshot.config.mapId === "factory", "Room config was not applied");
-assert(started.snapshot.crates.length === 6, "Crates were not created");
+assert(started.snapshot.crates.length === 0, "Crates were not disabled by config");
 assert(started.snapshot.hazards.some((hazard: any) => hazard.kind === "conveyor"), "Factory hazards were not synchronized");
 
 host.send(JSON.stringify({ type: "input", input: { seq: 1, left: false, right: false, jump: false, drop: false, primary: true, secondary: true } }));
