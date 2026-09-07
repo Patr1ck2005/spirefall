@@ -321,6 +321,15 @@ public/assets/             生成位图：3 环境 + 3 材质 + 4 肖像
 - **教训**：①测试套件绝不能经由 import 链拉起监听端口的模块——纯函数放独立叶子模块；②链式 shell 命令会掩盖中间步骤失败，验收必须逐套检查退出码；③CI 无日志时，Actions 页面 HTML 的内嵌 JSON/annotation 是可行的诊断通道（API 限流下的兜底）。
 - commit `297c0be` 已推送，触发第二次 CI 运行。
 
+### M22c CI 浏览器套件抖动修复（2026-09，DSH/glm-5.3-flash）
+
+CI #2/#3（`297c0be`/`cef769b`）logic+AI 通过（修复生效），但 "Browser + visual suites" 稳定失败。日志/artifact 端点需要 admin token（403），改走**本地复现**：`npx playwright install chromium` 后用 `SPIREFALL_BROWSER` 指向各二进制逐个验证。
+
+- **根因**：Playwright 1.49+ 将 `headless: true` 映射到 **chrome-headless-shell** 简化渲染器；该 shell 对合成键盘输入有非确定性丢失——探针插桩证实 keydown 已达页面、但 WebSocket 发送的 input 里 weaponSlot 缺失（还有收到错误槽位的实例），失败率 30-70%/轮。完整 chromium（新 headless 模式）每轮全过。
+- **修复**：`tests/helpers/runtime.ts` 的 launchOptions 无 env 覆盖时改传 **`channel: "chromium"`**（完整浏览器 + 新 headless）；`npx playwright install chromium` 本就同时装两个二进制，workflow 不用改；`SPIREFALL_BROWSER` 可执行文件覆盖路径保持兼容。browser/visual/performance 三套在默认路径全绿验证后提交。
+- **教训**：①headless shell ≠ headless chromium——涉及键盘/输入合成的 Playwright 测试必须用 `channel: "chromium"`；②"本地 chromium 过了"不等于"CI 浏览器过了"，浏览器二进制本身也是变量；③commit 前检查暂存清单，诊断临时文件勿入库。
+- commits `a0adb35`（修复）+ `a218fbc`（清理误入的诊断文件）已推送，触发 CI #4。
+
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
 2. **用户验收 M19 弹道/血迹/AI 版本**（当前焦点）：Tab 面板射程条 → 散弹/火焰/火箭超程消散（火箭空爆）→ Longbeam 900/Voltrail 1400 激光 → 掩体柱挡弹 → 半空血迹不再悬浮、跨局清空 → bot 切枪/不隔墙开火/购箱。满意后批准提交（需 provenance trailer：模型名以用户确认为准）
