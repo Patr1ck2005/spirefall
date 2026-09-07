@@ -9,3 +9,6 @@ test-results/
 temp_folder/
 flash_capture*.png
 
+ci-*.txt
+ci-job.html
+ci-artifacts*
