@@ -18,3 +18,4 @@ ci-art-test*
 ci-run9*
 ci-summary.html
 rl.json
+deploy/frpc.toml
