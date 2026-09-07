@@ -94,8 +94,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           for f in browser-suite.log visual-suite.log performance-suite.log; do
             if [ -f "$f" ]; then
-              MSG=$(tail -n 30 "$f" | grep -E "Error|error|pageerror|console|Timeout|failed|✘" | tail -n 8 | tr '\n' '\001' | sed 's/%/%25/g; s/\001/%0A/g')
-              if [ -n "$MSG" ]; then echo "::error::$f: $MSG"; fi
+              MSG=$(tail -n 60 "$f" | grep -v "^$" | tail -n 12 | tr '\n' '\001' | sed 's/%/%25/g; s/\001/%0A/g; s/,/%2C/g')
+              if [ -n "$MSG" ]; then echo "::error file=ci/$f::$MSG"; fi
             fi
           done
 
