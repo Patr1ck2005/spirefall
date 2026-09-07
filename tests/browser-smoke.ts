@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+﻿import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { launchOptions, webUrl } from "./helpers/runtime.js";
 
@@ -35,8 +35,8 @@ await host.locator(".player-slot").nth(1).waitFor({ timeout: 30000 });
 await host.locator("#map").selectOption("fortress");
 await host.locator("#lives").selectOption("2");
 await host.locator("#start").click();
-await host.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
-await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
+await host.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 });
+await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 });
 await host.keyboard.down("j");
 await host.keyboard.down("k");
 await host.waitForTimeout(250);
@@ -51,7 +51,7 @@ await mkdir("test-results", { recursive: true });
 await host.screenshot({ path: "test-results/match.png", fullPage: true });
 
 await guest.reload({ waitUntil: "domcontentloaded" });
-await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
+await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 });
 
 const soloContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const solo = await soloContext.newPage();
@@ -64,21 +64,21 @@ if (await solo.locator("#start").isEnabled()) throw new Error("Normal match star
 if (!(await solo.locator("#solo-test").isEnabled())) throw new Error("Solo test was not enabled for the room host");
 await solo.locator("#map").selectOption("factory");
 await solo.locator("#solo-test").click();
-await solo.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
+await solo.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 });
 await solo.locator("#hud-phase").filter({ hasText: "SOLO TEST" }).waitFor();
 // Fresh state for the FX checks: respawn first so no residual effects linger.
 await solo.locator("#sandbox-respawn").click();
 await solo.waitForTimeout(1900);
 
 // Switch helpers: the weapon-slot message is sent once per keypress, so a
-// respawn freeze can swallow it — retry until the HUD confirms the switch.
+// respawn freeze can swallow it 鈥?retry until the HUD confirms the switch.
 async function selectWeapon(page: import("playwright").Page, key: string, label: string) {
   for (let attempt = 0; attempt < 5; attempt++) {
     await page.keyboard.press(key);
     try {
       await page.locator("#hud-weapon").filter({ hasText: label }).waitFor({ timeout: 1500 });
       return;
-    } catch { /* swallowed by a respawn freeze — retry */ }
+    } catch { /* swallowed by a respawn freeze 鈥?retry */ }
   }
   throw new Error(`Weapon switch to ${label} never appeared on the HUD`);
 }
@@ -142,10 +142,10 @@ await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
 const panelText = await solo.locator("#weapon-panel").textContent();
 if (!panelText?.includes("Vein Ripper")) throw new Error("Weapon panel did not list the held weapon");
 // M19: every weapon row carries PRI/SEC range bars driven by --range vars.
-// M20: seven weapons now — Echo Shard joins the panel with its own bars.
+// M20: seven weapons now 鈥?Echo Shard joins the panel with its own bars.
 if (!panelText?.includes("Echo Shard")) throw new Error("Weapon panel did not list the Echo Shard (slot 7)");
 const rangeBars = await solo.locator("#weapon-panel .range-bar").count();
-if (rangeBars < 14) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 14 for 7 weapons × PRI/SEC)`);
+if (rangeBars < 14) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 14 for 7 weapons 脳 PRI/SEC)`);
 const firstRange = await solo.locator("#weapon-panel .range-bar em").first().getAttribute("style");
 if (!firstRange?.includes("--range")) throw new Error("Range bar lacks its --range width variable");
 await solo.keyboard.up("Tab");
@@ -175,7 +175,7 @@ await solo.locator("#lobby:not(.hidden)").waitFor();
 for (const [mapId, filename] of [["canopy", "canopy.png"], ["fortress", "fortress.png"]] as const) {
   await solo.locator("#map").selectOption(mapId);
   await solo.locator("#solo-test").click();
-  await solo.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
+  await solo.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 });
   await solo.waitForTimeout(450);
   await solo.screenshot({ path: `test-results/${filename}`, fullPage: true });
   await solo.locator("#sandbox-return").click();

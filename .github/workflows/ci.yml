@@ -46,18 +46,9 @@ jobs:
       - name: Logic + network + AI suites
         run: |
           set -o pipefail
-          if ! npm run test:logic 2>&1 | tee logic-suite.log; then
-            tail -n 40 logic-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
-            exit 1
-          fi
-          if ! npm run test:smoke 2>&1 | tee smoke-suite.log; then
-            tail -n 40 smoke-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
-            exit 1
-          fi
-          if ! npm run test:ai 2>&1 | tee ai-suite.log; then
-            tail -n 40 ai-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
-            exit 1
-          fi
+          npm run test:logic 2>&1 | tee logic-suite.log
+          npm run test:smoke 2>&1 | tee smoke-suite.log
+          npm run test:ai 2>&1 | tee ai-suite.log
 
       - name: Start web client
         run: |
@@ -72,14 +63,8 @@ jobs:
       - name: Browser + visual suites
         run: |
           set -o pipefail
-          if ! npm run test:browser 2>&1 | tee browser-suite.log; then
-            tail -n 40 browser-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
-            exit 1
-          fi
-          if ! npm run test:visual 2>&1 | tee visual-suite.log; then
-            tail -n 40 visual-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
-            exit 1
-          fi
+          npm run test:browser 2>&1 | tee browser-suite.log
+          npm run test:visual 2>&1 | tee visual-suite.log
 
       # CI runners throttle rendering and share CPU with the server process, so
       # the performance gate is reported but not enforced here. The >=45 FPS /
@@ -88,9 +73,10 @@ jobs:
         continue-on-error: true
         run: npm run test:performance 2>&1 | tee performance-suite.log
 
-      # Self-diagnostics: on failure, dump the tail of every suite log into
-      # the job's step summary — visible on the run page without any token,
-      # unlike the raw log download endpoints.
+      # Self-diagnostics: on failure, compress the tail of every suite log
+      # into ONE multi-line ::error:: annotation (lines joined with %0A) —
+      # annotations are readable from the public checks page HTML, unlike
+      # token-gated log downloads and rate-limited artifact APIs.
       - name: Publish suite log tails to summary
         if: failure()
         run: |
@@ -106,6 +92,12 @@ jobs:
               fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
+          for f in browser-suite.log visual-suite.log performance-suite.log; do
+            if [ -f "$f" ]; then
+              MSG=$(tail -n 30 "$f" | grep -E "Error|error|pageerror|console|Timeout|failed|✘" | tail -n 8 | tr '\n' '\001' | sed 's/%/%25/g; s/\001/%0A/g')
+              if [ -n "$MSG" ]; then echo "::error::$f: $MSG"; fi
+            fi
+          done
 
       - name: Upload test artifacts on failure
         if: failure()
