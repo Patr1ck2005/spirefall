@@ -14,3 +14,7 @@ ci-job.html
 ci-artifacts*
 ci-r7-*.html
 tmp-log.txt
+ci-art-test*
+ci-run9*
+ci-summary.html
+rl.json
