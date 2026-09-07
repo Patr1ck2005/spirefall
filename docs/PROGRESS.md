@@ -312,6 +312,15 @@ public/assets/             生成位图：3 环境 + 3 材质 + 4 肖像
 - **发布流**：单 commit 承载 M20+M21（同一工作树，测试验证的就是该状态）；`v0.1.0` tag 从陈旧的 a1a0c24 force-move 到新 commit（远端同 force 推送）；push master + tag
 - **回归**（推送前最终）：build + 七套全绿；performance 50.3 FPS / p95 29.5ms
 
+### M22b CI 首跑失败修复（2026-09，DSH/glm-5.3-flash）
+
+首次 CI（run 34043842796）在 "Logic + network + AI suites" 步骤失败，总时长仅 1 分钟。API 被限流拉不到日志，通过 Actions 页面 HTML 内嵌 JSON 逐步骤探测 conclusion 定位。
+
+- **根因**：M21 把 `stepOffLedge` 放进 `server/bots.ts`，而 bots.ts `import "./server.js"` → test:logic 的模块图把整个 HTTP/WebSocket 服务器拉进来，模块加载即 `http.listen(8787)`，撞上 CI 中已在跑的游戏服务器 → 未捕获 EADDRINUSE → exit 1。本地"全绿"是假象：链式命令用 `;` 串接，logic 的退出码被后续输出掩盖。
+- **修复**：`stepOffLedge` 抽到 `server/bot-motion.ts`（只依赖 shared/game 常量，零 server.ts 依赖）；bots.ts 与 game-logic.ts 改 import。复验方式=复现 CI 条件：服务器监听 8787 时跑 test:logic，独立检查 `$LASTEXITCODE` = 0；全套退出码逐个确认（smoke/browser/visual/perf/ai 全 0，AI 受压测试 19 命中 0 坠落）。
+- **教训**：①测试套件绝不能经由 import 链拉起监听端口的模块——纯函数放独立叶子模块；②链式 shell 命令会掩盖中间步骤失败，验收必须逐套检查退出码；③CI 无日志时，Actions 页面 HTML 的内嵌 JSON/annotation 是可行的诊断通道（API 限流下的兜底）。
+- commit `297c0be` 已推送，触发第二次 CI 运行。
+
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
 2. **用户验收 M19 弹道/血迹/AI 版本**（当前焦点）：Tab 面板射程条 → 散弹/火焰/火箭超程消散（火箭空爆）→ Longbeam 900/Voltrail 1400 激光 → 掩体柱挡弹 → 半空血迹不再悬浮、跨局清空 → bot 切枪/不隔墙开火/购箱。满意后批准提交（需 provenance trailer：模型名以用户确认为准）
