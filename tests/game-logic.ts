@@ -1,5 +1,5 @@
 import { MAPS, WEAPONS, WORLD, buildPlatformGraph, calculateHazardState, calculateLimbModifiers, calculateMoverState, rangeFalloff, raycastSolids, selectLimbAtPoint, surfaceBelow, type HazardDef, type MapDef, type MoverDef, type Platform } from "../shared/game.js";
-import { stepOffLedge } from "../server/bots.js";
+import { stepOffLedge } from "../server/bot-motion.js";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);

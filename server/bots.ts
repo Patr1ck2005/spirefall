@@ -20,6 +20,7 @@ import {
 } from "../shared/game.js";
 import { randomInt } from "node:crypto";
 import type { Room } from "./server.js";
+import { stepOffLedge } from "./bot-motion.js";
 
 const randomBetween = (min: number, max: number) => randomInt(min, max + 1);
 
@@ -187,27 +188,6 @@ function platformUnder(graph: PlatformGraph, x: number, footY: number) {
     if (surface >= footY - 14 && (!best || surface < best.surface)) best = { index: node.index, surface };
   }
   return best;
-}
-
-/**
- * M21 cliff guard: given the bot's stance and an ordered horizontal move,
- * should the ordered direction be vetoed? True when a grounded bot is about
- * to step off a ledge — the probe point one half-width+6 ahead has no
- * surface below it. `gapJumpExempt` passes the route planner's deliberate
- * lip crossing through untouched (blocking it would freeze the bot outside
- * its own takeoff window). Exported for direct unit testing.
- */
-export function stepOffLedge(
-  mapPlatforms: Platform[],
-  x: number,
-  footY: number,
-  heading: -1 | 1,
-  onGround: boolean,
-  gapJumpExempt: boolean,
-): boolean {
-  if (!onGround || gapJumpExempt) return false;
-  const probeX = x + heading * (PLAYER_HALF_WIDTH + 6);
-  return surfaceBelow({ platforms: mapPlatforms }, probeX, footY) === undefined;
 }
 
 function nearestNodeIndex(graph: PlatformGraph, x: number, y: number) {
