@@ -10,14 +10,20 @@ import { existsSync } from "node:fs";
  * the shell drops synthesized weapon-slot keypresses (they reach the page
  * but the input messages never carry the slot), which fails the browser
  * suites non-deterministically.
+ *
+ * CI runners execute as an unprivileged user in a container-like
+ * environment where the Chromium sandbox's setuid helper is unavailable;
+ * `--no-sandbox` is the standard remedy there (and harmless locally, where
+ * the env override path runs a user-level browser install).
  */
 export function launchOptions() {
   const override = process.env.SPIREFALL_BROWSER;
+  const args = ["--no-sandbox", "--disable-dev-shm-usage"];
   if (override) {
     if (!existsSync(override)) throw new Error(`SPIREFALL_BROWSER points to a missing executable: ${override}`);
-    return { headless: true, executablePath: override } as const;
+    return { headless: true, executablePath: override, args } as const;
   }
-  return { headless: true, channel: "chromium" } as const;
+  return { headless: true, channel: "chromium", args } as const;
 }
 
 /** Web client base URL (vite dev server) with an env override for CI. */

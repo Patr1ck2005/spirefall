@@ -45,9 +45,10 @@ jobs:
 
       - name: Logic + network + AI suites
         run: |
-          npm run test:logic
-          npm run test:smoke
-          npm run test:ai
+          set -o pipefail
+          npm run test:logic 2>&1 | tee logic-suite.log
+          npm run test:smoke 2>&1 | tee smoke-suite.log
+          npm run test:ai 2>&1 | tee ai-suite.log
 
       - name: Start web client
         run: |
@@ -72,26 +73,24 @@ jobs:
         continue-on-error: true
         run: npm run test:performance 2>&1 | tee performance-suite.log
 
-      # Self-diagnostics: on failure, publish every suite log to the
-      # ci-diagnostics branch so the exact failing assertion is fetchable
-      # without repository-admin log access.
-      - name: Publish suite logs on failure
+      # Self-diagnostics: on failure, dump the tail of every suite log into
+      # the job's step summary — visible on the run page without any token,
+      # unlike the raw log download endpoints.
+      - name: Publish suite log tails to summary
         if: failure()
         run: |
-          git config user.name "ci-diagnostics-bot"
-          git config user.email "ci@spirefall.invalid"
-          git checkout --orphan ci-diagnostics-tmp
-          git reset
-          mkdir -p ci-diagnostics
-          cp browser-suite.log ci-diagnostics/ 2>/dev/null || true
-          cp visual-suite.log ci-diagnostics/ 2>/dev/null || true
-          cp performance-suite.log ci-diagnostics/ 2>/dev/null || true
-          cp server.log ci-diagnostics/ 2>/dev/null || true
-          cp vite.log ci-diagnostics/ 2>/dev/null || true
-          echo "run: $GITHUB_RUN_ID commit: $GITHUB_SHA date: $(date -u)" > ci-diagnostics/README.txt
-          git add ci-diagnostics
-          git commit -m "CI diagnostics for run $GITHUB_RUN_ID ($GITHUB_SHA)"
-          git push -f origin ci-diagnostics-tmp:ci-diagnostics
+          {
+            echo "## CI failure diagnostics (run $GITHUB_RUN_ID, commit $GITHUB_SHA)"
+            for f in logic-suite.log smoke-suite.log ai-suite.log browser-suite.log visual-suite.log performance-suite.log server.log vite.log; do
+              if [ -f "$f" ]; then
+                echo ""
+                echo "### $f (last 60 lines)"
+                echo '```'
+                tail -n 60 "$f"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test artifacts on failure
         if: failure()
