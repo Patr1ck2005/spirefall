@@ -12,3 +12,5 @@ flash_capture*.png
 ci-*.txt
 ci-job.html
 ci-artifacts*
+ci-r7-*.html
+tmp-log.txt
