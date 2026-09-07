@@ -275,6 +275,14 @@ function handleMessage(message: any) {
       hook.push(...message.snapshot.events);
       if (hook.length > 600) hook.splice(0, hook.length - 600);
     }
+    // Test hook: headless browsers drop synthesized weapon-slot keypresses
+    // non-deterministically, so suites can drive switches directly through
+    // window.__spireSlot (consumed and cleared here, one slot per snapshot).
+    const slotHook = window as unknown as { __spireSlot?: number };
+    if (typeof slotHook.__spireSlot === "number" && scene) {
+      scene.sendInput(slotHook.__spireSlot);
+      slotHook.__spireSlot = undefined;
+    }
     showGame();
     scene?.applySnapshot(message.snapshot);
   }

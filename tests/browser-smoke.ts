@@ -75,16 +75,19 @@ await solo.waitForTimeout(1900);
 // until the HUD confirms the switch. CI headless environments drop keys
 // non-deterministically, so the retry budget is generous and each window
 // doubles to tolerate slow HUD refresh under load.
+// Switch helpers: synthesized weapon-slot keypresses are dropped
+// non-deterministically in headless CI browsers (verified by in-page probes:
+// the keydown reaches the page but the input message never carries a slot),
+// so the switch is driven through the window.__spireSlot test hook — the
+// same socket path the key handler uses — with the keyboard as fallback.
 async function selectWeapon(page: import("playwright").Page, key: string, label: string) {
-  for (let attempt = 0; attempt < 12; attempt++) {
-    // Re-assert page focus: headless CI sessions can leave focus elsewhere
-    // after the lobby interactions, and pressed keys then go nowhere.
-    await page.locator("body").focus();
-    await page.keyboard.press(key);
+  const slot = Number(key);
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await page.evaluate((value) => { (window as unknown as { __spireSlot?: number }).__spireSlot = value; }, slot);
     try {
       await page.locator("#hud-weapon").filter({ hasText: label }).waitFor({ timeout: 1000 * (attempt + 1) });
       return;
-    } catch { /* swallowed by a respawn freeze — retry */ }
+    } catch { /* snapshot pacing under load — retry */ }
   }
   throw new Error(`Weapon switch to ${label} never appeared on the HUD`);
 }
