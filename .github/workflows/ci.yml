@@ -46,9 +46,18 @@ jobs:
       - name: Logic + network + AI suites
         run: |
           set -o pipefail
-          npm run test:logic 2>&1 | tee logic-suite.log
-          npm run test:smoke 2>&1 | tee smoke-suite.log
-          npm run test:ai 2>&1 | tee ai-suite.log
+          if ! npm run test:logic 2>&1 | tee logic-suite.log; then
+            tail -n 40 logic-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
+            exit 1
+          fi
+          if ! npm run test:smoke 2>&1 | tee smoke-suite.log; then
+            tail -n 40 smoke-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
+            exit 1
+          fi
+          if ! npm run test:ai 2>&1 | tee ai-suite.log; then
+            tail -n 40 ai-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
+            exit 1
+          fi
 
       - name: Start web client
         run: |
@@ -63,8 +72,14 @@ jobs:
       - name: Browser + visual suites
         run: |
           set -o pipefail
-          npm run test:browser 2>&1 | tee browser-suite.log
-          npm run test:visual 2>&1 | tee visual-suite.log
+          if ! npm run test:browser 2>&1 | tee browser-suite.log; then
+            tail -n 40 browser-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
+            exit 1
+          fi
+          if ! npm run test:visual 2>&1 | tee visual-suite.log; then
+            tail -n 40 visual-suite.log | while IFS= read -r line; do echo "::error::${line//'%'/'%25'}"; done
+            exit 1
+          fi
 
       # CI runners throttle rendering and share CPU with the server process, so
       # the performance gate is reported but not enforced here. The >=45 FPS /
