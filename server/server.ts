@@ -1,5 +1,10 @@
 import { createServer } from "node:http";
 import { randomInt, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize, resolve } from "node:path";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   AMMO_REGEN_INTERVAL_TICKS,
@@ -999,10 +1004,53 @@ function broadcastSnapshot(room: Room) {
   for (const client of room.clients.values()) send(client, "snapshot", { snapshot: snapshot(room) });
 }
 
-const http = createServer((_request, response) => {
+// Single-port hosting (M23): when a production build exists, the game server
+// serves the compiled web client itself — one address carries both the page
+// and its same-origin WebSocket. This is what makes LAN and tunnel play a
+// single-URL experience; `vite` dev mode on 5173 stays the local workflow.
+const webDist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist");
+const mimeByExt: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+};
+const indexHtml = join(webDist, "index.html");
+
+async function serveStatic(pathname: string, response: import("node:http").ServerResponse) {
+  // Normalize and pin inside dist/: no traversal out of the build directory.
+  const safe = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
+  let filePath = join(webDist, safe);
+  if (!filePath.startsWith(webDist)) {
+    response.writeHead(403);
+    response.end();
+    return;
+  }
+  if (!existsSync(filePath) || extname(filePath) === "") {
+    filePath = indexHtml; // SPA fallback: client-side routing never 404s
+  }
+  if (!existsSync(filePath)) {
+    response.writeHead(404, { "content-type": "text/plain" });
+    response.end("Web build missing — run `npm run build` first");
+    return;
+  }
+  const body = await readFile(filePath);
+  response.writeHead(200, { "content-type": mimeByExt[extname(filePath)] ?? "application/octet-stream" });
+  response.end(body);
+}
+
+const http = createServer((request, response) => {
+  const pathname = (request.url ?? "/").split("?")[0];
   // M20 balance instrumentation: GET /stats aggregates per-weapon counters
   // across every live room (shots / hits / damage / kills).
-  if (_request.url === "/stats") {
+  if (pathname === "/stats") {
     const aggregate: WeaponStats = {};
     for (const room of rooms.values()) {
       for (const [weaponId, entry] of Object.entries(room.stats)) {
@@ -1015,6 +1063,11 @@ const http = createServer((_request, response) => {
     }
     response.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
     response.end(JSON.stringify(aggregate));
+    return;
+  }
+  // The compiled client lives in dist/ and references /assets/... paths.
+  if (pathname === "/" || pathname.startsWith("/assets/") || pathname === "/vite.svg" || pathname.endsWith(".html")) {
+    serveStatic(pathname, response);
     return;
   }
   response.writeHead(200, { "content-type": "text/plain" });

@@ -341,6 +341,16 @@ CI #2/#3（`297c0be`/`cef769b`）logic+AI 通过（修复生效），但 "Browse
 **最终**：run `34110613176` 十五步全绿（logic/smoke/ai + browser/visual + perf 报告），诊断闭环工具链沉淀在 workflow 里，后续任何失败自带证据。
 **教训**：①固定 snapshot 数量的时序假设在 CI 负载下全不可靠——读状态（charge）而非数消息；②headless 浏览器的合成键盘不可信，测试钩子走真实数据通道；③annotations 是唯一匿名可读的 CI 证据通道（summary/artifact/logs 全要 token）。
 
+### M23 单端口部署 + 公网隧道指南（2026-09，DSH/glm-5.3-flash）
+
+用户诉求："朋友打开一个网页就玩"。原架构阻塞点 = 客户端硬编码 `ws://…:8787`（朋友需同时可达 5173+8787 两个端口，任何公网单 URL 方案都被卡死）。
+
+- **服务器托管静态客户端**：dist/ 存在时 `http` 层直接服务编译产物（MIME 表 + normalize 防目录穿越 + SPA fallback 到 index.html；`/stats` 保留）。无 dist 时回落 "server is running" 文本——dev 流程零影响。
+- **客户端端点解析**：vite dev（port 5173）→ `ws://host:8787`（不变）；同端口/隧道 → **同源** ws（HTTPS 页面自动 wss）。
+- **验证**：build 后 `SPIREFALL_WEB=http://127.0.0.1:8787` 跑完整 browser-smoke（页面+同源 WS 端到端）通过；network-smoke 新增同源托管断言（index 服务 /assets bundle 存在且非 dev 构建；dist 缺失时跳过不卡纯 dev 机器）。
+- **文档**：README "One-address play" + 云隧道四行命令（winget 装 cloudflared → npm start → `cloudflared tunnel --url http://localhost:8787` → 分享临时 trycloudflare URL）。
+- **边界重申**：隧道 URL 随会话失效、游戏随终端关闭——这是"和朋友开几局"的工具，不是公网常驻托管（后者仍属排除项，需要时走 VPS + 方案 C）。
+
 
 1. ~~**GitHub 发布**~~ ✅ 已完成：仓库已推送（用户操作，2026-08-23）
 2. **用户验收 M19 弹道/血迹/AI 版本**（当前焦点）：Tab 面板射程条 → 散弹/火焰/火箭超程消散（火箭空爆）→ Longbeam 900/Voltrail 1400 激光 → 掩体柱挡弹 → 半空血迹不再悬浮、跨局清空 → bot 切枪/不隔墙开火/购箱。满意后批准提交（需 provenance trailer：模型名以用户确认为准）

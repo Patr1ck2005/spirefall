@@ -153,7 +153,12 @@ const audioPrefs = sfx.getPrefs();
 $<HTMLInputElement>("sound-toggle").checked = !audioPrefs.muted;
 $<HTMLInputElement>("sound-volume").value = String(Math.round(audioPrefs.volume * 100));
 
-const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}:8787`;
+// WebSocket endpoint resolution (M23 single-port hosting):
+// - vite dev (port 5173): the server runs separately on :8787.
+// - Same-port hosting (server serves dist/ on :8787) or a tunnel: the page
+//   and the WebSocket share the origin, so connect to the page's own host.
+const isViteDev = location.port === "5173";
+const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}${isViteDev ? ":8787" : location.port ? `:${location.port}` : ""}`;
 
 function setStatus(text: string, tone = "") {
   status.textContent = text.toUpperCase();

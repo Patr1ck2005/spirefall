@@ -35,7 +35,20 @@ npm run dev
 
 Open `http://localhost:5173`. The WebSocket game server listens on port `8787`.
 
-For LAN play, other players open `http://<host-ip>:5173` and enter the six-digit room code. Windows Firewall may ask for permission for Node.js on private networks; allow private-network access for LAN play.
+**One-address play (no vite)** — after `npm run build`, the game server serves the compiled client itself: everything runs from `http://localhost:8787`, same origin, no second process. This is the mode LAN and tunnel play use.
+
+For LAN play, other players open `http://<host-ip>:8787` (or `http://<host-ip>:5173` in dev mode) and enter the six-digit room code. Windows Firewall may ask for permission for Node.js on private networks; allow private-network access for LAN play.
+
+**Playing over the internet** — for a friend outside your network, expose the one-address server with a free Cloudflare Tunnel (no account, no port forwarding, no fixed IP needed):
+
+```powershell
+winget install Cloudflare.cloudflared
+npm run build
+npm start
+cloudflared tunnel --url http://localhost:8787
+```
+
+cloudflared prints a temporary public URL (like `https://random-words-1234.trycloudflare.com`); share it — your friend opens it and plays. Closing the command retires the URL. The game only runs while your terminal does, so this suits playing sessions rather than permanent hosting.
 
 For one-player setup and feel checks, create a room and choose **Solo test**. The sandbox uses the selected map, lives, crates, and weapon set, respawns after falls without declaring a winner, offers a `Test respawn` control, and can return directly to the lobby. Normal multiplayer matches still require at least two pilots.
 

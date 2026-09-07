@@ -23,6 +23,20 @@ const open = () => new Promise<WebSocket>((resolve, reject) => {
 });
 const assert = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
 
+// M23 single-port hosting: when a production build exists the game server
+// serves the compiled client from the same origin as the WebSocket. Only
+// asserted when dist/ is present, so dev machines without a build still pass.
+const webBase = (process.env.SPIREFALL_WS || "ws://127.0.0.1:8787").replace(/^ws/, "http");
+const indexPage = await fetch(`${webBase}/`).then((r) => r.text()).catch(() => "");
+if (indexPage) {
+  assert(indexPage.includes('id="app"'), "Single-port hosting did not serve the built index page");
+  const assetRef = indexPage.match(/src="(\/assets\/[^"]+\.js)"/);
+  assert(assetRef, "Built index does not reference an /assets bundle");
+  const bundle = await fetch(`${webBase}${assetRef![1]}`).then((r) => r.text());
+  assert(bundle.length > 10000, "Served JS bundle looks truncated");
+  assert(!bundle.includes("import.meta.env.DEV === undefined"), "Served bundle is not a production build");
+}
+
 const host = await open();
 host.send(JSON.stringify({ type: "create", name: "Alpha" }));
 const created = await waitFor(host, "room");
