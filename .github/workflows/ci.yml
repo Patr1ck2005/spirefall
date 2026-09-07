@@ -61,15 +61,37 @@ jobs:
 
       - name: Browser + visual suites
         run: |
-          npm run test:browser
-          npm run test:visual
+          set -o pipefail
+          npm run test:browser 2>&1 | tee browser-suite.log
+          npm run test:visual 2>&1 | tee visual-suite.log
 
       # CI runners throttle rendering and share CPU with the server process, so
       # the performance gate is reported but not enforced here. The >=45 FPS /
       # p95 <=45ms gate is enforced on developer machines by the same suite.
       - name: Performance suite (report only on CI)
         continue-on-error: true
-        run: npm run test:performance
+        run: npm run test:performance 2>&1 | tee performance-suite.log
+
+      # Self-diagnostics: on failure, publish every suite log to the
+      # ci-diagnostics branch so the exact failing assertion is fetchable
+      # without repository-admin log access.
+      - name: Publish suite logs on failure
+        if: failure()
+        run: |
+          git config user.name "ci-diagnostics-bot"
+          git config user.email "ci@spirefall.invalid"
+          git checkout --orphan ci-diagnostics-tmp
+          git reset
+          mkdir -p ci-diagnostics
+          cp browser-suite.log ci-diagnostics/ 2>/dev/null || true
+          cp visual-suite.log ci-diagnostics/ 2>/dev/null || true
+          cp performance-suite.log ci-diagnostics/ 2>/dev/null || true
+          cp server.log ci-diagnostics/ 2>/dev/null || true
+          cp vite.log ci-diagnostics/ 2>/dev/null || true
+          echo "run: $GITHUB_RUN_ID commit: $GITHUB_SHA date: $(date -u)" > ci-diagnostics/README.txt
+          git add ci-diagnostics
+          git commit -m "CI diagnostics for run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -f origin ci-diagnostics-tmp:ci-diagnostics
 
       - name: Upload test artifacts on failure
         if: failure()

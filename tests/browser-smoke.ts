@@ -8,18 +8,29 @@ const guestContext = await browser.newContext({ viewport: { width: 1280, height:
 const host = await hostContext.newPage();
 const guest = await guestContext.newPage();
 
-await host.goto(webUrl(), { waitUntil: "networkidle" });
+// CI diagnostics: surf every console error and page exception into the step
+// log so a headless-environment failure carries its own evidence.
+for (const page of [host, guest]) {
+  page.on("pageerror", (error) => console.error(`[pageerror ${page === host ? "host" : "guest"}]`, error));
+  page.on("console", (message) => { if (message.type() === "error") console.error(`[console ${page === host ? "host" : "guest"}]`, message.text()); });
+}
+
+// domcontentloaded + explicit element waits: `networkidle` is unreliable and
+// slow against a cold vite dev server (CI compiles modules on first request).
+await host.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
+await host.locator("#name").waitFor({ timeout: 30000 });
 await host.locator("#name").fill("Alpha");
 await host.locator("#create").click();
-await host.locator("#lobby:not(.hidden)").waitFor();
+await host.locator("#lobby:not(.hidden)").waitFor({ timeout: 30000 });
 const roomCode = (await host.locator("#room-label").textContent())!.trim();
 
-await guest.goto(webUrl(), { waitUntil: "networkidle" });
+await guest.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
+await guest.locator("#name").waitFor({ timeout: 30000 });
 await guest.locator("#name").fill("Bravo");
 await guest.locator("#room-code").fill(roomCode);
 await guest.locator("#join").click();
-await guest.locator("#lobby:not(.hidden)").waitFor();
-await host.locator(".player-slot").nth(1).waitFor();
+await guest.locator("#lobby:not(.hidden)").waitFor({ timeout: 30000 });
+await host.locator(".player-slot").nth(1).waitFor({ timeout: 30000 });
 
 await host.locator("#map").selectOption("fortress");
 await host.locator("#lives").selectOption("2");
@@ -39,12 +50,13 @@ if (!hud?.includes("AMMO") || !(await host.locator("#hud-phase").textContent())?
 await mkdir("test-results", { recursive: true });
 await host.screenshot({ path: "test-results/match.png", fullPage: true });
 
-await guest.reload({ waitUntil: "networkidle" });
+await guest.reload({ waitUntil: "domcontentloaded" });
 await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 8000 });
 
 const soloContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const solo = await soloContext.newPage();
-await solo.goto(webUrl(), { waitUntil: "networkidle" });
+await solo.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
+await solo.locator("#name").waitFor({ timeout: 30000 });
 await solo.locator("#name").fill("Solo");
 await solo.locator("#create").click();
 await solo.locator("#lobby:not(.hidden)").waitFor();

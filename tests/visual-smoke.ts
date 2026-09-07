@@ -36,19 +36,21 @@ const browser = await chromium.launch(launchOptions());
 for (const viewport of viewports) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
   const page = await context.newPage();
-  await page.goto(webUrl(), { waitUntil: "networkidle" });
+  page.on("pageerror", (error) => console.error(`[pageerror ${viewport.name}]`, error));
+  await page.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.locator("#name").waitFor({ timeout: 30000 });
   await page.screenshot({ path: `test-results/visual/menu-${viewport.name}.png`, fullPage: true });
   await assertNoOverflow(page, `${viewport.name} menu`);
 
   await page.locator("#name").fill(`QA-${viewport.width}`);
   await page.locator("#create").click();
-  await page.locator("#lobby:not(.hidden)").waitFor();
+  await page.locator("#lobby:not(.hidden)").waitFor({ timeout: 30000 });
   await page.screenshot({ path: `test-results/visual/lobby-${viewport.name}.png`, fullPage: true });
   await assertNoOverflow(page, `${viewport.name} lobby`);
 
   await page.locator("#solo-test").click();
   const canvas = page.locator("#game-wrap:not(.hidden) canvas");
-  await canvas.waitFor({ timeout: 8000 });
+  await canvas.waitFor({ timeout: 20000 });
   await page.waitForTimeout(550);
   const canvasDataLength = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png").length);
   assert(canvasDataLength > 5000, `${viewport.name} canvas appears blank`);
