@@ -170,6 +170,9 @@ const weapons: Record<string, (out: AudioNode, g: number) => void> = {
   "attack:scatter:pri": (out, g) => {
     noise(0.24, "lowpass", 1100, 220, 0.8, g * 0.9, out);
     tone("sine", 130, 50, 0.2, g * 0.7, out);
+    // M24 weapon signature: the pump-action clack lands after the boom.
+    noise(0.045, "bandpass", 2100, 1500, 2.2, g * 0.3, out, 0.17);
+    noise(0.03, "bandpass", 1500, 1100, 2.2, g * 0.22, out, 0.24);
   },
   "attack:scatter:sec": (out, g) => noise(0.09, "bandpass", 1400, 800, 0.9, g * 0.34, out),
   "attack:rifle:pri": (out, g) => {
@@ -229,8 +232,10 @@ const ui: Record<string, (out: AudioNode, g: number) => void> = {
 
 const world: Record<string, (out: AudioNode, g: number) => void> = {
   hit: (out, g) => {
+    // M24 hit-feel layering: low thud (body) + high crack (impact snap).
     tone("sine", 95, 46, 0.09, g * 0.8, out);
     noise(0.06, "lowpass", 700, 260, 0.7, g * 0.4, out);
+    noise(0.035, "highpass", 3400, 1600, 1.1, g * 0.45, out);
   },
   explosion: (out, g) => {
     noise(0.45, "lowpass", 320, 60, 0.6, g, out);
@@ -261,6 +266,15 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
     noise(0.06, "lowpass", 900, 260, 0.8, g * 0.5, out);
     tone("sine", 170, 70, 0.07, g * 0.4, out);
   },
+  // M24 movement audio: soft jump whoosh and a grounded landing thud.
+  jump: (out, g) => {
+    noise(0.08, "bandpass", 420, 900, 1.2, g * 0.14, out);
+    tone("sine", 190, 320, 0.07, g * 0.07, out);
+  },
+  land: (out, g) => {
+    noise(0.07, "lowpass", 520, 160, 0.8, g * 0.26, out);
+    tone("sine", 95, 45, 0.08, g * 0.3, out);
+  },
   crateSpawn: (out, g) => tone("triangle", 420, 860, 0.14, g * 0.34, out),
   cratePickup: (out, g) => {
     tone("triangle", 640, 1000, 0.09, g * 0.34, out);
@@ -270,6 +284,12 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
     tone("sine", 520, 780, 0.14, g * 0.3, out);
     tone("sine", 780, 1170, 0.16, g * 0.28, out, 0.08);
     tone("sine", 1170, 1560, 0.18, g * 0.24, out, 0.16);
+  },
+  // M25 Canopy storm: a rolling thunder clap — low rumble with a delayed echo.
+  thunder: (out, g) => {
+    noise(0.7, "lowpass", 240, 50, 0.6, g * 0.5, out);
+    noise(1.1, "lowpass", 140, 36, 0.5, g * 0.4, out, 0.18);
+    tone("sine", 52, 24, 0.8, g * 0.35, out, 0.05);
   },
 };
 

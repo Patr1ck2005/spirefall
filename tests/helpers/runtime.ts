@@ -31,3 +31,15 @@ export const webUrl = () => process.env.SPIREFALL_WEB || "http://127.0.0.1:5173"
 
 /** Game server WebSocket endpoint with an env override for CI. */
 export const wsEndpoint = () => process.env.SPIREFALL_WS || "ws://127.0.0.1:8787";
+
+/**
+ * M24: pin the UI to English before the app boots. The live game defaults to
+ * Chinese (per the M24 playtest request); suites assert on English HUD strings,
+ * so every browser page must set the persisted language before its first load.
+ * Must be awaited before `page.goto`.
+ */
+export async function pinEnglish(page: import("playwright").Page) {
+  await page.addInitScript(() => {
+    try { localStorage.setItem("spirefall-lang", "en"); } catch { /* storage optional */ }
+  });
+}

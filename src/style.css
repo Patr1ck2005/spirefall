@@ -37,7 +37,7 @@ select { cursor: pointer; }
 .app-backdrop > i:nth-of-type(2) { right: 4%; top: -20%; width: 82px; height: 145%; background: #0d1214; }
 .app-backdrop > i:nth-of-type(3) { left: 31%; bottom: -52%; width: 420px; height: 78%; background: #0b1012; }
 
-.shell { position: relative; z-index: 1; width: min(1180px, calc(100vw - 36px)); margin: 0 auto; padding: 22px 0 48px; }
+.shell { position: relative; z-index: 1; width: min(1320px, calc(100vw - 36px)); margin: 0 auto; padding: 22px 0 48px; }
 .command-bar { position: relative; display: flex; align-items: center; justify-content: space-between; min-height: 64px; padding-bottom: 17px; border-bottom: 1px solid #334044; }
 .brand { display: flex; align-items: center; gap: 13px; }
 .brand-mark { position: relative; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid #7ae1d7; background: #10181a; overflow: hidden; }
@@ -149,26 +149,26 @@ select { cursor: pointer; }
 .lobby-actions { display: flex; align-items: center; justify-content: space-between; padding: 17px 2px; }
 .lobby-actions > div { display: flex; gap: 8px; }
 
-.game-wrap { position: relative; width: min(1000px, 100%); aspect-ratio: 1000 / 560; margin: 18px auto 0; overflow: hidden; border: 1px solid #536063; border-radius: 2px; background: #080b0d; box-shadow: 0 26px 80px rgba(0,0,0,.48); }
+.game-wrap { position: relative; width: min(1320px, 100%); aspect-ratio: 1000 / 560; margin: 18px auto 0; overflow: hidden; border: 1px solid #536063; border-radius: 2px; background: #080b0d; box-shadow: 0 26px 80px rgba(0,0,0,.48); }
 #game, #game canvas { display: block; width: 100%; height: 100%; }
 #game canvas { object-fit: contain; }
-.game-hud { pointer-events: none; position: absolute; inset: 0; z-index: 3; font-size: 10px; }
+.game-hud { pointer-events: none; position: absolute; inset: 0; z-index: 3; font-size: 12px; }
 .game-hud button { pointer-events: auto; }
 .hud-leave { position: absolute; right: 12px; top: 10px; z-index: 6; min-height: 26px; padding: 5px 9px; background: rgba(9,13,15,.88); font-size: 9px; }
 .hud-leave:hover { color: #e7ece6; border-color: #495457; }
 .hud-top { position: absolute; top: 0; left: 0; right: 0; display: grid; grid-template-columns: 190px 1fr minmax(260px, auto); align-items: start; min-height: 56px; padding: 10px 12px; background: linear-gradient(180deg, rgba(5,8,10,.88), rgba(5,8,10,0)); }
 .hud-top > div:first-child span, .hud-top > div:first-child small { display: block; }
-.hud-top > div:first-child span { color: #e9eee8; font-weight: 900; }
-.hud-top > div:first-child small { margin-top: 3px; color: #879496; font-size: 8px; }
-.hud-phase { justify-self: center; padding: 7px 12px; border-top: 2px solid var(--amber); background: rgba(8,12,14,.78); color: #eef0e9; font-size: 9px; font-weight: 900; }
+.hud-top > div:first-child span { color: #e9eee8; font-weight: 900; font-size: 13px; }
+.hud-top > div:first-child small { margin-top: 3px; color: #879496; font-size: 10px; }
+.hud-phase { justify-self: center; padding: 7px 12px; border-top: 2px solid var(--amber); background: rgba(8,12,14,.78); color: #eef0e9; font-size: 11px; font-weight: 900; }
 .hud-roster { display: flex; justify-content: flex-end; gap: 5px; margin-right: 92px; }
-.hud-roster span { --pilot: #888; display: inline-flex; align-items: center; gap: 4px; max-width: 120px; padding: 5px 6px; border-bottom: 2px solid var(--pilot); background: rgba(8,12,14,.74); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-roster span { --pilot: #888; display: inline-flex; align-items: center; gap: 4px; max-width: 130px; padding: 5px 7px; border-bottom: 2px solid var(--pilot); background: rgba(8,12,14,.74); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .hud-roster span i { flex: none; width: 5px; height: 5px; background: var(--pilot); }
 .hud-roster span b { color: var(--pilot); }
 .hud-roster span.out { opacity: .35; }
 /* M20 kill feed: top-right stack under the roster; entries fade and self-remove. */
 .kill-feed { position: absolute; z-index: 6; right: 12px; top: 74px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; pointer-events: none; }
-.kill-entry { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; background: rgba(8,12,14,.82); border-right: 2px solid var(--amber); font-size: 9px; font-weight: 900; letter-spacing: .4px; animation: kill-in .18s ease-out; }
+.kill-entry { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; background: rgba(8,12,14,.82); border-right: 2px solid var(--amber); font-size: 11px; font-weight: 900; letter-spacing: .4px; animation: kill-in .18s ease-out; }
 .kill-entry b { --pilot: #ccc; color: var(--pilot); }
 .kill-entry b.spire-kill { color: #c7d2d4; letter-spacing: 1.5px; }
 .kill-arrow { color: #76838a; font-style: normal; }
@@ -179,21 +179,28 @@ select { cursor: pointer; }
 .vignette { position: absolute; inset: 0; z-index: 5; pointer-events: none; opacity: 0; transition: opacity .18s linear; box-shadow: inset 0 0 90px 28px rgba(178, 22, 34, calc(.85 * var(--vignette, 0))); }
 .vignette.active { opacity: 1; }
 .hud-bottom { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; align-items: flex-end; justify-content: space-between; }
-.hud-weapon { min-width: 205px; }
+.hud-weapon { min-width: 225px; }
 .weapon-readout { --weapon: #fff; display: grid; grid-template-columns: minmax(80px, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border-left: 3px solid var(--weapon); background: rgba(7,10,12,.84); }
-.weapon-readout > span { font-weight: 900; text-transform: uppercase; }
-.weapon-readout > strong { color: var(--weapon); font-family: Consolas, monospace; font-size: 19px; }
-.weapon-readout > small { color: #768386; font-size: 7px; }
+.weapon-readout > span { font-weight: 900; text-transform: uppercase; font-size: 12px; }
+.weapon-readout > strong { color: var(--weapon); font-family: Consolas, monospace; font-size: 24px; }
+.weapon-readout > small { color: #768386; font-size: 9px; }
 .weapon-readout > div { grid-column: 1 / -1; display: flex; gap: 5px; }
-.weapon-readout i { --cool: 0; position: relative; width: 25px; height: 16px; overflow: hidden; border: 1px solid #495457; color: #e7ece6; font-size: 9px; font-style: normal; line-height: 14px; text-align: center; }
+.weapon-readout i { --cool: 0; position: relative; width: 25px; height: 16px; overflow: hidden; border: 1px solid #495457; color: #e7ece6; font-size: 10px; font-style: normal; line-height: 14px; text-align: center; }
 .weapon-readout i::after { content: ""; position: absolute; inset: auto 0 0; height: calc(var(--cool) * 100%); background: rgba(216,75,68,.55); }
-.hud-limbs { min-width: 235px; padding: 8px 10px; border-right: 3px solid var(--cyan); background: rgba(7,10,12,.84); }
-.hud-limbs > span { display: block; margin-bottom: 5px; color: #879496; font-size: 7px; font-weight: 900; text-align: right; }
+.hud-limbs { min-width: 250px; padding: 9px 11px; border-right: 3px solid var(--cyan); background: rgba(7,10,12,.84); }
+.hud-limbs > span { display: block; margin-bottom: 6px; color: #879496; font-size: 10px; font-weight: 900; text-align: right; }
+.hud-limbs .integrity-total { color: var(--cyan); font-family: Consolas, monospace; }
+.hud-limbs .integrity-total.warn { color: var(--amber); }
+.hud-limbs .integrity-total.crit { color: var(--red); }
 .hud-limbs > div { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.hud-limbs i { display: grid; grid-template-columns: 14px 1fr; align-items: center; gap: 4px; font-style: normal; }
-.hud-limbs b { color: #a7b1b2; font-size: 7px; }
-.hud-limbs em { height: 4px; background: #2d3639; }
+.hud-limbs i { display: grid; grid-template-columns: 18px 1fr; align-items: center; gap: 4px; font-style: normal; }
+.hud-limbs b { color: #a7b1b2; font-size: 10px; }
+.hud-limbs em { height: 6px; background: #2d3639; }
 .hud-limbs u { display: block; height: 100%; background: var(--cyan); text-decoration: none; }
+.hud-limbs i.warn b { color: var(--amber); }
+.hud-limbs i.warn u { background: var(--amber); }
+.hud-limbs i.crit b { color: #ff9a6b; }
+.hud-limbs i.crit u { background: #ff9a6b; }
 .hud-limbs i.lost b { color: var(--red); }
 .hud-limbs i.lost u { background: var(--red); }
 .game-actions { position: absolute; z-index: 4; right: 12px; top: 65px; display: flex; gap: 6px; }
@@ -213,16 +220,16 @@ select { cursor: pointer; }
 .weapon-panel.hidden { display: none; }
 .weapon-panel .panel-hint { margin: 0 0 8px; color: #7d8a8c; font-size: 7px; font-weight: 900; letter-spacing: 1.5px; text-align: center; }
 .weapon-row { display: grid; grid-template-columns: 20px 1fr 44px; grid-template-rows: auto auto; align-items: baseline; column-gap: 8px; padding: 5px 8px; margin-bottom: 4px; background: rgba(13,18,20,.85); border-left: 3px solid var(--weapon, var(--cyan)); }
-.weapon-row b { color: #96a2a4; font-size: 10px; }
-.weapon-row span { color: #e8ece5; font-size: 11px; font-weight: 800; }
-.weapon-row em { color: var(--weapon, var(--cyan)); font-size: 11px; font-style: normal; font-weight: 900; text-align: right; }
-.weapon-row small { grid-column: 2 / 4; color: #78848666; color: #788486; font-size: 7.5px; letter-spacing: .6px; }
+.weapon-row b { color: #96a2a4; font-size: 11px; }
+.weapon-row span { color: #e8ece5; font-size: 12px; font-weight: 800; }
+.weapon-row em { color: var(--weapon, var(--cyan)); font-size: 12px; font-style: normal; font-weight: 900; text-align: right; }
+.weapon-row small { grid-column: 2 / 4; color: #78848666; color: #788486; font-size: 9px; letter-spacing: .6px; }
 .weapon-row.active { background: rgba(23,31,33,.95); outline: 1px solid var(--weapon, var(--cyan)); }
 .weapon-row.active span { color: var(--weapon, var(--cyan)); }
 /* M19 range bars: one per attack, width = range relative to the world width. */
 .weapon-row .range-bars { grid-column: 2 / 4; display: flex; gap: 10px; margin-top: 3px; }
 .weapon-row .range-bar { flex: 1; display: grid; grid-template-columns: 12px 1fr; align-items: center; gap: 4px; }
-.weapon-row .range-bar i { color: #6d7a7c; font-size: 6.5px; font-weight: 900; letter-spacing: .5px; font-style: normal; }
+.weapon-row .range-bar i { color: #6d7a7c; font-size: 8px; font-weight: 900; letter-spacing: .5px; font-style: normal; }
 .weapon-row .range-bar em { display: block; height: 3px; background: rgba(120,132,134,.25); position: relative; overflow: hidden; font-style: normal; }
 .weapon-row .range-bar em::before { content: ""; position: absolute; inset: 0; width: var(--range, 0%); background: var(--weapon, var(--cyan)); opacity: .85; }
 

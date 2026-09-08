@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
-import { launchOptions, webUrl } from "./helpers/runtime.js";
+import { launchOptions, pinEnglish, webUrl } from "./helpers/runtime.js";
 
 const browser = await chromium.launch(launchOptions());
 
@@ -9,6 +9,7 @@ const browser = await chromium.launch(launchOptions());
 try {
   const contexts = await Promise.all(Array.from({ length: 4 }, () => browser.newContext({ viewport: { width: 1280, height: 820 } })));
   const pages = await Promise.all(contexts.map((context) => context.newPage()));
+  await Promise.all(pages.map((page) => pinEnglish(page)));
 
   await pages[0].goto(webUrl(), { waitUntil: "networkidle" });
   await pages[0].locator("#name").fill("Load-1");

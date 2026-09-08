@@ -199,4 +199,84 @@ assert(!stepOffLedge(canopyPlatforms, 500, eastFoot, -1, true, false) && !stepOf
 // step off that lip is vetoed exactly like the east one.
 assert(stepOffLedge(MAPS.canopy.platforms, 274, westLipFoot, 1, true, false), "Cliff guard failed to veto the fatal step off the west-island lip");
 
+// ---- M24: hit capsule + swept projectile geometry --------------------------
+import { MOVE_TUNING, NAV_MAX_RISE, PLAYER_CAPSULE, PLAYER_TARGET_OFFSET, WORLD, segmentHitsPlayer, segmentImpactPoint, segmentSegmentClosest } from "../shared/game.js";
+
+const capsuleTarget = { x: 400, y: 300 };
+// Straight shot through the torso center: hit.
+assert(segmentHitsPlayer(capsuleTarget, 340, 286, 460, 286), "Center-mass segment missed the capsule");
+// Segment far above the capsule's reach (axis top 276, radius 11): miss.
+assert(!segmentHitsPlayer(capsuleTarget, 340, 250, 460, 250), "Segment far outside the capsule radius registered a hit");
+// Segment short of the body on the x axis: miss.
+assert(!segmentHitsPlayer(capsuleTarget, 100, 286, 140, 286), "Segment well short of the body registered a hit");
+// Head-height ray (old chest-circle model left the head unprotected): hit.
+assert(segmentHitsPlayer(capsuleTarget, 340, 300 - PLAYER_CAPSULE.upTop + 2, 460, 300 - PLAYER_CAPSULE.upTop + 2), "Head-height segment missed the capsule");
+// Knee-height ray: hit.
+assert(segmentHitsPlayer(capsuleTarget, 340, 300 - PLAYER_CAPSULE.upBottom + 2, 460, 300 - PLAYER_CAPSULE.upBottom + 2), "Knee-height segment missed the capsule");
+
+// Tunneling regression: a fast round whose per-tick path starts and ends
+// BEYOND the body must still register (the old per-tick point test missed it).
+assert(segmentHitsPlayer(capsuleTarget, 380, 286, 420, 286), "Swept segment that crosses the body in one tick was missed");
+const tunnelImpact = segmentImpactPoint(capsuleTarget, 380, 286, 420, 286);
+assert(tunnelImpact !== undefined && Math.abs(tunnelImpact.x - 400) < 12, "Swept impact point did not land on the body");
+
+// Gravity arc approximation: a falling round passing the chest height still hits.
+assert(segmentHitsPlayer(capsuleTarget, 300, 240, 500, 320), "Descending flight segment missed the capsule");
+
+// Segment-segment distance sanity: parallel segments report separation.
+const parallel = segmentSegmentClosest(0, 0, 100, 0, 0, 30, 100, 30);
+assert(Math.abs(parallel.distance - 30) < 0.01, `Parallel segment distance drifted: ${parallel.distance}`);
+const crossing = segmentSegmentClosest(-10, 0, 10, 0, 0, -10, 0, 10);
+assert(crossing.distance < 0.01, `Crossing segments reported distance ${crossing.distance}`);
+
+// M24b movement budget: the ground jump apex must clear the maps' tallest
+// level step (every map ≤ 110px, budget 115) with a landing margin, and the
+// air jump is deliberately weak (62px) — its job is finishes and rescues.
+const groundApex = (MOVE_TUNING.jumpGround * MOVE_TUNING.jumpGround) / (2 * MOVE_TUNING.gravity);
+assert(groundApex >= NAV_MAX_RISE + 4, `Ground jump apex ${groundApex.toFixed(1)}px fell below the nav budget ${NAV_MAX_RISE}px`);
+const airApex = (MOVE_TUNING.jumpAir * MOVE_TUNING.jumpAir) / (2 * MOVE_TUNING.gravity);
+assert(airApex >= 55 && airApex < groundApex * 0.65, `Air jump apex ${airApex.toFixed(1)}px left the intended weak-finisher band`);
+// The equilibrium ground speed (accel·f/(1−f)) must actually reach the clamp,
+// otherwise pilots crawl at half speed — the root of the old sticky feel.
+const equilibrium = MOVE_TUNING.accelerate * MOVE_TUNING.groundFriction / (1 - MOVE_TUNING.groundFriction);
+assert(equilibrium >= MOVE_TUNING.maxSpeed * 0.9, `Ground equilibrium ${equilibrium.toFixed(1)}px/s never reaches the ${MOVE_TUNING.maxSpeed} clamp — movement would feel sticky`);
+assert(MOVE_TUNING.maxSpeed > 200, "Top speed regressed to a crawl");
+assert(WORLD.snapshotRate === 30, "Snapshot rate should be 30Hz after the M24 latency pass");
+// The hit capsule must cover roughly the drawn silhouette (≤11px half-width,
+// spanning most of the 30px body height above the foot anchor).
+assert(PLAYER_CAPSULE.radius >= 9 && PLAYER_CAPSULE.radius <= 13, "Capsule radius drifted from the sprite silhouette");
+assert(PLAYER_CAPSULE.upTop >= 20 && PLAYER_CAPSULE.upTop <= 30, "Capsule top drifted away from the head zone");
+// Chest reference height stays inside the capsule so target-height math in
+// both server and client keeps aiming at the body.
+assert(PLAYER_TARGET_OFFSET > PLAYER_CAPSULE.upBottom && PLAYER_TARGET_OFFSET < PLAYER_CAPSULE.upTop, "Chest target offset escaped the hit capsule");
+
+// ---- M25: destructible props ------------------------------------------------
+import { PROP_TUNING, segmentHitsProp } from "../shared/game.js";
+// M20 balance band: a barrel is a hazard you shoot, not a better rocket —
+// damage and blast must sit strictly inside the Forge Rocket's envelope.
+assert(PROP_TUNING.damage < WEAPONS.rocket.primary.damage, "Barrel damage matched the rocket — barrels must stay under the M20 band");
+assert(PROP_TUNING.blastRadius < WEAPONS.rocket.primary.explosiveRadius, "Barrel blast radius matched the rocket — barrels must stay under the M20 band");
+assert(PROP_TUNING.hp > 0 && PROP_TUNING.hp <= 40, "Barrel hp drifted — two rifle bursts / one scatter volley should pop it");
+assert(PROP_TUNING.respawnMin >= 5 && PROP_TUNING.respawnMax <= 12, "Barrel respawn window drifted outside the crate cadence");
+// Swept segment vs barrel circle: same geometry the projectiles use.
+const barrel = { x: 600, y: 400 };
+assert(segmentHitsProp(barrel, 560, 388, 640, 388), "Crossing segment missed the barrel");
+assert(!segmentHitsProp(barrel, 560, 370, 640, 370), "High-flying segment registered a phantom barrel hit");
+assert(!segmentHitsProp(barrel, 100, 388, 200, 388), "Segment short of the barrel registered a hit");
+assert(segmentHitsProp(barrel, 596, 388, 604, 388), "Segment fully inside the barrel missed");
+// Every map: barrels sit ON a platform surface, away from spawns and crate
+// sockets, so they never block drops or pickups.
+for (const map of Object.values(MAPS)) {
+  assert(map.props.length >= 3, `${map.name} lost its destructible props`);
+  for (const prop of map.props) {
+    assert(map.platforms.some((platform) => prop.x >= platform.x + 4 && prop.x <= platform.x + platform.width - 4 && Math.abs(prop.y - platform.y) <= 1), `${map.name} prop at ${prop.x},${prop.y} floats off the platform surface`);
+    for (const spawn of map.spawns) {
+      assert(Math.hypot(prop.x - spawn.x, prop.y - spawn.y) >= 80, `${map.name} prop sits within 80px of a spawn — spawn-kill risk`);
+    }
+    for (const socket of map.crateSockets) {
+      assert(Math.hypot(prop.x - socket.x, prop.y - socket.y) >= 40, `${map.name} prop overlaps crate socket ${socket.id}`);
+    }
+  }
+}
+
 console.log("game logic tests passed");

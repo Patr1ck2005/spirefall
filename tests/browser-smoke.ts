@@ -1,12 +1,15 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
-import { launchOptions, webUrl } from "./helpers/runtime.js";
+import { launchOptions, pinEnglish, webUrl } from "./helpers/runtime.js";
 
 const browser = await chromium.launch(launchOptions());
 const hostContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const guestContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const host = await hostContext.newPage();
 const guest = await guestContext.newPage();
+// M24: the live UI defaults to Chinese; suites assert English strings.
+await pinEnglish(host);
+await pinEnglish(guest);
 
 // CI diagnostics: surf every console error and page exception into the step
 // log so a headless-environment failure carries its own evidence.
@@ -55,6 +58,7 @@ await guest.locator("#game-wrap:not(.hidden) canvas").waitFor({ timeout: 20000 }
 
 const soloContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
 const solo = await soloContext.newPage();
+await pinEnglish(solo);
 await solo.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
 await solo.locator("#name").waitFor({ timeout: 30000 });
 await solo.locator("#name").fill("Solo");
@@ -190,6 +194,17 @@ for (const [mapId, filename] of [["canopy", "canopy.png"], ["fortress", "fortres
   await solo.locator("#sandbox-return").click();
   await solo.locator("#lobby:not(.hidden)").waitFor();
 }
+
+// M24: a brand-new context (no stored language) must boot into Chinese —
+// the create button and menu heading read in the default locale.
+const zhContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+const zhPage = await zhContext.newPage();
+await zhPage.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
+await zhPage.locator("#create").filter({ hasText: "创建房间" }).waitFor({ timeout: 30000 });
+if (!(await zhPage.locator(".menu-intro").textContent())?.includes("高塔")) throw new Error("Fresh session did not default to the Chinese locale");
+const zhLang = await zhPage.evaluate(() => document.documentElement.lang);
+if (zhLang !== "zh-CN") throw new Error(`Fresh session document lang was ${zhLang}, expected zh-CN`);
+await zhContext.close();
 
 await browser.close();
 console.log(`browser smoke test passed for room ${roomCode}`);

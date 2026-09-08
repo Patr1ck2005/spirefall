@@ -2,7 +2,35 @@ export const WORLD = {
   width: 1000,
   height: 560,
   tickRate: 60,
-  snapshotRate: 20,
+  // M24: 20Hz snapshots put the rendered position up to ~100ms behind the
+  // authoritative sim on a lerp-only client — a big part of "bullets miss".
+  // 30Hz halves that window for a modest bandwidth cost (~360KB/s at 4 players).
+  snapshotRate: 30,
+} as const;
+
+// M24b movement tuning — the single place to re-feel motion.
+// KEY FACT: the ground top speed is NOT `maxSpeed` — it is the accelerate /
+// friction equilibrium, accel·f/(1−f). The old 56·0.76/0.24 ≈ 177px/s meant
+// the pilot crawled at half the intended speed (the real "sticky" feel and
+// the reason run animations never reached full stride). 96·0.78/0.22 ≈ 340
+// makes the equilibrium reach the clamp, with ~160ms to top speed and ~160ms
+// to a full stop. Gravity rises to 1600 so the jump arc is tight and heavy
+// instead of moon-floaty; jump velocities re-derive apex ≈ 120px (still above
+// the maps' 110px level steps + landing margin) and a 62px air jump.
+export const MOVE_TUNING = {
+  /** Horizontal acceleration per tick while a direction is held. */
+  accelerate: 96,
+  /** Ground/air top speed clamp (px/s); ground equilibrium ≈ 340 reaches it. */
+  maxSpeed: 350,
+  /** Per-tick multiplicative ground friction (lower = snappier stops). */
+  groundFriction: 0.78,
+  /** Per-tick multiplicative air friction. */
+  airFriction: 0.93,
+  /** Downward acceleration (px/s²) — the arc tightness lever. */
+  gravity: 1600,
+  /** Jump launch velocities (px/s): ground jump and air jump. */
+  jumpGround: 620,
+  jumpAir: 445,
 } as const;
 
 export const PLAYER_SCALE = 0.5;
@@ -12,6 +40,184 @@ export const PLAYER_BODY_HEIGHT = 30;
 export const PLAYER_TARGET_OFFSET = 14;
 export const PLAYER_HIT_RADIUS = 12;
 export const MAX_JUMPS = 3;
+
+// M25 destructible props — explosive barrels. Damage/blast sit inside the M20
+// balance band (under rocket primary 46 / radius 88): a barrel is a hazard you
+// shoot, not a better rocket. Cooldowns and machine cycles untouched.
+export const PROP_TUNING = {
+  /** Barrel hit radius (px) — also the visual cylinder half-width. */
+  radius: 12,
+  /** Damage points before detonation (one scatter volley or two rifle bursts). */
+  hp: 30,
+  /** Splash damage radius (px). */
+  blastRadius: 70,
+  /** Core splash damage at the centre, tapering outward (same falloff as rockets). */
+  damage: 32,
+  /** Knockback at the blast centre. */
+  knockback: 280,
+  /** Respawn window after detonation (seconds), matching the crate cadence. */
+  respawnMin: 6,
+  respawnMax: 10,
+} as const;
+
+/** M25 prop kinds — currently only the explosive barrel. */
+export type PropKind = "barrel";
+
+/** Static per-map barrel anchor (centre point, sits on a platform surface). */
+export type PropDef = { id: string; x: number; y: number };
+
+/** Authoritative barrel state carried in every snapshot. */
+export type PropState = {
+  id: number;
+  kind: PropKind;
+  x: number;
+  y: number;
+  hp: number;
+  alive: boolean;
+  /** Seconds until a destroyed barrel respawns (0 while alive). */
+  respawnTimer: number;
+  /** Bumped on every (re)spawn so clients can fire one-shot spawn effects. */
+  generation: number;
+  /** Last damager id — attribution for chain kills through the kill feed. */
+  lastActorId?: string;
+  /** Tick when a destroyed barrel respawns (meaningful while `alive` is false). */
+  nextSpawnTick: number;
+};
+
+// M24 hit capsule: the authoritative body shape every attack resolves
+// against. The old model was a single chest circle (r=12 at PLAYER_TARGET_OFFSET)
+// which left the head and legs outside the hit volume — heads-up duels felt
+// like bullets phased through people. The capsule axis runs up the body line
+// from just under the feet to the neck; total covered shape is roughly 22px
+// wide × 44px tall vs the old 24px-diameter circle (~+38% area, placed where
+// the sprite actually is).
+export const PLAYER_CAPSULE = {
+  /** Axis endpoints measured UP from the player foot anchor (y grows down). */
+  upBottom: 2,
+  upTop: 24,
+  /** Capsule radius — horizontal reach close to the sprite silhouette. */
+  radius: 11,
+} as const;
+
+/**
+ * Closest distance between point P and segment AB, plus the parameter t of the
+ * closest point on AB. Shared geometry: used for sweep tests and for picking
+ * the exact impact point on the flight path (which then feeds limb selection).
+ */
+export const pointSegmentClosest = (
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): { distance: number; t: number } => {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const lengthSq = abx * abx + aby * aby;
+  const t = lengthSq === 0 ? 0 : clampRaw(((px - ax) * abx + (py - ay) * aby) / lengthSq, 0, 1);
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+  return { distance: Math.hypot(px - cx, py - cy), t };
+};
+
+/**
+ * Closest distance between two segments AB and CD (classic clamped solve).
+ */
+export const segmentSegmentClosest = (
+  ax: number, ay: number,
+  bx: number, by: number,
+  cx: number, cy: number,
+  dx: number, dy: number,
+): { distance: number; t: number } => {
+  const ux = bx - ax;
+  const uy = by - ay;
+  const vx = dx - cx;
+  const vy = dy - cy;
+  const wx = ax - cx;
+  const wy = ay - cy;
+  const a = ux * ux + uy * uy;
+  const b = ux * vx + uy * vy;
+  const c = vx * vx + vy * vy;
+  const d = ux * wx + uy * wy;
+  const e = vx * wx + vy * wy;
+  const denom = a * c - b * b;
+  let s = 0;
+  let t = 0;
+  if (denom !== 0 && a !== 0 && c !== 0) {
+    // Closed-form interior minimum, clamped to both segments.
+    s = clampRaw((b * e - c * d) / denom, 0, 1);
+  }
+  // Two Gauss-Seidel refinement passes handle clamped/edge and degenerate
+  // cases; each pass re-projects onto the other segment and converges to
+  // well within a pixel at gameplay scales.
+  for (let pass = 0; pass < 2; pass++) {
+    t = c === 0 ? 0 : clampRaw((b * s + e) / c, 0, 1);
+    s = a === 0 ? 0 : clampRaw((b * t - d) / a, 0, 1);
+  }
+  const p1x = ax + ux * s;
+  const p1y = ay + uy * s;
+  const p2x = cx + vx * t;
+  const p2y = cy + vy * t;
+  return { distance: Math.hypot(p1x - p2x, p1y - p2y), t: s };
+};
+
+const clampRaw = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+
+/**
+ * Whether the flight segment (x0,y0)->(x1,y1) intersects a player's hit
+ * capsule. This is the sweep test: a projectile's per-tick path is a segment
+ * (gravity arc is close enough to straight at 60Hz ranges), so fast rounds
+ * can no longer tunnel through the body between ticks. `extraRadius` lets
+ * callers widen the capsule (e.g. grazing calibration for specific weapons).
+ */
+export const segmentHitsPlayer = (
+  player: Pick<PlayerState, "x" | "y">,
+  x0: number, y0: number,
+  x1: number, y1: number,
+  extraRadius = 0,
+): boolean => {
+  const ax = x0;
+  const ay = y0;
+  const bx = x1;
+  const by = y1;
+  // Capsule axis runs up the body line from the foot anchor.
+  const cx = player.x;
+  const cyBottom = player.y - PLAYER_CAPSULE.upBottom;
+  const cyTop = player.y - PLAYER_CAPSULE.upTop;
+  const { distance } = segmentSegmentClosest(ax, ay, bx, by, cx, cyBottom, cx, cyTop);
+  return distance <= PLAYER_CAPSULE.radius + extraRadius;
+};
+
+/**
+ * Closest point on the flight segment to the player's capsule axis — the
+ * impact point used for limb selection. Returns undefined when the segment
+ * misses the capsule entirely.
+ */
+export const segmentImpactPoint = (
+  player: Pick<PlayerState, "x" | "y">,
+  x0: number, y0: number,
+  x1: number, y1: number,
+): { x: number; y: number } | undefined => {
+  if (!segmentHitsPlayer(player, x0, y0, x1, y1)) return undefined;
+  const cx = player.x;
+  const cyBottom = player.y - PLAYER_CAPSULE.upBottom;
+  const cyTop = player.y - PLAYER_CAPSULE.upTop;
+  const { t } = segmentSegmentClosest(x0, y0, x1, y1, cx, cyBottom, cx, cyTop);
+  return { x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t };
+};
+
+/**
+ * M25 destructible props: whether a flight segment passes within a barrel's
+ * blast-hit radius (barrel radius + extra for sweep). Same swept-segment
+ * geometry as the player capsule, but against the prop's centre point.
+ */
+export const segmentHitsProp = (
+  prop: Pick<PropState, "x" | "y">,
+  x0: number, y0: number,
+  x1: number, y1: number,
+  extraRadius = 0,
+): boolean => {
+  const { distance } = pointSegmentClosest(prop.x, prop.y, x0, y0, x1, y1);
+  return distance <= PROP_TUNING.radius + extraRadius;
+};
 
 export type MapId = "canopy" | "fortress" | "factory";
 export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade" | "echo";
@@ -23,7 +229,7 @@ export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
 export type HazardKind = "cargoLift" | "blastCrusher" | "conveyor" | "forgePiston";
 export type HazardPhase = "idle" | "warning" | "active";
-export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact";
+export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact" | "propSpawn" | "propDestroy";
 
 export type MatchConfig = {
   mapId: MapId;
@@ -169,9 +375,13 @@ export type CombatEvent = {
   charge?: number;
   /** Crate kind for crateSpawn/cratePickup cues. */
   crateKind?: CrateKind;
+  /** M24 floating damage digits: per-victim damage total for hit events. */
+  amount?: number;
   /** impact events: true when the round died on a solid surface (stamp a hole),
    *  false for out-of-bounds fizzles and air-bursts (nothing to stamp). */
   surface?: boolean;
+  /** M25: which prop the event concerns (propSpawn / propDestroy). */
+  propId?: number;
   strength: number;
 };
 
@@ -182,6 +392,7 @@ export type ServerSnapshot = {
   players: PlayerState[];
   projectiles: ProjectileState[];
   crates: CrateState[];
+  props: PropState[];
   hazards: HazardState[];
   movers: MoverState[];
   events: CombatEvent[];
@@ -239,6 +450,8 @@ export type MapDef = {
   platforms: Platform[];
   spawns: Array<{ x: number; y: number }>;
   crateSockets: CrateSocket[];
+  /** M25 explosive barrels — destructible, server-authoritative. */
+  props: PropDef[];
   hazards: HazardDef[];
   movers: MoverDef[];
 };
@@ -276,6 +489,13 @@ export const MAPS: Record<MapId, MapDef> = {
       { id: "canopy-tower-mid", x: 200, y: 333 }, { id: "canopy-tower-high", x: 100, y: 243 },
       { id: "canopy-east-ledge", x: 850, y: 328 }, { id: "canopy-mid-ledge", x: 640, y: 243 },
       { id: "canopy-crown", x: 490, y: 40 },
+    ],
+    // M25 barrels: mid-map platforms away from spawns (≥80px) and crate sockets.
+    // Anchors: (655,430) shuttle ledge / (895,350) east ledge / (115,355) west
+    // tower / (420,62) crown approach — all verified on platform surfaces.
+    props: [
+      { id: "canopy-barrel-mid", x: 655, y: 430 }, { id: "canopy-barrel-east", x: 895, y: 350 },
+      { id: "canopy-barrel-tower", x: 160, y: 355 }, { id: "canopy-barrel-crown", x: 420, y: 62 },
     ],
     hazards: [
       { id: "crown-lift-a", kind: "cargoLift", x: 520, y: 470, width: 130, height: 16, periodTicks: 360, warningTicks: 0, activeTicks: 360, phaseOffset: 0, travelY: -205 },
@@ -317,6 +537,10 @@ export const MAPS: Record<MapId, MapDef> = {
       { id: "fortress-wing-low-west", x: 180, y: 393 }, { id: "fortress-wing-low-east", x: 820, y: 393 },
       { id: "fortress-lane-2", x: 520, y: 298 }, { id: "fortress-wing-mid-west", x: 110, y: 283 }, { id: "fortress-wing-mid-east", x: 880, y: 283 },
       { id: "fortress-crown", x: 510, y: 18 },
+    ],
+    props: [
+      { id: "fortress-barrel-west", x: 200, y: 530 }, { id: "fortress-barrel-lane", x: 600, y: 320 },
+      { id: "fortress-barrel-east", x: 940, y: 530 }, { id: "fortress-barrel-crown", x: 450, y: 100 },
     ],
     hazards: [
       { id: "bastion-crusher-west", kind: "blastCrusher", x: 180, y: 45, width: 90, height: 118, periodTicks: 480, warningTicks: 90, activeTicks: 54, phaseOffset: 45, travelY: 175, force: 620, limbDamage: 72 },
@@ -361,6 +585,10 @@ export const MAPS: Record<MapId, MapDef> = {
       { id: "factory-floor-2-west", x: 230, y: 333 }, { id: "factory-floor-2-east", x: 560, y: 328 },
       { id: "factory-floor-3-mid", x: 420, y: 236 }, { id: "factory-floor-4-east", x: 590, y: 140 },
       { id: "factory-crown", x: 510, y: 42 },
+    ],
+    props: [
+      { id: "factory-barrel-west", x: 200, y: 530 }, { id: "factory-barrel-floor3", x: 300, y: 355 },
+      { id: "factory-barrel-floor2", x: 720, y: 264 }, { id: "factory-barrel-floor4", x: 890, y: 258 },
     ],
     hazards: [
       { id: "foundry-belt", kind: "conveyor", x: 380, y: 530, width: 260, height: 16, periodTicks: 1, warningTicks: 0, activeTicks: 1, phaseOffset: 0, force: 95 },
@@ -559,8 +787,11 @@ export const calculateMoverState = (def: MoverDef, tick: number): MoverState => 
   return { id: def.id, x, y, width: def.width, height: def.height, vx: (x - previousX) * WORLD.tickRate, vy: (y - previousY) * WORLD.tickRate };
 };
 
-// Movement budget derived from the authoritative physics in server.ts:
-// ground-jump apex ≈ 560²/(2·1150) ≈ 136px, air-jump apex ≈ 510²/(2·1150) ≈ 113px.
+// Movement budget derived from MOVE_TUNING in this file:
+// ground-jump apex ≈ 620²/(2·1600) ≈ 120px, air-jump apex ≈ 445²/(2·1600) ≈ 62px.
+// The budget stays at 115 because every map keeps its largest level step ≤ 110
+// (the fortress/factory tall shelves), which the ground jump still clears with
+// a 10px landing margin; the weak air jump is for finishes and rescues only.
 export const NAV_MAX_RISE = 115;
 export const NAV_MAX_GAP = 200;
 

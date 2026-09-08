@@ -113,3 +113,48 @@ band scores for echo are configured and apply the moment a crate is grabbed.
 Crate-starved guns (rocket/sniper/echo secondaries) therefore get their human
 playtest data from sandbox/multiplayer, not bot FFA — noted for the next
 balance pass.
+
+## M24 hit-capsule re-verification (no tuning moves)
+
+The M24 hit model replaced the chest circle with a swept vertical capsule
+(+~38% body area) and raised movement speed ~3×. Both changes shift real
+accuracy, so the harness was re-run before deciding on any damage move:
+
+Fortress, 3 brutal bots, 1 life (27s, resolved):
+| weapon | shots | hits | acc% | damage | kills | dmg/shot |
+|---|---|---|---|---|---|---|
+| scatter | 191 | 248 | 130% | 2199 | 2 | 11.5 |
+| blade | 26 | 12 | 46% | 544 | 2 | 20.9 |
+| sidearm | 107 | 36 | 34% | 330 | 0 | 3.1 |
+| rifle | 6 | 5 | 83% | 62 | 0 | 10.3 |
+
+Canopy, 3 brutal bots, 1 life (39s, resolved):
+| weapon | shots | hits | acc% | damage | kills | dmg/shot |
+|---|---|---|---|---|---|---|
+| scatter | 250 | 375 | 150% | 3307 | 7 | 13.2 |
+| sidearm | 86 | 20 | 23% | 187 | 0 | 2.2 |
+| blade | 6 | 1 | 17% | 38 | 0 | 6.3 |
+
+Read: scatter remains the documented CQC band edge; blade holds its melee
+identity; sidearm's bot accuracy dip is a bot-lead artifact (bot aim leads
+assume the old slower targets — bots need retuning, not the weapon). All
+direct-fire weapons still sit inside the M20 band; the M20 table above is
+therefore re-certified unchanged. Next tuning decision waits for HUMAN
+playtest data at the new movement speed (bot proxies are stale for feel).
+
+## M25 explosive barrels (environment damage source)
+
+Barrels add a damage source outside the weapon table, so they get their own
+band entry against the M20 rules:
+
+- **Damage 32** < rocket primary 46 — strictly inside the band.
+- **Blast radius 70** < rocket explosiveRadius 88 — strictly inside.
+- Falloff 0.7×→0.2× (identical math to `detonate`), knockback 280 (< rocket 300).
+- HP 30 ≈ one scatter volley or two sidearm bursts; the shooter trades ammo
+  for the blast, and the blast can hit the shooter too (self-danger caps value).
+- Respawn 6-10s mirrors crate cadence; barrels never block movement or sight
+  (all ballistics/cover promises from M19 unchanged).
+- Attacker attribution flows through the normal kill feed (last damager).
+- Constants asserted in tests/game-logic.ts (band check + placement checks);
+  ai-smoke asserts barrels actually detonate in live bot matches (455 events
+  across 3 FFA matches on the certification run).

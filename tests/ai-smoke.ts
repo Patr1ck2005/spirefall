@@ -52,6 +52,10 @@ async function hostRoom(name: string, config: Record<string, unknown>) {
 
 // 1. Bot free-for-all resolves on its own — the core AI stability guarantee.
 // Returns true on resolution; a stalled map is reported (2 of 3 must pass).
+// M25: also counts barrel events — the fortress barrels sit on the two ground
+// FFA lanes, so a match of spraying bots must cook at least one off somewhere
+// across the three maps (checked after the runs below).
+let propDestroyEvents = 0;
 async function ffaResolves(mapId: string): Promise<boolean> {
   const { ws, state, room } = await hostRoom(`FFA-${mapId}`, { mapId, lives: 2, bots: 3, botSkill: "standard", crates: true });
   const code = room.code;
@@ -61,10 +65,16 @@ async function ffaResolves(mapId: string): Promise<boolean> {
   let resolved = false;
   let sawLivesAboveZero = false;
   let stalledByServer = false;
+  let scanned = 0;
   // The server enforces a 4-minute match time limit in GAME ticks (14400).
   // Under load the tick clock runs slower than wall time, so judge the limit
   // by serverTick, not the clock.
   while (Date.now() - started < 450_000) {
+    for (; scanned < state.snapshots.length; scanned++) {
+      for (const event of state.snapshots[scanned].events) {
+        if (event.type === "propDestroy") propDestroyEvents++;
+      }
+    }
     const latest = state.snapshots[state.snapshots.length - 1];
     if (latest) {
       if (latest.players.some((p: any) => p.lives > 0)) sawLivesAboveZero = true;
@@ -233,6 +243,10 @@ const resolvedMaps = (await ffaResolves("canopy")) + (await ffaResolves("fortres
 // Bot duels occasionally deadlock at a long range standoff; 2 of 3 maps
 // resolving shows the loop is functional. Stall details print above.
 assert(resolvedMaps >= 2, `Only ${resolvedMaps}/3 bot free-for-alls resolved; AI navigation is broken`);
+// M25: barrels are wired into every weapon path — three bot matches of spray
+// must detonate at least one somewhere (fortress ground lanes host two).
+assert(propDestroyEvents >= 1, `Bots fought ${resolvedMaps} matches without detonating a single barrel (counted ${propDestroyEvents}) — prop damage routing is broken`);
+console.log(`ai smoke: barrels detonated ${propDestroyEvents}× across the bot matches`);
 console.log("ai smoke: aggression check");
 await botAggression();
 console.log("ai smoke: edge survival checks");

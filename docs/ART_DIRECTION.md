@@ -132,3 +132,64 @@ Screenshot review across all three sectors after M19, with fixes:
 - `docs/screenshots/` regenerated from the current build via
   `npx tsx tests/tools/refresh-screenshots.ts` (solo sectors, Fortress duel
   hero shot, four-player load frame).
+
+## M24 scale, micro-animation and localization pass (2026-09)
+
+Playtest-driven pass, all client-side unless noted:
+
+- **Render scale** - the game canvas now renders at 1.3x the world resolution
+  with a matching camera zoom (RENDER_SCALE in src/main.ts). The visible arena
+  is unchanged at 1000x560 world units; every sprite, gun and platform draws
+  ~30% larger and crisper. Physics and balance untouched. Weapons draw at an
+  additional 1.35x (WEAPON_VISUAL_SCALE) so silhouettes read at a glance, and
+  muzzle flashes anchor to the real barrel tips via MUZZLE_OFFSET.
+- **Micro-animation** - canvas-space squash and stretch around the foot anchor
+  (landings compress, rises stretch), landing dust puffs, idle breathing,
+  run-cycle arm swing. All drawn from snapshot state; no new textures.
+- **Weapon signatures** - sidearm ejects brass; the scatter pump slides after
+  each shot; rifle barrel vents glow while hot and cool over 0.7s; Voltrail
+  rail coils brighten with charge; rockets vent backblast smoke; Echo Shard
+  gained its own crystal-caster silhouette (it previously shared the default
+  gun shape) plus in-flight glints; the Cutter Blade swings through a real
+  arc with a slash streak, and dash slashes trail fading afterimages.
+- **Damage digits** - server hit events now carry an "amount" field; the
+  client pools up to 24 floating numbers (white / amber / red by size),
+  toggleable under FX.
+- **Bilingual UI** - the interface defaults to Chinese with a header ZH/EN
+  toggle (src/i18n.ts); all panels, HUD strings, map copy and kill-feed words
+  are localized. Weapon names remain English proper nouns.
+- docs/screenshots/ regenerated at the new scale.
+
+## M25 cinematic light, pilot v2, destructible barrels (2026-09)
+
+Playtest-driven pass, all original and procedural:
+
+- **Lighting language** - strong-contrast cinematic grade per the playtest
+  call. A per-map tinted veil (canopy cold storm blue 0.36, fortress graphite
+  0.5, factory warm smoke 0.46) darkens the world; pooled additive lights
+  punch back: every muzzle flash, rocket, flame and shard, beams, explosions,
+  hit sparks, death pillars, crate pulses, and hazard warning lamps. Pilots
+  carry no personal lights (M25b: the headlamp cone read as a flashlight
+  strapped to the character and was removed on playtest rejection) — the
+  environment lights them. Fortress sweeps two white searchlight cones that
+  cast real occlusion shadows; the foundry furnace breathes from below; the
+  canopy storms with 2-3 strobe lightning strikes and rolling thunder every
+  6-13s. Platform caps keep a faint relight strip so the "walkable here"
+  signal survives the darkness (M20 rule).
+- **Pilots v2** - layered-plating bodies (dark outline, armor base, chest
+  inset, bevel highlight, service stripe, belt), per-archetype gear (Breacher
+  pauldrons + hazard chevron, Warden high collar + twin cloth coat tails,
+  Rigger back tool pack + harness, Hunter knife sheath), domed helmets with
+  emissive pilot-color visors that pulse softly, plated limbs with knee/elbow
+  joints and filled boots. The rig also fixes the old +14px body offset that
+  drew boots sunk inside the platform caps.
+- **Explosive barrels** - rust-red drums with hazard banding on four sockets
+  per map. Any damage cooks them: glowing cracks leak fire below 60% hp
+  (the barrel becomes its own light), detonation deals 32 damage in a 70px
+  radius with rocket-style falloff, chains into neighbours at half damage and
+  respawns after 6-10s. They never block movement or sight lines.
+- **Performance budget** - the whole pass is pooled textured quads (no
+  per-frame RenderTexture work); an adaptive governor sheds shadow casting,
+  then decorative lights, then the entire pass when the frame-time EMA
+  exceeds 26ms, and restores them below 15.5ms. The FX panel toggles the
+  full system ("Dynamic lighting / 动态光影").

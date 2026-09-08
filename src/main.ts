@@ -3,6 +3,7 @@ import { sfx } from "./audio";
 import {
   LIMB_IDS,
   MAPS,
+  MOVE_TUNING,
   PLAYER_TARGET_OFFSET,
   WEAPONS,
   WORLD,
@@ -20,6 +21,7 @@ import {
 import {
   ARCHETYPES,
   MAP_COPY,
+  MUZZLE_OFFSET,
   PLAYER_HEX,
   colorCss,
   drawCrate,
@@ -31,8 +33,18 @@ import {
   drawPlatforms,
   drawPlayer,
   drawProjectile,
+  drawProp,
 } from "./art";
+import { LightingSystem, type OccluderRect } from "./lighting";
 import "./style.css";
+import { i18n, type I18nKey } from "./i18n";
+
+// M24 render scale: the game canvas renders at 1.3× the world resolution and
+// the camera zooms to match, so every sprite, gun and platform draws 30%
+// larger with no physics, collision or balance change. The visible world
+// stays exactly 1000×560. Drop this to 1.25/1.2 if low-end GPUs dip under
+// the performance floor — it is the single tuning point.
+const RENDER_SCALE = 1.3;
 
 type RoomMessage = {
   code: string;
@@ -56,7 +68,7 @@ type FxParticle = {
   kind: "spark" | "blood" | "smoke" | "energy" | "flash";
 };
 
-type Decal = { x: number; y: number; radius: number; alpha: number; rotation: number; dir?: number };
+type Decal = { x: number; y: number; radius: number; alpha: number; rotation: number; dir?: number; scorch?: boolean };
 type Gib = { x: number; y: number; vx: number; vy: number; life: number; color: number; limb: LimbId };
 type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; color: number; width: number; core?: number; jitter?: number; thin?: boolean };
 type Ring = { x: number; y: number; life: number; maxLife: number; radius: number; color: number; width: number; grow?: number; double?: boolean };
@@ -71,44 +83,48 @@ const weaponOptions = Object.values(WEAPONS).map((weapon, index) => `
     <span>${weapon.label}</span>
   </label>`).join("");
 
+// M24: the shell is built once and retranslated in place via [data-i18n] so
+// the language toggle never needs a page reload mid-session.
 app.innerHTML = `
   <div class="app-backdrop" aria-hidden="true"><div></div><i></i><i></i><i></i></div>
   <section class="shell">
     <header class="command-bar">
-      <div class="brand"><span class="brand-mark"><i></i><b>S</b></span><div><p>BRUTAL ARENA SYSTEM</p><h1>Spirefall</h1></div></div>
-      <div class="command-meta"><span id="status" class="status">OFFLINE</span><button id="settings-button" class="icon-command" title="Visual settings" aria-expanded="false">FX</button></div>
+      <div class="brand"><span class="brand-mark"><i></i><b>S</b></span><div><p data-i18n="brandTag">BRUTAL ARENA SYSTEM</p><h1>Spirefall</h1></div></div>
+      <div class="command-meta"><span id="status" class="status" data-i18n="statusOffline">OFFLINE</span><button id="lang-toggle" class="icon-command" title="语言 / Language">EN</button><button id="settings-button" class="icon-command" title="Visual settings" aria-expanded="false">FX</button></div>
       <div id="visual-settings" class="visual-settings hidden">
-        <p class="eyebrow">Audio &amp; visual</p>
-        <label class="toggle"><input id="sound-toggle" type="checkbox" checked /><span></span> Sound</label>
-        <label class="range"><span>Volume</span><input id="sound-volume" type="range" min="0" max="100" value="80" /></label>
-        <label class="toggle"><input id="gore-toggle" type="checkbox" checked /><span></span> Gore</label>
-        <label class="toggle"><input id="shake-toggle" type="checkbox" checked /><span></span> Camera shake</label>
+        <p class="eyebrow" data-i18n="settingsTitle">Audio &amp; visual</p>
+        <label class="toggle"><input id="sound-toggle" type="checkbox" checked /><span></span> <i data-i18n="soundToggle" style="font-style:normal">Sound</i></label>
+        <label class="range"><span data-i18n="volume">Volume</span><input id="sound-volume" type="range" min="0" max="100" value="80" /></label>
+        <label class="toggle"><input id="gore-toggle" type="checkbox" checked /><span></span> <i data-i18n="goreToggle" style="font-style:normal">Gore</i></label>
+        <label class="toggle"><input id="shake-toggle" type="checkbox" checked /><span></span> <i data-i18n="shakeToggle" style="font-style:normal">Camera shake</i></label>
+        <label class="toggle"><input id="digits-toggle" type="checkbox" checked /><span></span> <i data-i18n="digitsToggle" style="font-style:normal">Damage numbers</i></label>
+        <label class="toggle"><input id="lighting-toggle" type="checkbox" checked /><span></span> <i data-i18n="lightsToggle" style="font-style:normal">Dynamic lighting</i></label>
       </div>
     </header>
 
     <main>
       <section id="menu" class="menu-screen">
-        <div class="menu-intro"><p class="kicker">NETWORK COMBAT / 01-04 PILOTS</p><h2>ENTER THE<br><span>SPIRE</span></h2><p>Every sector is still alive. Every machine is hostile.</p><div class="signal-line"><i></i><span>SERVER-LINK READY</span></div></div>
+        <div class="menu-intro"><p class="kicker" data-i18n="kicker">NETWORK COMBAT / 01-04 PILOTS</p><h2><span data-i18n="menuTitleA">ENTER THE</span><br><span data-i18n="menuTitleB">SPIRE</span></h2><p data-i18n="menuIntro">Every sector is still alive. Every machine is hostile.</p><div class="signal-line"><i></i><span data-i18n="signalReady">SERVER-LINK READY</span></div></div>
         <div class="access-console">
-          <div class="console-head"><span>ACCESS NODE 07</span><small>ENCRYPTED LAN</small></div>
-          <label class="field" for="name"><span>Pilot callsign</span><input id="name" maxlength="16" value="Player" autocomplete="off" /></label>
-          <button id="create" class="primary wide">Create room</button>
-          <div class="join-divider"><span>JOIN ACTIVE SPIRE</span></div>
-          <div class="join-row"><input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" aria-label="Room code" /><button id="join">Join</button></div>
+          <div class="console-head"><span data-i18n="consoleHead">ACCESS NODE 07</span><small data-i18n="consoleSmall">ENCRYPTED LAN</small></div>
+          <label class="field" for="name"><span data-i18n="callsign">Pilot callsign</span><input id="name" maxlength="16" value="Player" autocomplete="off" /></label>
+          <button id="create" class="primary wide" data-i18n="createRoom">Create room</button>
+          <div class="join-divider"><span data-i18n="joinDivider">JOIN ACTIVE SPIRE</span></div>
+          <div class="join-row"><input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" aria-label="Room code" /><button id="join" data-i18n="join">Join</button></div>
           <p id="error" class="error" role="alert"></p>
-          <div class="control-strip"><span>A/D MOVE</span><span>W JUMP</span><span>J PRIMARY</span><span>K SECONDARY</span></div>
+          <div class="control-strip"><span data-i18n="controlsMove">A/D MOVE</span><span data-i18n="controlsJump">W JUMP</span><span data-i18n="controlsPrimary">J PRIMARY</span><span data-i18n="controlsSecondary">K SECONDARY</span></div>
         </div>
       </section>
 
       <section id="lobby" class="lobby-screen hidden">
-        <div class="lobby-header"><div><p class="eyebrow">Active spire</p><div class="room-code"><strong id="room-label">------</strong><button id="copy-code" title="Copy room code">Copy</button></div></div><div class="lobby-state"><i></i><span>PRIVATE LAN SESSION</span></div></div>
+        <div class="lobby-header"><div><p class="eyebrow" data-i18n="activeSpire">Active spire</p><div class="room-code"><strong id="room-label">------</strong><button id="copy-code" data-i18n="copy">Copy</button></div></div><div class="lobby-state"><i></i><span data-i18n="privateSession">PRIVATE LAN SESSION</span></div></div>
         <div class="lobby-console">
-          <section class="roster-column"><div class="section-title"><span>01</span><div><p>DEPLOYMENT</p><h3>Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
-          <section class="map-column"><div class="section-title"><span>02</span><div><p>LOCATION</p><h3>Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
-          <section class="settings-column"><div class="section-title"><span>03</span><div><p>PARAMETERS</p><h3>Match control</h3></div></div><div class="settings"><label>Sector<select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label>Lives<select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> Supply drops</label><label>AI pilots<select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label>Skill<select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
+          <section class="roster-column"><div class="section-title"><span>01</span><div><p data-i18n="section01">DEPLOYMENT</p><h3 data-i18n="roster">Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
+          <section class="map-column"><div class="section-title"><span>02</span><div><p data-i18n="section02">LOCATION</p><h3 data-i18n="sectorFeed">Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
+          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
         </div>
-        <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p>ARMORY</p><h3>Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
-        <div class="lobby-actions"><div><button id="start" class="primary">Start match</button><button id="solo-test">Solo test</button></div><button id="leave" class="quiet">Leave spire</button></div>
+        <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p data-i18n="section04">ARMORY</p><h3 data-i18n="loadout">Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
+        <div class="lobby-actions"><div><button id="start" class="primary" data-i18n="startMatch">Start match</button><button id="solo-test" data-i18n="soloTest">Solo test</button></div><button id="leave" class="quiet" data-i18n="leaveSpire">Leave spire</button></div>
       </section>
 
       <div id="game-wrap" class="game-wrap hidden">
@@ -118,14 +134,30 @@ app.innerHTML = `
           <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
           <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
           <div id="weapon-panel" class="weapon-panel hidden"></div>
-          <button id="in-match-leave" class="quiet hud-leave">Exit match</button>
+          <button id="in-match-leave" class="quiet hud-leave" data-i18n="exitMatch">Exit match</button>
         </div>
         <div id="vignette" class="vignette" aria-hidden="true"></div>
-        <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn">Test respawn</button><button id="sandbox-return">Return to lobby</button></div>
-        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow">Spire resolved</p><h2 id="winner"></h2><p>ONE PILOT REMAINS</p><div><button id="restart" class="primary">Return to lobby</button><button id="result-leave">Leave spire</button></div></div>
+        <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn" data-i18n="sandboxRespawn">Test respawn</button><button id="sandbox-return" data-i18n="sandboxReturn">Return to lobby</button></div>
+        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow" data-i18n="resultEyebrow">Spire resolved</p><h2 id="winner"></h2><p id="result-subtitle">ONE PILOT REMAINS</p><div><button id="restart" class="primary" data-i18n="returnLobby">Return to lobby</button><button id="result-leave" data-i18n="leaveSpire">Leave spire</button></div></div>
       </div>
     </main>
   </section>`;
+
+/** Re-apply the current language to every statically tagged element. */
+const patternZh: Record<string, string> = {
+  single: "单发", burst: "连发", pellet: "散射", piercing: "穿透", cluster: "集束",
+  slash: "挥砍", dashSlash: "突刺", beam: "光束", bounce: "弹射",
+};
+
+function applyI18n() {
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
+    element.textContent = i18n.t(element.dataset.i18n as I18nKey);
+  });
+  $("lang-toggle").textContent = i18n.lang() === "zh" ? "EN" : "中";
+  // The callsign field swaps only while it still holds a known default.
+  const nameInput = $<HTMLInputElement>("name");
+  if (nameInput.value === "Player" || nameInput.value === "机师") nameInput.value = i18n.lang() === "zh" ? "机师" : "Player";
+}
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = $("status");
@@ -133,6 +165,18 @@ const menu = $("menu");
 const lobby = $("lobby");
 const gameWrap = $("game-wrap");
 const errorText = $("error");
+
+$("lang-toggle").addEventListener("click", () => {
+  i18n.setLang(i18n.lang() === "zh" ? "en" : "zh");
+  applyI18n();
+  // Retranslate everything that is rebuilt from code on demand.
+  if (currentRoom) {
+    renderPlayers(currentRoom);
+    updateMapVisual(currentRoom.config.mapId);
+  }
+  scene?.refreshLocalizedViews();
+});
+applyI18n();
 let socket: WebSocket | undefined;
 let selfId = "";
 let token = "";
@@ -146,9 +190,11 @@ let lastRosterKey = "";
 const availablePortraits = new Set<number>();
 
 const savedVisuals = JSON.parse(localStorage.getItem("spirefall-visuals") || "null");
-const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false };
+const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false, digits: savedVisuals?.digits !== false, lighting: savedVisuals?.lighting !== false };
 $<HTMLInputElement>("gore-toggle").checked = visualPrefs.gore;
 $<HTMLInputElement>("shake-toggle").checked = visualPrefs.shake;
+$<HTMLInputElement>("digits-toggle").checked = visualPrefs.digits;
+$<HTMLInputElement>("lighting-toggle").checked = visualPrefs.lighting;
 const audioPrefs = sfx.getPrefs();
 $<HTMLInputElement>("sound-toggle").checked = !audioPrefs.muted;
 $<HTMLInputElement>("sound-volume").value = String(Math.round(audioPrefs.volume * 100));
@@ -161,7 +207,7 @@ const isViteDev = location.port === "5173";
 const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}${isViteDev ? ":8787" : location.port ? `:${location.port}` : ""}`;
 
 function setStatus(text: string, tone = "") {
-  status.textContent = text.toUpperCase();
+  status.textContent = text;
   status.className = `status ${tone}`;
 }
 
@@ -173,7 +219,7 @@ function connect() {
   if (socket && socket.readyState <= WebSocket.OPEN) return socket;
   socket = new WebSocket(endpoint);
   socket.onopen = () => {
-    setStatus("Linked", "good");
+    setStatus(i18n.t("statusLinked"), "good");
     if (!resumeAttempted && !manualConnectionAction) {
       resumeAttempted = true;
       const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
@@ -182,8 +228,8 @@ function connect() {
       }
     }
   };
-  socket.onclose = () => setStatus("Link lost", "bad");
-  socket.onerror = () => showError("The arena server did not answer.");
+  socket.onclose = () => setStatus(i18n.t("statusLost"), "bad");
+  socket.onerror = () => showError(i18n.t("errServerNoAnswer"));
   socket.onmessage = (event) => handleMessage(JSON.parse(event.data));
   return socket;
 }
@@ -241,17 +287,26 @@ function renderPlayers(room: RoomMessage) {
     const player = room.players[index];
     const archetype = ARCHETYPES[player?.archetype ?? index];
     const portraitStyle = availablePortraits.has(player?.archetype ?? index) ? ` style="background-image:url('${archetype.portrait}')"` : "";
-    if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>OPEN SLOT</strong><small>${archetype.name}</small></div><em>WAITING</em></div>`;
+    if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>${i18n.t("openSlot")}</strong><small>${archetype.name}</small></div><em>${i18n.t("waiting")}</em></div>`;
     const accent = colorCss(player.color);
-    const status = player.id === room.hostId ? "HOST" : player.isBot ? "BOT" : player.connected ? "READY" : "RECONNECT";
-    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${status}</em></div>`;
+    const statusKey = player.id === room.hostId ? "statusHost" : player.isBot ? "statusBot" : player.connected ? "statusReady" : "statusReconnect";
+    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${i18n.t(statusKey)}</em></div>`;
   });
   $("players").innerHTML = slots.join("");
-  $("lobby-note").textContent = room.players.length >= 2 ? `${room.players.length}/4 pilots linked. Combat authorization available.` : "Run a solo systems test or transmit the room code.";
+  $("lobby-note").textContent = room.players.length >= 2
+    ? i18n.t("lobbyLinked", { n: room.players.length })
+    : i18n.t("lobbyTransmit");
 }
 
 function updateMapVisual(mapId: MapId) {
-  const copy = MAP_COPY[mapId];
+  // M24: map copy is localized inline — the English sector titles stay as
+  // flavor prefixes so both languages keep the console identity.
+  const zhCopy: Record<MapId, { index: string; title: string; brief: string }> = {
+    canopy: { index: "扇区 01", title: "王冠", brief: "货运电梯漂浮在风暴线上方。" },
+    fortress: { index: "扇区 02", title: "堡垒", brief: "装甲闸门守卫着防御脊线。" },
+    factory: { index: "扇区 03", title: "锻造厂", brief: "装配线将零件送入底部的熔炉。" },
+  };
+  const copy = i18n.lang() === "zh" ? zhCopy[mapId] : MAP_COPY[mapId];
   $("map-visual").dataset.map = mapId;
   $("map-index").textContent = copy.index;
   $("map-title").textContent = copy.title;
@@ -259,7 +314,7 @@ function updateMapVisual(mapId: MapId) {
 }
 
 function handleMessage(message: any) {
-  if (message.type === "error") return showError(message.message);
+  if (message.type === "error") return showError(i18n.serverError(message.message));
   if (message.type === "room") {
     if (message.token) {
       token = message.token;
@@ -300,8 +355,10 @@ function showGame() {
     gameInstance = new Phaser.Game({
       type: Phaser.AUTO,
       parent: "game",
-      width: WORLD.width,
-      height: WORLD.height,
+      // M24: render at RENDER_SCALE × world size; the camera zoom (set in
+      // create()) maps the visible area back to the full 1000×560 world.
+      width: Math.round(WORLD.width * RENDER_SCALE),
+      height: Math.round(WORLD.height * RENDER_SCALE),
       backgroundColor: "#080b0d",
       render: { antialias: true, pixelArt: false },
       scene: [ArenaScene],
@@ -360,22 +417,24 @@ function leaveRoom() {
   $("result").classList.add("hidden");
   $("sandbox-actions").classList.add("hidden");
   menu.classList.remove("hidden");
-  setStatus("Linked", "good");
+  setStatus(i18n.t("statusLinked"), "good");
 }
 $("copy-code").addEventListener("click", async () => {
   await navigator.clipboard?.writeText(roomCode);
-  $("copy-code").textContent = "Copied";
-  setTimeout(() => $("copy-code").textContent = "Copy", 1200);
+  $("copy-code").textContent = i18n.t("copied");
+  setTimeout(() => $("copy-code").textContent = i18n.t("copy"), 1200);
 });
 $("settings-button").addEventListener("click", () => {
   const panel = $("visual-settings");
   const open = panel.classList.toggle("hidden") === false;
   $("settings-button").setAttribute("aria-expanded", String(open));
 });
-for (const id of ["gore-toggle", "shake-toggle"]) {
+for (const id of ["gore-toggle", "shake-toggle", "digits-toggle", "lighting-toggle"]) {
   $(id).addEventListener("change", () => {
     visualPrefs.gore = $<HTMLInputElement>("gore-toggle").checked;
     visualPrefs.shake = $<HTMLInputElement>("shake-toggle").checked;
+    visualPrefs.digits = $<HTMLInputElement>("digits-toggle").checked;
+    visualPrefs.lighting = $<HTMLInputElement>("lighting-toggle").checked;
     localStorage.setItem("spirefall-visuals", JSON.stringify(visualPrefs));
     scene?.setVisualPreferences();
   });
@@ -436,6 +495,12 @@ const unlockAudio = () => sfx.unlock();
 window.addEventListener("pointerdown", unlockAudio);
 window.addEventListener("keydown", unlockAudio);
 
+// Physical-key → weapon slot map for Digit row and numpad (IME-proof).
+const WeaponSlotCodes: Record<string, number> = {
+  Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5, Digit6: 6, Digit7: 7,
+  Numpad1: 1, Numpad2: 2, Numpad3: 3, Numpad4: 4, Numpad5: 5, Numpad6: 6, Numpad7: 7,
+};
+
 class ArenaScene extends Phaser.Scene {
   private snapshot?: ServerSnapshot;
   private graphics!: Phaser.GameObjects.Graphics;
@@ -444,6 +509,10 @@ class ArenaScene extends Phaser.Scene {
   private seq = 0;
   private labels = new Map<string, Phaser.GameObjects.Text>();
   private renderPositions = new Map<string, { x: number; y: number }>();
+  // M24: authoritative render samples — snapshot position + velocity + receive
+  // time. Rendering extrapolates from these so the scene tracks the server's
+  // view of the world instead of lagging a snapshot or two behind it.
+  private samples = new Map<string, { x: number; y: number; vx: number; vy: number; at: number }>();
   private particles: FxParticle[] = [];
   private decals: Decal[] = [];
   /** M19: how many entries of `decals` are already painted into decalLayer. */
@@ -455,12 +524,23 @@ class ArenaScene extends Phaser.Scene {
   private rings: Ring[] = [];
   private hitstop: Hitstop | undefined;
   private lastHitstopAt = 0;
+  // M24b: pending weapon-slot request retried until the snapshot confirms it.
+  private pendingSlot?: { slot: number; queuedAt: number };
   private processedEvents = new Set<number>();
   // M20 combat feedback: inbound-hit direction arcs around the own pilot,
   // the low-health vignette level, and kill-feed DOM timers.
   private hitMarkers: Array<{ angle: number; life: number }> = [];
   private vignetteLevel = 0;
   private killFeedTimers = new Set<ReturnType<typeof setTimeout>>();
+  // M24 animation state: transient per-player fx driven by combat events and
+  // snapshot transitions. All client-side; the server protocol is untouched.
+  private swings = new Map<string, { t: number; dur: number; secondary: boolean }>();
+  private heat = new Map<string, number>();
+  private landFx = new Map<string, number>();
+  private dashGhosts: Array<{ x: number; y: number; life: number; color: number; soft?: boolean }> = [];
+  private lastSpeedGhostAt = 0;
+  private prevState = new Map<string, { onGround: boolean; vy: number; jumpsUsed: number }>();
+  private digits: Array<{ text: Phaser.GameObjects.Text; life: number }> = [];
 
   /** Drop processed-event ids when switching rooms (ids restart per room). */
   clearProcessedEvents() {
@@ -469,10 +549,21 @@ class ArenaScene extends Phaser.Scene {
     this.lastSeenTick = 0;
     this.resetGore();
     this.clearFeedback();
+    this.swings.clear();
+    this.heat.clear();
+    this.landFx.clear();
+    this.dashGhosts = [];
+    this.prevState.clear();
+    for (const digit of this.digits) {
+      digit.life = 0;
+      digit.text.setVisible(false);
+    }
   }
   private lastChargeStep = -1;
   private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
   private materialsReady = new Set<MapId>();
+  private lighting?: LightingSystem;
+  private lightingMap: MapId | "" = "";
   private platformLayer?: Phaser.GameObjects.RenderTexture;
   private decalLayer?: Phaser.GameObjects.RenderTexture;
   private bakedMapId = "";
@@ -485,12 +576,28 @@ class ArenaScene extends Phaser.Scene {
 
   create() {
     scene = this;
+    // M24 render scale: zoom the camera so the visible world is still the
+    // full 1000×560 arena while the canvas itself draws 1.3× larger.
+    this.cameras.main.setZoom(RENDER_SCALE).centerOn(WORLD.width / 2, WORLD.height / 2);
     this.graphics = this.add.graphics();
+    // M25 cinematic lighting (respects the FX toggle and skips on Canvas).
+    if (visualPrefs.lighting && this.game.renderer.type === Phaser.WEBGL) {
+      this.lighting = new LightingSystem(this);
+      this.lighting.setEnabled(true);
+      this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
+    }
     this.loadGeneratedBackgrounds();
     this.input.keyboard!.addCapture("TAB");
     this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
+    // M24b: weapon-slot presses go through a pending retry queue. A single
+    // fire-and-forget input message used to lose the slot ~half the time
+    // (any interleaved movement message overwrote it server-side); the
+    // queue keeps carrying the request until a snapshot confirms the switch.
+    // Key matching uses event.code (physical Digit keys) so IME/shifted
+    // layouts (fullwidth "１"、punctuation) cannot silently swallow presses.
     this.input.keyboard!.on("keydown", (event: KeyboardEvent) => {
-      if (event.key >= "1" && event.key <= "7") this.sendInput(Number(event.key));
+      const slot = WeaponSlotCodes[event.code] ?? (event.key >= "1" && event.key <= "7" ? Number(event.key) : 0);
+      if (slot) this.queueWeaponSlot(slot);
     });
     this.input.on("wheel", (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
       const mine = this.snapshot?.players.find((player) => player.id === selfId);
@@ -498,24 +605,44 @@ class ArenaScene extends Phaser.Scene {
       const list = this.snapshot.config.weaponSet;
       const index = list.indexOf(mine.weapon);
       const next = (index + (dy > 0 ? 1 : -1) + list.length) % list.length;
-      this.sendInput(next + 1);
+      this.queueWeaponSlot(next + 1);
     });
+  }
+
+  /** Queue a weapon-slot request until a snapshot confirms the switch. */
+  private queueWeaponSlot(slot: number) {
+    this.pendingSlot = { slot, queuedAt: performance.now() };
+    this.sendInput(slot);
   }
 
   update(time: number, delta: number) {
     if (!this.graphics) return;
     const predicted = this.renderPositions.get(selfId);
-    if (predicted && this.keys) predicted.x += ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * 230 * delta / 1000;
+    if (predicted && this.keys) {
+      // M24b: local input steering on the rendered self — predict at the same
+      // equilibrium speed the server physics reaches (accel·f/(1−f), clamped),
+      // so the visible pilot and the authority converge instead of tug-of-war.
+      const inputVx = ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * Math.min(MOVE_TUNING.maxSpeed, MOVE_TUNING.accelerate * MOVE_TUNING.groundFriction / (1 - MOVE_TUNING.groundFriction));
+      predicted.x += inputVx * delta / 1000;
+    }
     // Fake parallax: nudge the background plate against self movement.
     const offsetX = (predicted?.x ?? WORLD.width / 2) - WORLD.width / 2;
     const mid = this.backgrounds.get(this.snapshot?.config.mapId ?? "canopy");
     mid?.setPosition(WORLD.width / 2 - offsetX * 0.03, WORLD.height / 2);
+    // M24b: speed afterimages — the self pilot leaves faint echoes at full
+    // sprint so velocity reads at a glance (budget-capped, subtle alpha).
+    const mineNow = this.snapshot?.players.find((player) => player.id === selfId);
+    if (predicted && mineNow && Math.abs(mineNow.vx) > 250 && time - this.lastSpeedGhostAt > 90 && this.dashGhosts.length < 12) {
+      this.lastSpeedGhostAt = time;
+      this.dashGhosts.push({ x: predicted.x, y: predicted.y, life: 0.16, color: mineNow.color, soft: true });
+    }
     // Hitstop: brief effect freeze on heavy impacts sells the punch.
     if (this.hitstop) {
       this.hitstop.remaining -= delta;
       if (this.hitstop.remaining <= 0) this.hitstop = undefined;
     }
     this.updateEffects(this.hitstop ? delta / 1000 * this.hitstop.scale : delta / 1000);
+    this.lighting?.update(time, delta);
     this.draw(time);
     if (time - this.lastSent > 33) {
       this.sendInput();
@@ -536,13 +663,35 @@ class ArenaScene extends Phaser.Scene {
   sendInput(slot?: number) {
     if (!selfId) return;
     const keys = this.keys;
-    send("input", { input: { seq: ++this.seq, left: keys.A.isDown, right: keys.D.isDown, jump: keys.W.isDown, drop: keys.S.isDown, primary: keys.J.isDown, secondary: keys.K.isDown, weaponSlot: slot } });
+    // M24b: a pending slot request rides every input message until confirmed
+    // (or 800ms gives up — dead request, e.g. slot outside the match set).
+    const carried = this.pendingSlot && performance.now() - this.pendingSlot.queuedAt < 800 ? this.pendingSlot.slot : slot;
+    send("input", { input: { seq: ++this.seq, left: keys.A.isDown, right: keys.D.isDown, jump: keys.W.isDown, drop: keys.S.isDown, primary: keys.J.isDown, secondary: keys.K.isDown, weaponSlot: carried } });
   }
 
   applySnapshot(snapshot: ServerSnapshot) {
     const previousPhase = this.snapshot?.phase;
     const previousMode = this.snapshot?.mode;
     this.snapshot = snapshot;
+    if (this.lightingMap !== snapshot.config.mapId) {
+      this.lightingMap = snapshot.config.mapId;
+      this.lighting?.setMap(snapshot.config.mapId);
+    }
+    // M24b: settle the pending weapon-slot queue — clear when the switch is
+    // confirmed by the authoritative state, or drop stale requests.
+    if (this.pendingSlot) {
+      const mine = snapshot.players.find((player) => player.id === selfId);
+      const wanted = snapshot.config.weaponSet[this.pendingSlot.slot - 1];
+      if (mine && wanted && mine.weapon === wanted) this.pendingSlot = undefined;
+      else if (performance.now() - this.pendingSlot.queuedAt > 800) this.pendingSlot = undefined;
+    }
+    // M24: stamp every player's authoritative render sample on each snapshot
+    // (position + velocity + receive time). drawPlayerState extrapolates from
+    // this so the scene leads with the server's positions, not stale ones.
+    const now = performance.now();
+    for (const player of snapshot.players) {
+      this.samples.set(player.id, { x: player.x, y: player.y, vx: player.vx, vy: player.vy, at: now });
+    }
     // M19: a fresh match (phase entry or tick rewind on restart) wipes gore
     // state — blood and bullet holes never carry across matches.
     if (snapshot.phase === "playing" && (previousPhase !== "playing" || snapshot.serverTick < this.lastSeenTick)) this.resetGore();
@@ -557,16 +706,27 @@ class ArenaScene extends Phaser.Scene {
     $("sandbox-actions").classList.toggle("hidden", snapshot.mode !== "sandbox" || snapshot.phase !== "playing");
     // Winner is a player id — display names are not unique.
     const winnerEntry = snapshot.players.find((player) => player.id === snapshot.winner);
-    const subtitle = $("result").querySelector("p:last-of-type") as HTMLElement | null;
+    const subtitle = $("result-subtitle");
     if (winnerEntry?.isBot) {
-      if (subtitle) { subtitle.textContent = `DEFEATED — ${snapshot.winner ? winnerEntry?.name.toUpperCase() : ""} HOLDS THE SPIRE`; subtitle.classList.add("defeated"); }
+      subtitle.textContent = i18n.t("defeatedBy", { name: snapshot.winner ? winnerEntry?.name.toUpperCase() ?? "" : "" });
+      subtitle.classList.add("defeated");
       $("result").classList.add("bot-victory");
     } else {
-      if (subtitle) { subtitle.textContent = "ONE PILOT REMAINS"; subtitle.classList.remove("defeated"); }
+      subtitle.textContent = i18n.t("onePilotRemains");
+      subtitle.classList.remove("defeated");
       $("result").classList.remove("bot-victory");
     }
-    $("winner").textContent = (snapshot.winner && winnerEntry?.name) || "NO SURVIVOR";
+    $("winner").textContent = (snapshot.winner && winnerEntry?.name) || i18n.t("noSurvivor");
     $<HTMLButtonElement>("restart").classList.toggle("hidden", selfId !== currentRoom?.hostId);
+  }
+
+  /** M24: re-render locale-dependent scene-adjacent DOM (HUD strings, panel). */
+  refreshLocalizedViews() {
+    if (this.snapshot) {
+      this.lastPhaseKey = "";
+      this.updateHud(this.snapshot);
+      this.refreshWeaponPanel();
+    }
   }
 
   private updatePhaseAudio(snapshot: ServerSnapshot, previousPhase?: string, previousMode?: string) {
@@ -590,11 +750,11 @@ class ArenaScene extends Phaser.Scene {
     const mine = snapshot?.players.find((player) => player.id === selfId);
     const panel = $("weapon-panel");
     if (!snapshot || !mine) return;
-    panel.innerHTML = `<p class="panel-hint">HOLD TAB — RELEASE TO CLOSE</p>` + snapshot.config.weaponSet.map((weaponId, index) => {
+    panel.innerHTML = `<p class="panel-hint">${i18n.t("panelHint")}</p>` + snapshot.config.weaponSet.map((weaponId, index) => {
       const weapon = WEAPONS[weaponId];
       const active = weaponId === mine.weapon ? " active" : "";
       const rangeBar = (label: string, range: number) => `<div class="range-bar"><i>${label}</i><em style="--range:${Math.min(100, Math.round(range / WORLD.width * 100))}%"></em></div>`;
-      return `<div class="weapon-row${active}" style="--weapon:${colorCss(weapon.color)}"><b>${index + 1}</b><span>${weapon.label}</span><em>${mine.ammoByWeapon[weaponId]}</em><small>PRI ${weapon.primary.pattern}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · SEC ${weapon.secondary.pattern}</small><div class="range-bars">${rangeBar("PRI", weapon.primary.range)}${rangeBar("SEC", weapon.secondary.range)}</div></div>`;
+      return `<div class="weapon-row${active}" style="--weapon:${colorCss(weapon.color)}"><b>${index + 1}</b><span>${weapon.label}</span><em>${mine.ammoByWeapon[weaponId]}</em><small>${i18n.lang() === "zh" ? `主 ${patternZh[weapon.primary.pattern]}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · 副 ${patternZh[weapon.secondary.pattern]}` : `PRI ${weapon.primary.pattern}${weapon.primary.count > 1 ? ` ×${weapon.primary.count}` : ""} · SEC ${weapon.secondary.pattern}`}</small><div class="range-bars">${rangeBar(i18n.lang() === "zh" ? "主" : "PRI", weapon.primary.range)}${rangeBar(i18n.lang() === "zh" ? "副" : "SEC", weapon.secondary.range)}</div></div>`;
     }).join("");
   }
 
@@ -604,6 +764,15 @@ class ArenaScene extends Phaser.Scene {
 
   setVisualPreferences() {
     if (!visualPrefs.gore) this.resetGore();
+    // M25: the lighting toggle also needs to work mid-match. When the system
+    // never existed (Canvas renderer) there is nothing to re-enable.
+    if (this.lighting) this.lighting.setEnabled(visualPrefs.lighting);
+    else if (visualPrefs.lighting && this.game.renderer.type === Phaser.WEBGL) {
+      this.lighting = new LightingSystem(this);
+      this.lighting.setEnabled(true);
+      this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
+      if (this.lightingMap) this.lighting.setMap(this.lightingMap);
+    }
   }
 
   /** M19: gore lifecycle reset — fresh match, room switch, or gore toggle-off. */
@@ -619,13 +788,20 @@ class ArenaScene extends Phaser.Scene {
   private lastRosterHtml = "";
   private lastWeaponHtml = "";
   private lastLimbsHtml = "";
+  private lastPhaseKey = "";
 
   private updateHud(snapshot: ServerSnapshot) {
     const mine = snapshot.players.find((player) => player.id === selfId);
     const map = MAPS[snapshot.config.mapId];
-    $("hud-room").textContent = roomCode ? `SPIRE ${roomCode}` : "";
+    const phaseKey = snapshot.mode === "sandbox" ? "soloTestHud" : snapshot.phase === "results" ? "spireResolved" : "live";
+    $("hud-room").textContent = roomCode ? `${i18n.t("spirePrefix")}${roomCode}` : "";
     $("hud-sector").textContent = map.sector;
-    $("hud-phase").textContent = snapshot.mode === "sandbox" ? "SOLO TEST" : snapshot.phase === "results" ? "SPIRE RESOLVED" : "LIVE";
+    // Rebuild the phase chip when the phase OR language changed.
+    const phaseValue = `${phaseKey}:${i18n.lang()}`;
+    if (phaseValue !== this.lastPhaseKey) {
+      this.lastPhaseKey = phaseValue;
+      $("hud-phase").textContent = i18n.t(phaseKey);
+    }
     // HUD blocks rebuild only when their content actually changed (names,
     // lives, weapon, cooldown bars). Cuts three innerHTML parses per snapshot
     // during steady-state combat — the biggest remaining main-thread cost.
@@ -637,7 +813,7 @@ class ArenaScene extends Phaser.Scene {
     if (!mine) return;
     const weapon = WEAPONS[mine.weapon];
     const chargeReadout = weapon.primary.chargeMax !== undefined ? Math.max(0.02, mine.charge ?? 0) : Math.min(1, mine.primaryCooldown / Math.max(0.01, weapon.primary.cooldown));
-    const weaponHtml = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>AMMO</small><div><i style="--cool:${chargeReadout.toFixed(2)}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown)).toFixed(2)}">K</i></div></div>`;
+    const weaponHtml = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>${i18n.t("ammo")}</small><div><i style="--cool:${chargeReadout.toFixed(2)}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown)).toFixed(2)}">K</i></div></div>`;
     if (weaponHtml !== this.lastWeaponHtml) {
       this.lastWeaponHtml = weaponHtml;
       $("hud-weapon").innerHTML = weaponHtml;
@@ -655,7 +831,13 @@ class ArenaScene extends Phaser.Scene {
       this.lastChargeStep = -1;
     }
     const limbLabels: Array<[LimbId, string]> = [["leftArm", "LA"], ["rightArm", "RA"], ["leftLeg", "LL"], ["rightLeg", "RL"]];
-    const limbsHtml = `<span>BODY INTEGRITY</span><div>${limbLabels.map(([id, label]) => `<i class="${mine.limbs[id] <= 0 ? "lost" : ""}"><b>${label}</b><em><u style="width:${mine.limbs[id]}%"></u></em></i>`).join("")}</div>`;
+    const totalIntegrity = LIMB_IDS.reduce((sum, limbId) => sum + mine.limbs[limbId], 0);
+    const integrityTone = totalIntegrity > 220 ? "good" : totalIntegrity > 120 ? "warn" : "crit";
+    const limbsHtml = `<span>${i18n.t("bodyIntegrity")} <b class="integrity-total ${integrityTone}">${totalIntegrity}/400</b></span><div>${limbLabels.map(([id, label]) => {
+      const value = mine.limbs[id];
+      const tone = value > 55 ? "good" : value > 30 ? "warn" : value > 0 ? "crit" : "lost";
+      return `<i class="${tone}"><b>${label}</b><em><u style="width:${value}%"></u></em></i>`;
+    }).join("")}</div>`;
     if (limbsHtml !== this.lastLimbsHtml) {
       this.lastLimbsHtml = limbsHtml;
       $("hud-limbs").innerHTML = limbsHtml;
@@ -676,6 +858,22 @@ class ArenaScene extends Phaser.Scene {
         sfx.play(`attack:${event.weaponId}:${event.secondary ? "sec" : "pri"}`, at(event.x, event.y));
         const facing = actor?.facing || 1;
         const charge = event.charge ?? 0;
+        // M24 weapon signatures: each gun leaves a transient mark on its
+        // holder's draw state when it fires.
+        if (actor) {
+          if (event.weaponId === "blade") {
+            this.swings.set(actor.id, { t: 0, dur: event.pattern === "dashSlash" ? 0.24 : 0.16, secondary: !!event.secondary });
+            if (event.pattern === "dashSlash") {
+              for (let ghost = 0; ghost < 3; ghost++) {
+                this.dashGhosts.push({ x: actor.x - facing * ghost * 16, y: actor.y, life: 0.2 - ghost * 0.03, color: actor.color });
+              }
+              this.dashGhosts = this.dashGhosts.slice(-18);
+            }
+          }
+          if (event.weaponId === "rifle" && !event.secondary) this.heat.set(actor.id, 1);
+        }
+        // Muzzle flash anchors to the real gun tip, not the chest center.
+        const muzzleX = event.x + facing * Math.max(0, (MUZZLE_OFFSET[event.weaponId!] ?? 12) - 12);
         // M19: hitscan rays stop at solid cover. Client mirrors the server
         // raycast so every beam/tracer ends exactly where the damage ends.
         const weaponDef = WEAPONS[event.weaponId!];
@@ -686,8 +884,8 @@ class ArenaScene extends Phaser.Scene {
         // Beam: full-range light line refreshed every tick so held fire reads as one continuous lance.
         if (event.pattern === "beam") {
           const range = trueRange("primary");
-          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * range, y2: event.y, life: 0.15, color, width: 3.5, core: 1.6, jitter: 1.6 });
-          this.spawnBurst(event.x + facing * 6, event.y, color, 3, "flash", facing);
+          this.tracers.push({ x1: muzzleX, y1: event.y, x2: event.x + facing * range, y2: event.y, life: 0.15, color, width: 3.5, core: 1.6, jitter: 1.6 });
+          this.spawnBurst(muzzleX + facing * 4, event.y, color, 3, "flash", facing);
           // Beam impact sparks spray ahead of the muzzle along the beam.
           if (Math.random() < 0.6) this.spawnBurst(event.x + facing * (60 + Math.random() * 240), event.y, 0xffefc3, 2, "spark", facing);
           // End-of-beam sparks: the lance chews into whatever stops it.
@@ -698,8 +896,8 @@ class ArenaScene extends Phaser.Scene {
           const chargedRange = weaponDef.primary.range * (1 + charge * 0.25);
           const railLength = Math.min(chargedRange, raycastSolids(MAPS[this.snapshot!.config.mapId].platforms, event.x, event.y, event.x + facing * chargedRange, event.y) ?? chargedRange);
           const width = 2.5 + charge * 7;
-          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * railLength, y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
-          this.spawnBurst(event.x + facing * 8, event.y, color, 6 + Math.round(charge * 16), "flash", facing);
+          this.tracers.push({ x1: muzzleX, y1: event.y, x2: event.x + facing * railLength, y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
+          this.spawnBurst(muzzleX, event.y, color, 6 + Math.round(charge * 16), "flash", facing);
           if (charge >= 0.95) {
             this.rings.push({ x: event.x, y: event.y, life: 0.5, maxLife: 0.5, radius: 12, color, width: 5, grow: 120, double: true });
             this.spawnBurst(event.x, event.y, 0xffe6f2, 26, "spark", facing);
@@ -715,18 +913,42 @@ class ArenaScene extends Phaser.Scene {
           // Bullet-path tracers (single/burst hitscan) draw the real flight
           // line — honest range readout without laser-grade glow.
           const thin = event.pattern === "single" || event.pattern === "burst";
-          this.tracers.push({ x1: event.x, y1: event.y, x2: event.x + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: event.pattern === "piercing" ? 0.16 : thin ? 0.07 : 0.12, color, width, thin });
-          this.spawnBurst(event.x + facing * 6, event.y, color, event.pattern === "piercing" ? 8 : 3, "flash", facing);
-          if (event.count) this.spawnBurst(event.x, event.y, color, Math.min(18, event.count * 3), event.pattern === "cluster" ? "energy" : "spark", facing);
-          if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(event.x + facing * 24, event.y - 8, color, 14, "energy", facing);
+          this.tracers.push({ x1: muzzleX, y1: event.y, x2: muzzleX + facing * length, y2: event.y + (event.pattern === "slash" ? -18 : 0), life: event.pattern === "piercing" ? 0.16 : thin ? 0.07 : 0.12, color, width, thin });
+          this.spawnBurst(muzzleX, event.y, color, event.pattern === "piercing" ? 8 : 3, "flash", facing);
+          if (event.count) this.spawnBurst(muzzleX, event.y, color, Math.min(18, event.count * 3), event.pattern === "cluster" ? "energy" : "spark", facing);
+          if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(muzzleX + facing * 24, event.y - 8, color, 14, "energy", facing);
+          // M24: rocket launches vent backblast smoke behind the tube.
+          if (event.weaponId === "rocket") this.spawnBurst(event.x - facing * 18, event.y + 2, 0x8b9396, 5, "smoke", -facing as 1 | -1 | 0);
+          // M24: the sidearm ejects brass with gravity on every shot.
+          if (event.weaponId === "sidearm" && !event.secondary) this.spawnBurst(event.x - facing * 2, event.y - 4, 0xe8c56a, 2, "spark", -facing as 1 | -1 | 0, 640);
           // Heavy single shots (scatter pellet volleys, rocket launches) get a muzzle ring.
           if (event.weaponId === "scatter" && !event.secondary) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 8, color, width: 3 });
           if (event.weaponId === "rocket") this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 10, color, width: 3 });
         }
+        // M25: every muzzle is a light source — beams/rails glow down the line.
+        const muzzleRadius = event.pattern === "beam" ? 120 : event.weaponId === "rocket" ? 110 : event.weaponId === "scatter" ? 95 : 70;
+        const muzzleLife = event.pattern === "beam" ? 0.12 : 0.14;
+        this.lighting?.flash(muzzleX, event.y, muzzleRadius, color, 0.55, muzzleLife);
       } else if (event.type === "crateSpawn") {
         sfx.play("crateSpawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y - 16, color, 18, "energy", 0);
         this.tracers.push({ x1: event.x, y1: event.y - 48, x2: event.x, y2: event.y + 4, life: 0.24, color, width: 3 });
+      } else if (event.type === "propSpawn") {
+        // Barrel respawn: a soft rust-orange rematerialization.
+        sfx.play("crateSpawn", at(event.x, event.y));
+        this.spawnBurst(event.x, event.y - 12, 0xd88a4a, 10, "energy", 0);
+      } else if (event.type === "propDestroy") {
+        // Barrel detonation: bigger layered fireball + a scorched mark.
+        sfx.play("explosion", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
+        this.spawnBurst(event.x, event.y - 12, 0xfff3d0, 10, "flash", 0);
+        this.spawnBurst(event.x, event.y - 12, 0xf06b2f, 40, "energy", 0);
+        this.spawnBurst(event.x, event.y - 12, 0xf0a14a, 18, "spark", 0);
+        this.spawnBurst(event.x, event.y - 12, 0x343b3b, 20, "smoke", 0);
+        this.rings.push({ x: event.x, y: event.y - 12, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 95, double: true });
+        this.lighting?.flash(event.x, event.y - 12, 170, 0xffc27a, 0.7, 0.34, 100);
+        this.stampScorch(event.x, event.y);
+        this.punchHitstop(event.strength);
+        this.shake(event.strength, true);
       } else if (event.type === "cratePickup") {
         if (event.crateKind === "repair") {
           sfx.play("repair", at(event.x, event.y));
@@ -777,6 +999,8 @@ class ArenaScene extends Phaser.Scene {
         }
       } else if (event.type === "hit") {
         sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
+        // M24 floating damage digits (FX-toggleable).
+        if (event.amount) this.spawnDamageDigit(event.x, event.y, event.amount, event.strength);
         if (visualPrefs.gore) {
           // M19: blood sprays AWAY from the shooter (event carries actorId);
           // unknown shooter degenerates to a radial splash.
@@ -789,6 +1013,8 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y, 0xfff3d0, Math.round(3 + event.strength * 5), "flash", 0);
         if (event.strength >= 0.45) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 5, color: 0xffd9a0, width: 2.5, grow: 40 + event.strength * 40 });
         if (event.strength >= 0.6) this.punchHitstop(event.strength);
+        // M25: hits bloom briefly at the impact point.
+        this.lighting?.flash(event.x, event.y, 46, 0xfff3d0, 0.3, 0.12);
         this.shake(event.strength, target?.id === selfId);
         // M20: when I am the victim, remember the attacker's bearing so a red
         // arc can pulse around my pilot pointing back at the shooter.
@@ -805,6 +1031,8 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y, 0xf0a14a, 14, "spark", 0);
         this.spawnBurst(event.x, event.y, 0x343b3b, 18, "smoke", 0);
         this.rings.push({ x: event.x, y: event.y, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 90, double: true });
+        // M25: explosions blast the darkness open for a beat.
+        this.lighting?.flash(event.x, event.y, 150, 0xffd9a0, 0.65, 0.3, 90);
         this.punchHitstop(event.strength);
         this.shake(event.strength, true);
       } else if (event.type === "dismember") {
@@ -827,6 +1055,8 @@ class ArenaScene extends Phaser.Scene {
         this.rings.push({ x: event.x, y: event.y, life: 0.55, maxLife: 0.55, radius: 10, color: target?.color || 0xf0a14a, width: 4, grow: 130, double: true });
         // Kill pillar: a vertical light shaft marks the elimination spot.
         this.tracers.push({ x1: event.x, y1: Math.max(0, event.y - 210), x2: event.x, y2: event.y + 26, life: 0.4, color: target?.color || 0xf0a14a, width: 7, core: 2.6 });
+        // M25: the death light shaft now also lights the area.
+        this.lighting?.flash(event.x, event.y - 60, 190, target?.color || 0xf0a14a, 0.5, 0.42);
         this.punchHitstop(1.2);
         this.shake(1.4, true);
         // M20 kill feed: every client sees the attribution row; the killer's
@@ -844,7 +1074,7 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 
-  private spawnBurst(x: number, y: number, color: number, count: number, kind: FxParticle["kind"], direction: number) {
+  private spawnBurst(x: number, y: number, color: number, count: number, kind: FxParticle["kind"], direction: number, gravityOverride?: number) {
     // Adaptive density: solo shots keep full juice, particle storms throttle
     // instead of melting the frame budget.
     const pool = this.particles.length;
@@ -855,7 +1085,8 @@ class ArenaScene extends Phaser.Scene {
       const speed = kind === "flash" ? 20 + Math.random() * 60 : 45 + Math.random() * (kind === "smoke" ? 80 : 260);
       const life = kind === "flash" ? 0.1 + Math.random() * 0.08 : kind === "smoke" ? 0.7 + Math.random() * 0.8 : 0.25 + Math.random() * 0.7;
       const size = kind === "flash" ? 7 + Math.random() * 9 : kind === "smoke" ? 8 + Math.random() * 12 : 2 + Math.random() * 4;
-      this.particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - (kind === "blood" ? 80 : 0), life, maxLife: life, size, color, gravity: kind === "blood" ? 540 : kind === "spark" ? 260 : kind === "smoke" ? -18 : kind === "flash" ? -30 : 40, kind });
+      const gravity = gravityOverride ?? (kind === "blood" ? 540 : kind === "spark" ? 260 : kind === "smoke" ? -18 : kind === "flash" ? -30 : 40);
+      this.particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - (kind === "blood" ? 80 : 0), life, maxLife: life, size, color, gravity, kind });
     }
   }
 
@@ -864,6 +1095,33 @@ class ArenaScene extends Phaser.Scene {
     const duration = Math.min(250, 100 + strength * 85);
     const intensity = Math.min(0.012, 0.003 + strength * 0.005);
     this.cameras.main.shake(duration, intensity, true);
+  }
+
+  /** M24 pooled floating damage digits; big hits render larger and hotter. */
+  private spawnDamageDigit(x: number, y: number, amount: number, strength: number) {
+    if (!visualPrefs.digits) return;
+    let entry = this.digits.find((candidate) => candidate.life <= 0);
+    if (!entry) {
+      if (this.digits.length >= 24) return;
+      const text = this.add.text(0, 0, "", { fontFamily: "Consolas, monospace", fontSize: "13px", fontStyle: "bold", color: "#f5f2e8", stroke: "#06090b", strokeThickness: 3 }).setOrigin(0.5).setDepth(6).setResolution(2);
+      entry = { text, life: 0 };
+      this.digits.push(entry);
+    }
+    const execution = strength >= 1.2;
+    const heavy = amount >= 20 || execution;
+    entry.text.setText(String(amount));
+    entry.text.setColor(execution ? "#ff6d5e" : heavy ? "#ffb35c" : "#f5f2e8");
+    entry.text.setFontSize(execution ? 17 : heavy ? 14 : 12);
+    entry.text.setPosition(x + (Math.random() - 0.5) * 10, y - 8);
+    entry.text.setAlpha(1);
+    entry.text.setVisible(true);
+    entry.life = 0.7;
+  }
+
+  private swingStateOf(playerId: string) {
+    const swing = this.swings.get(playerId);
+    if (!swing) return undefined;
+    return { progress: clamp(swing.t / swing.dur, 0, 1), secondary: swing.secondary };
   }
 
   // M20 kill feed: killer ▸ weapon bar ▸ victim. Hazards and falls arrive
@@ -875,7 +1133,7 @@ class ArenaScene extends Phaser.Scene {
     const name = (player?: PlayerState) => player ? `${escapeHtml(player.name)}${player.isBot ? " [BOT]" : ""}` : "—";
     const killerHtml = killer
       ? `<b style="--pilot:${colorCss(killer.color)}">${name(killer)}</b>`
-      : `<b class="spire-kill">THE SPIRE</b>`;
+      : `<b class="spire-kill">${i18n.t("spireKill")}</b>`;
     const victimHtml = `<b style="--pilot:${colorCss(victim?.color ?? 0xf0a14a)}">${name(victim)}</b>`;
     const row = document.createElement("div");
     row.className = "kill-entry";
@@ -947,6 +1205,25 @@ class ArenaScene extends Phaser.Scene {
     this.rings = this.rings.filter((ring) => ring.life > 0);
     for (const marker of this.hitMarkers) marker.life -= dt;
     this.hitMarkers = this.hitMarkers.filter((marker) => marker.life > 0);
+    // M24 animation timers: swing arcs, barrel heat, dash ghosts, damage digits.
+    for (const [id, swing] of this.swings) {
+      swing.t += dt;
+      if (swing.t >= swing.dur) this.swings.delete(id);
+    }
+    for (const [id, value] of this.heat) {
+      const next = value - dt * 1.4;
+      if (next <= 0) this.heat.delete(id);
+      else this.heat.set(id, next);
+    }
+    for (const ghost of this.dashGhosts) ghost.life -= dt;
+    this.dashGhosts = this.dashGhosts.filter((ghost) => ghost.life > 0);
+    for (const digit of this.digits) {
+      if (digit.life <= 0) continue;
+      digit.life -= dt;
+      digit.text.y -= 34 * dt;
+      digit.text.setAlpha(Math.min(1, digit.life / 0.3));
+      if (digit.life <= 0) digit.text.setVisible(false);
+    }
     // M20 vignette: drive the red overlay from my total limb integrity.
     const mine = this.snapshot?.players.find((player) => player.id === selfId);
     if (mine) {
@@ -974,8 +1251,10 @@ class ArenaScene extends Phaser.Scene {
     }
     for (const hazard of snapshot.hazards) drawHazard(this.graphics, hazard, map.accent, time);
     for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
+    for (const prop of snapshot.props) if (prop.alive) drawProp(this.graphics, prop, time);
     for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind);
-    for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile);
+    for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile, time);
+    this.drawDashGhosts();
     this.drawTracers();
     this.drawParticles();
     this.drawHitMarkers();
@@ -989,6 +1268,58 @@ class ArenaScene extends Phaser.Scene {
     for (const [id, label] of this.labels) label.setVisible(visible.has(id));
     this.drawGibs();
     this.drawForeground(snapshot.config.mapId, time);
+    this.drawLighting(snapshot, time);
+  }
+
+  /**
+   * M25: collect this frame's light emitters and resolve the light pass.
+   * Priority order under pool pressure: explosions > muzzle/beam > projectiles
+   * > hazard lamps > pulses. Pilots carry no personal lights (M25b).
+   */
+  private drawLighting(snapshot: ServerSnapshot, time: number) {
+    const lighting = this.lighting;
+    if (!lighting) return;
+    lighting.emitTransients();
+    // M25b: pilots carry NO personal lights — the headlamp cone read as a
+    // flashlight strapped to the character (hard-edged wedge following the
+    // pilot). Characters stay lit by the environment: muzzle flashes,
+    // explosions, static rigs and lightning do all the lighting.
+    // Projectile glows (skip the cheap tiny pellets under load).
+    for (const projectile of snapshot.projectiles) {
+      const color = WEAPONS[projectile.weaponId].color;
+      if (projectile.weaponId === "rocket") lighting.add({ x: projectile.x, y: projectile.y, radius: 70, tint: 0xf0a24a, alpha: 0.5, tier: 0 });
+      else if (projectile.weaponId === "scatter" && projectile.secondary) lighting.add({ x: projectile.x, y: projectile.y, radius: 56, tint: 0xf06b2f, alpha: 0.45, tier: 1 });
+      else if (projectile.pattern === "bounce") lighting.add({ x: projectile.x, y: projectile.y, radius: 40, tint: color, alpha: 0.4, tier: 1 });
+      else lighting.add({ x: projectile.x, y: projectile.y, radius: 26, tint: color, alpha: 0.28, tier: 2 });
+    }
+    // Live crates pulse; hazards announce themselves in light.
+    for (const crate of snapshot.crates) {
+      if (!crate.active) continue;
+      const tint = crate.kind === "repair" ? 0x4fd07a : WEAPONS[crate.weapon].color;
+      lighting.add({ x: crate.x, y: crate.y, radius: 40, tint, alpha: 0.3 + Math.sin(time * 0.006) * 0.08, tier: 2 });
+    }
+    for (const hazard of snapshot.hazards) {
+      if (hazard.phase === "warning") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 90, tint: 0xe0a43c, alpha: 0.3, tier: 1 });
+      else if (hazard.phase === "active") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 110, tint: 0xd84b44, alpha: 0.4, tier: 0 });
+    }
+    // Occluders: platforms + solids + movers + live barrels + pilots.
+    const occluders: OccluderRect[] = MAPS[snapshot.config.mapId].platforms.map((platform) => ({ x: platform.x, y: platform.y, width: platform.width, height: platform.height }));
+    for (const mover of snapshot.movers) occluders.push({ x: mover.x, y: mover.y, width: mover.width, height: mover.height });
+    for (const prop of snapshot.props) {
+      if (!prop.alive) continue;
+      occluders.push({ x: prop.x - 9, y: prop.y - 24, width: 18, height: 24 });
+      // Damaged barrels light themselves: leaking fire becomes a beacon.
+      const fraction = prop.hp / 30;
+      if (fraction < 0.6) {
+        const intensity = (0.6 - fraction) / 0.6;
+        lighting.add({ x: prop.x, y: prop.y - 12, radius: 34 + intensity * 26, tint: 0xf0873c, alpha: 0.3 + intensity * 0.25, tier: 1 });
+      }
+    }
+    for (const player of snapshot.players) {
+      if (player.respawnTimer > 0) continue;
+      occluders.push({ x: player.x - 8, y: player.y - 32, width: 16, height: 32 });
+    }
+    lighting.finish(occluders);
   }
 
   private loadGeneratedBackgrounds() {
@@ -1059,6 +1390,18 @@ class ArenaScene extends Phaser.Scene {
     this.stampDecal({ x, y: surface, radius, alpha: 0.34, rotation: Math.random() * Math.PI, dir: dirSign });
   }
 
+  /**
+   * M25: an explosion's scorched footprint — a dark char ellipse plus radial
+   * streaks, painted into the same decal layer as blood (fades out the same
+   * way, ignores the gore toggle: scorch is property damage, not gore).
+   */
+  private stampScorch(x: number, y: number) {
+    if (!this.snapshot) return;
+    const surface = surfaceBelow(MAPS[this.snapshot.config.mapId], x, y);
+    if (surface === undefined) return; // blast in the air: nothing to scorch
+    this.stampDecal({ x, y: surface + 1, radius: 14, alpha: 0.5, rotation: 0, dir: 0, scorch: true });
+  }
+
   private stampDecal(decal: Decal) {
     if (!visualPrefs.gore) return;
     this.decals.push(decal);
@@ -1083,9 +1426,25 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 
-  /** Organic multi-blob blood stain: directional pool, drag tail, satellites. */
+  /** Organic multi-blob blood stain, or a scorched blast mark (M25). */
   private paintDecal(brush: Phaser.GameObjects.Graphics, decal: Decal) {
     const dir = decal.dir ?? 0;
+    if (decal.scorch) {
+      // Char footprint: wide dark ellipse + radial streaks + a hot ember rim
+      // that fades with the decal alpha.
+      brush.fillStyle(0x0c0d0e, decal.alpha);
+      brush.fillEllipse(decal.x, decal.y, decal.radius * 2.6, decal.radius * 0.85);
+      brush.fillStyle(0x1a1512, decal.alpha * 0.9);
+      brush.fillEllipse(decal.x, decal.y, decal.radius * 1.8, decal.radius * 0.6);
+      for (let streak = 0; streak < 5; streak++) {
+        const angle = (streak / 5) * Math.PI * 2 + decal.rotation;
+        brush.fillStyle(0x0c0d0e, decal.alpha * 0.7);
+        brush.fillCircle(decal.x + Math.cos(angle) * decal.radius * 1.3, decal.y + Math.sin(angle) * decal.radius * 0.4, decal.radius * 0.22);
+      }
+      brush.fillStyle(0xe0682d, decal.alpha * 0.4);
+      brush.fillEllipse(decal.x, decal.y - 0.5, decal.radius * 1.1, decal.radius * 0.3);
+      return;
+    }
     brush.fillStyle(0x5e0a12, decal.alpha);
     // Main pool: an ellipse lying on the surface, stretched along the spray.
     brush.fillEllipse(decal.x + dir * decal.radius * 0.35, decal.y, decal.radius * 2.4, decal.radius * 0.8);
@@ -1156,12 +1515,22 @@ class ArenaScene extends Phaser.Scene {
       }
     }
     const dt = 1 / 60;
+    // M25: rain splash budget — reuse the particle pool, ≤2 splashes/frame.
+    let splashes = 2;
     for (const mote of this.atmosphere) {
       mote.x += mote.vx * dt;
       mote.y += mote.vy * dt;
       if (mote.kind === "rain") {
         if (mote.y > WORLD.height) { mote.y = -10; mote.x = Math.random() * (WORLD.width + 200); }
         if (mote.x < -100) mote.x += WORLD.width + 200;
+        // When a drop crosses a platform surface, kick a splash ring.
+        if (splashes > 0 && this.snapshot) {
+          const surface = surfaceBelow(MAPS[this.snapshot.config.mapId], mote.x, mote.y);
+          if (surface !== undefined && mote.y >= surface && mote.y - mote.vy * dt < surface) {
+            splashes -= 1;
+            this.spawnBurst(mote.x, surface, 0x9fc2c8, 2, "spark", 0, 120);
+          }
+        }
       } else if (mote.kind === "dust") {
         if (mote.y < 0) mote.y = WORLD.height;
         if (mote.x > WORLD.width) mote.x = 0;
@@ -1212,6 +1581,15 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.beginPath();
       this.graphics.arc(cx, cy, radius + 4, marker.angle - 0.32, marker.angle + 0.32);
       this.graphics.strokePath();
+    }
+  }
+
+  /** M24: fading dash afterimages drawn beneath pilots (soft = speed echo). */
+  private drawDashGhosts() {
+    for (const ghost of this.dashGhosts) {
+      const alpha = Math.min(ghost.soft ? 0.12 : 0.4, ghost.life * (ghost.soft ? 1 : 2));
+      this.graphics.fillStyle(ghost.color, alpha);
+      this.graphics.fillRoundedRect(ghost.x - 8, ghost.y - 30, 16, 30, 3);
     }
   }
 
@@ -1292,26 +1670,88 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private drawPlayerState(player: PlayerState, time: number) {
+    // M24 extrapolation + interpolation: render at "snapshot position +
+    // velocity × elapsed" (clamped to 120ms), blended toward the raw value.
+    // The visible pilot stands where the server says combat is happening,
+    // which is what makes shots land where the crosshair already was.
     let position = this.renderPositions.get(player.id);
     if (!position) {
       position = { x: player.x, y: player.y };
       this.renderPositions.set(player.id, position);
     }
+    const sample = this.samples.get(player.id);
+    const elapsed = sample ? Math.min(120, Math.max(0, performance.now() - sample.at)) / 1000 : 0;
+    const rawX = sample ? sample.x + sample.vx * elapsed : player.x;
+    const rawY = sample ? sample.y + sample.vy * elapsed : player.y;
     const blend = player.id === selfId ? 0.52 : 0.34;
-    position.x = Phaser.Math.Linear(position.x, player.x, blend);
-    position.y = Phaser.Math.Linear(position.y, player.y, blend);
+    position.x = Phaser.Math.Linear(position.x, rawX, blend);
+    position.y = Phaser.Math.Linear(position.y, rawY, blend);
+    // M24 jump/land feel: watch ground transitions. A hard landing (falling
+    // fast) squashes the silhouette, kicks up dust and thuds; jumping
+    // stretches it briefly and whooshes.
+    const prev = this.prevState.get(player.id);
+    const landed = prev && !prev.onGround && player.onGround;
+    const fellHard = landed && (prev?.vy ?? 0) > 350;
+    if (landed && fellHard) {
+      this.landFx.set(player.id, 0.16);
+      this.spawnBurst(position.x, player.y, 0x9aa4a4, 6, "smoke", 0);
+      const selfRender = this.renderPositions.get(selfId);
+      sfx.play("land", { x: position.x, y: player.y, mx: selfRender?.x, my: selfRender?.y, strength: 0.5 });
+    }
+    if (prev && player.jumpsUsed > prev.jumpsUsed) {
+      const selfRender = this.renderPositions.get(selfId);
+      sfx.play("jump", { x: position.x, y: player.y, mx: selfRender?.x, my: selfRender?.y, strength: 0.3 });
+    }
+    this.prevState.set(player.id, { onGround: player.onGround, vy: player.vy, jumpsUsed: player.jumpsUsed });
+    let squash = 1;
+    const landTimer = this.landFx.get(player.id);
+    if (landTimer !== undefined) {
+      // M24b two-stage recovery: deep squash at impact, fast initial rebound,
+      // gentle settle (power curve on the remaining timer).
+      squash = 1 - 0.18 * Math.pow(landTimer / 0.16, 1.5);
+      const next = landTimer - 1 / 60;
+      if (next <= 0) this.landFx.delete(player.id);
+      else this.landFx.set(player.id, next);
+    } else if (!player.onGround && player.vy < -120) {
+      squash = 1.08;
+    }
     let label = this.labels.get(player.id);
     if (!label) {
-      label = this.add.text(0, 0, "", { fontFamily: "Arial, sans-serif", fontSize: "11px", fontStyle: "bold", color: "#eef2e9", stroke: "#06090b", strokeThickness: 4 }).setOrigin(0.5).setDepth(5);
+      label = this.add.text(0, 0, "", { fontFamily: "Arial, sans-serif", fontSize: "13px", fontStyle: "bold", color: "#eef2e9", stroke: "#06090b", strokeThickness: 4 }).setOrigin(0.5).setDepth(5).setResolution(2);
       this.labels.set(player.id, label);
     }
-    label.setText(`${player.name.toUpperCase()}  ${player.lives}`).setPosition(position.x, position.y - 48).setVisible(player.respawnTimer <= 0);
+    label.setText(`${player.name.toUpperCase()}  ${player.lives}`).setPosition(position.x, position.y - 54).setVisible(player.respawnTimer <= 0);
     if (player.respawnTimer > 0) return;
-    drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId);
+    // M24: swing/heat state rides along to the art layer.
+    const swing = this.swingStateOf(player.id);
+    drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId, {
+      squash,
+      swing,
+      dashSlash: swing?.secondary && swing.progress < 0.8,
+    });
+    // M24: overhead integrity bar — total limb pool, color shifts to amber/red
+    // as limbs grind down. Hidden at full health to keep the scene clean.
+    const totalIntegrity = LIMB_IDS.reduce((sum, limbId) => sum + player.limbs[limbId], 0);
+    if (totalIntegrity < 400) {
+      const barWidth = 26;
+      const barHeight = 3.5;
+      const barX = position.x - barWidth / 2;
+      const barY = position.y - 63;
+      const fraction = totalIntegrity / 400;
+      const barColor = fraction > 0.55 ? 0x56d9d0 : fraction > 0.3 ? 0xe0a43c : 0xd84b44;
+      this.graphics.fillStyle(0x050708, 0.8);
+      this.graphics.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+      this.graphics.fillStyle(barColor, 0.95);
+      this.graphics.fillRect(barX, barY, barWidth * fraction, barHeight);
+      if (player.id === selfId) {
+        this.graphics.lineStyle(1, 0xf2f5ed, 0.55);
+        this.graphics.strokeRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+      }
+    }
     if ((player.charge ?? 0) > 0.02) {
       const charge = player.charge!;
       const cx = position.x;
-      const cy = position.y - 38;
+      const cy = position.y - 40;
       this.graphics.lineStyle(3.5, 0x1c2325, 0.9);
       this.graphics.beginPath();
       this.graphics.arc(cx, cy, 11, Math.PI * 0.75, Math.PI * 2.25);
@@ -1335,6 +1775,17 @@ class ArenaScene extends Phaser.Scene {
     } else {
       this.graphics.fillStyle(0x050806, 0.28);
       this.graphics.fillEllipse(500 + Math.sin(time * 0.0008) * 80, 570, 780, 70);
+      // M25: steam vents along the assembly gut — periodic cosmetic jets.
+      for (const [ventX, phase] of [[120, 0], [470, 2.1], [880, 4.2]] as const) {
+        const cycle = ((time * 0.001 + phase) % 6) / 6;
+        if (cycle > 0.72) {
+          const jet = Math.sin((cycle - 0.72) / 0.28 * Math.PI);
+          this.graphics.fillStyle(0x8fa39b, 0.14 * jet);
+          this.graphics.fillEllipse(ventX + Math.sin(time * 0.003 + ventX) * 6, 470 - jet * 40, 26 + jet * 14, 60 + jet * 40);
+        }
+        this.graphics.fillStyle(0x39434a, 0.9);
+        this.graphics.fillRect(ventX - 9, 444, 18, 4);
+      }
     }
   }
 }

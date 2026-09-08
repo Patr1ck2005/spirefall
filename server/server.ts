@@ -14,11 +14,12 @@ import {
   MAPS,
   MATCH_TIME_LIMIT_TICKS,
   MAX_JUMPS,
+  MOVE_TUNING,
   PLAYER_BODY_HEIGHT,
   PLAYER_FOOT_OFFSET,
   PLAYER_HALF_WIDTH,
-  PLAYER_HIT_RADIUS,
   PLAYER_TARGET_OFFSET,
+  PROP_TUNING,
   WEAPONS,
   WORLD,
   calculateHazardState,
@@ -29,6 +30,9 @@ import {
   makePlayer,
   rangeFalloff,
   raycastSolids,
+  segmentHitsPlayer,
+  segmentHitsProp,
+  segmentImpactPoint,
   selectLimbAtPoint,
   type ClientInput,
   type CombatEvent,
@@ -44,6 +48,7 @@ import {
   type Platform,
   type PlayerState,
   type ProjectileState,
+  type PropState,
   type RoomView,
   type ServerSnapshot,
   type WeaponId,
@@ -70,6 +75,7 @@ export type Room = {
   tick: number;
   projectiles: ProjectileState[];
   crates: CrateState[];
+  props: PropState[];
   hazards: HazardState[];
   movers: MoverState[];
   events: CombatEvent[];
@@ -137,6 +143,7 @@ function createRoom(client: Client, name: string) {
     tick: 0,
     projectiles: [],
     crates: [],
+    props: [],
     hazards: [],
     movers: [],
     events: [],
@@ -344,6 +351,18 @@ function start(room: Room, mode: MatchMode) {
   room.crates = room.config.crates
     ? [0, 1, 2, 3, 4, 5].map((id) => ({ id, x: 0, y: 0, kind: "weapon" as const, weapon: "sidearm" as WeaponId, active: false, respawnTimer: 0, socketId: "", generation: 0, nextSpawnTick: id < 3 ? randomBetween(60, 180) : Number.MAX_SAFE_INTEGER }))
     : [];
+  // M25 explosive barrels: one authoritative PropState per map def.
+  room.props = (MAPS[room.config.mapId].props ?? []).map((def, id) => ({
+    id,
+    kind: "barrel" as const,
+    x: def.x,
+    y: def.y,
+    hp: PROP_TUNING.hp,
+    alive: true,
+    respawnTimer: 0,
+    generation: 1,
+    nextSpawnTick: 0,
+  }));
   room.hazards = MAPS[room.config.mapId].hazards.map((def) => calculateHazardState(def, 0));
   room.movers = MAPS[room.config.mapId].movers.map((def) => calculateMoverState(def, 0));
   broadcastRoom(room);
@@ -355,6 +374,7 @@ function returnToLobby(room: Room) {
   room.winner = undefined;
   room.projectiles = [];
   room.crates = [];
+  room.props = [];
   room.hazards = [];
   room.movers = [];
   room.events = [];
@@ -401,9 +421,8 @@ function setConfig(room: Room, patch: Partial<MatchConfig>) {
   broadcastRoom(room);
 }
 
-function intersectsCircle(a: { x: number; y: number; r: number }, b: { x: number; y: number; r: number }) {
-  return Math.hypot(a.x - b.x, a.y - b.y) <= a.r + b.r;
-}
+// (M24: the old intersectsCircle helper was retired — all attack shapes now
+// resolve through the shared capsule geometry in shared/game.ts.)
 
 // Echo Shard ricochet: reflect the shard off the struck platform face using
 // the pre-move position to pick the axis (both on corner strikes) and push it
@@ -475,7 +494,7 @@ function damage(
   victim.hitFlash = 0.13;
   if (details.lethal) {
     // Execution shots (full-charge Voltrail) bypass limbs entirely.
-    emitEvent(room, "hit", hitX, hitY, 1.4, { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary });
+    emitEvent(room, "hit", hitX, hitY, 1.4, { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary, amount: Math.round(amount) });
     loseLife(room, victim, victim.x, victim.y - PLAYER_TARGET_OFFSET, "shot", true, details.actorId, details.weaponId);
     return;
   }
@@ -505,7 +524,8 @@ function damage(
       return;
     }
   }
-  emitEvent(room, "hit", hitX, hitY, clamp(force / 520, 0.2, 1.4), { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary, limbId: selectLimbAtPoint(victim, hitX, hitY) });
+  // M24: `amount` feeds the floating damage digits (additive protocol field).
+  emitEvent(room, "hit", hitX, hitY, clamp(force / 520, 0.2, 1.4), { targetId: victim.id, actorId: details.actorId, weaponId: details.weaponId, secondary: details.secondary, limbId: selectLimbAtPoint(victim, hitX, hitY), amount: Math.round(amount) });
 }
 
 function attack(room: Room, player: PlayerState, secondary: boolean, chargeFraction = 0) {
@@ -546,12 +566,24 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       player.vx = player.facing * def.dashSpeed;
       resolveSolids(player, MAPS[room.config.mapId].platforms);
     }
+    // M24: melee resolves as a capsule sweep along the actual swing arc
+    // (origin -> origin + facing*range). The old midpoint-circle test used a
+    // circle of radius range/2 centered ahead — it hit people BEHIND the
+    // muzzle and whiffed on the tip. Segment test matches the swing shape.
     for (const other of room.players.values()) {
-      const hitX = other.x - player.facing * 10;
-      const hitY = other.y - (secondary ? 9 : 15);
-      if (other.id !== player.id && intersectsCircle({ x: originX + player.facing * def.range / 2, y: originY, r: def.range / 2 }, { x: other.x, y: other.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) {
-        damage(room, other, def.damage, def.knockback, player.x, hitX, hitY, { actorId: player.id, weaponId: player.weapon, secondary });
-      }
+      if (other.id === player.id) continue;
+      const tipX = originX + player.facing * def.range;
+      if (!segmentHitsPlayer(other, originX, originY, tipX, originY)) continue;
+      const impact = segmentImpactPoint(other, originX, originY, tipX, originY) ?? { x: other.x, y: other.y - PLAYER_TARGET_OFFSET };
+      damage(room, other, def.damage, def.knockback, player.x, impact.x, impact.y, { actorId: player.id, weaponId: player.weapon, secondary });
+    }
+    // M25: melee cleaves barrels too — the swing arc doubles as a demolition
+    // tool when a barrel sits inside the range.
+    for (const prop of room.props) {
+      if (!prop.alive) continue;
+      const tipX = originX + player.facing * def.range;
+      if (!segmentHitsProp(prop, originX, originY, tipX, originY, 4)) continue;
+      damageProp(room, prop, def.damage, player.id);
     }
     return;
   }
@@ -568,15 +600,34 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       const rayEndX = originX + directionX * range;
       const rayEndY = originY + directionY * range;
       const wallDistance = raycastSolids(platforms, originX, originY, rayEndX, rayEndY) ?? range;
+      // M25: a live barrel in the ray's path soaks the shot. The ray terminates
+      // at the barrel (same visual read as hitting cover): full damage to the
+      // barrel, impact sparks client-side, and nothing behind it is hit.
+      const barrelHit = [...room.props.values()]
+        .filter((prop) => prop.alive && segmentHitsProp(prop, originX, originY, rayEndX, rayEndY))
+        .map((prop) => {
+          const dx = prop.x - originX;
+          const dy = prop.y - originY;
+          return { prop, along: directionX * dx + directionY * dy };
+        })
+        .filter(({ along }) => along > 0 && along <= wallDistance)
+        .sort((a, b) => a.along - b.along)[0];
+      if (barrelHit) {
+        damageProp(room, barrelHit.prop, def.damage * chargeScale, player.id);
+        emitEvent(room, "impact", barrelHit.prop.x, barrelHit.prop.y, 0.8, { weaponId: player.weapon, secondary, pattern: def.pattern, surface: true });
+      }
+      // M24: targets are resolved against the full hit capsule, not a single
+      // chest point — head-height and knee-height rays now land where they
+      // visually should. The ray is treated as a segment so the test is the
+      // same swept geometry projectiles use.
       const targets = [...room.players.values()]
         .map((other) => {
           const dx = other.x - originX;
           const dy = other.y - PLAYER_TARGET_OFFSET - originY;
           const along = directionX * dx + directionY * dy;
-          const offset = Math.hypot(dx - directionX * along, dy - directionY * along);
-          return { other, along, offset };
+          return { other, along };
         })
-        .filter(({ other, along, offset }) => other.id !== player.id && along > 0 && along <= wallDistance && offset < 16)
+        .filter(({ other, along }) => other.id !== player.id && along > 0 && along <= wallDistance && segmentHitsPlayer(other, originX, originY, rayEndX, rayEndY, 3))
         .sort((a, b) => a.along - b.along);
       const limit = def.pattern === "piercing" || def.pattern === "beam" ? (def.pattern === "beam" ? targets.length : def.pierce + 1) : 1;
       // Charged Voltrail rails (>=0.8) are executions: pierce the whole line.
@@ -623,6 +674,52 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
 // physics, no AI inputs, no hazard or projectile interaction, no repeated
 // death events. Sandbox mode never eliminates anyone.
 const isEliminated = (room: Room, player: PlayerState) => room.mode !== "sandbox" && player.lives <= 0;
+
+// M25: a barrel's hp hit zero — explode it. Splash follows the same radial
+// falloff as rockets (0.7x core → 0.2x edge); nearby barrels take half damage
+// and pop on the following ticks through their own detonation calls (chain
+// reaction, bounded because each barrel explodes exactly once).
+function detonateProp(room: Room, prop: PropState) {
+  if (!prop.alive) return;
+  prop.alive = false;
+  prop.hp = 0;
+  prop.nextSpawnTick = room.tick + randomBetween(PROP_TUNING.respawnMin * WORLD.tickRate, PROP_TUNING.respawnMax * WORLD.tickRate);
+  prop.respawnTimer = (prop.nextSpawnTick - room.tick) / WORLD.tickRate;
+  emitEvent(room, "propDestroy", prop.x, prop.y, clamp(PROP_TUNING.blastRadius / 90, 0.6, 1.2), { propId: prop.id, actorId: prop.lastActorId });
+  // Player splash — attributed to the last damager so the kill feed reads
+  // "X ▸ barrel ▸ Y" naturally through the existing actorId path.
+  const actor = prop.lastActorId;
+  for (const nearby of room.players.values()) {
+    if (nearby.respawnTimer > 0 || isEliminated(room, nearby)) continue;
+    const distance = Math.hypot(nearby.x - prop.x, nearby.y - PLAYER_TARGET_OFFSET - prop.y);
+    if (distance >= PROP_TUNING.blastRadius) continue;
+    const falloff = clamp(0.7 - 0.5 * (distance / PROP_TUNING.blastRadius), 0.2, 0.7);
+    damage(room, nearby, PROP_TUNING.damage * falloff, PROP_TUNING.knockback * falloff, prop.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: actor, explosive: true });
+  }
+  // Chain: other barrels in the blast take half damage and detonate through
+  // this same function (alive-guard makes it terminate).
+  for (const other of room.props) {
+    if (!other.alive || other.id === prop.id) continue;
+    const distance = Math.hypot(other.x - prop.x, other.y - prop.y);
+    if (distance >= PROP_TUNING.blastRadius + PROP_TUNING.radius) continue;
+    other.hp -= PROP_TUNING.damage * 0.5;
+    other.lastActorId = actor;
+    if (other.hp <= 0) detonateProp(room, other);
+  }
+}
+
+// M25: apply weapon damage to a barrel. `hitX/hitY` unused for barrels (no
+// limbs) — kept for call-site symmetry. Returns true when the barrel exploded.
+function damageProp(room: Room, prop: PropState, amount: number, actorId?: string): boolean {
+  if (!prop.alive) return false;
+  prop.hp -= amount;
+  prop.lastActorId = actorId;
+  if (prop.hp <= 0) {
+    detonateProp(room, prop);
+    return true;
+  }
+  return false;
+}
 
 function loseLife(room: Room, player: PlayerState, x: number, y: number, cause: "fall" | "hazard" | "shot", emit = true, killerId?: string, killerWeapon?: WeaponId): boolean {
   if (player.respawnTimer > 0 || isEliminated(room, player)) return false;
@@ -729,19 +826,23 @@ function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: ClientI
 
   const modifiers = calculateLimbModifiers(player.limbs);
   const move = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  player.vx += move * 30 * modifiers.move;
-  player.vx *= player.onGround ? 0.78 : 0.93;
-  player.vx = clamp(player.vx, -338 * modifiers.move, 338 * modifiers.move);
+  // M24 feel pass: faster acceleration + a higher top speed (the old 30/tick
+  // with 0.78 friction capped ground speed at ~106px/s — slower than air, and
+  // the main source of "sticky" controls). Numbers live in MOVE_TUNING so the
+  // client and the balance tooling reason over the same values.
+  player.vx += move * MOVE_TUNING.accelerate * modifiers.move;
+  player.vx *= player.onGround ? MOVE_TUNING.groundFriction : MOVE_TUNING.airFriction;
+  player.vx = clamp(player.vx, -MOVE_TUNING.maxSpeed * modifiers.move, MOVE_TUNING.maxSpeed * modifiers.move);
   if (move) player.facing = move as 1 | -1;
   const jumpPressed = input.jump && !room.jumpHeld.get(player.id);
   room.jumpHeld.set(player.id, input.jump);
   if (jumpPressed && player.jumpsUsed < MAX_JUMPS) {
-    player.vy = -(player.jumpsUsed === 0 ? 560 : 510) * modifiers.jump;
+    player.vy = -(player.jumpsUsed === 0 ? MOVE_TUNING.jumpGround : MOVE_TUNING.jumpAir) * modifiers.jump;
     player.jumpsUsed += 1;
     player.onGround = false;
   }
 
-  player.vy += 1150 * dt;
+  player.vy += MOVE_TUNING.gravity * dt;
   const oldY = player.y;
   player.x = clamp(player.x + player.vx * dt, PLAYER_HALF_WIDTH, WORLD.width - PLAYER_HALF_WIDTH);
   player.y += player.vy * dt;
@@ -881,9 +982,25 @@ function updateRoom(room: Room, dt: number) {
     }
   }
 
+  // M25 destructible props: respawn scheduling for destroyed barrels. The
+  // barrels themselves never block movement or shots — they are pure targets.
+  for (const prop of room.props) {
+    if (prop.alive) continue;
+    prop.respawnTimer = Math.max(0, (prop.nextSpawnTick - room.tick) / WORLD.tickRate);
+    if (room.tick >= prop.nextSpawnTick) {
+      prop.alive = true;
+      prop.hp = PROP_TUNING.hp;
+      prop.respawnTimer = 0;
+      prop.generation += 1;
+      prop.lastActorId = undefined;
+      emitEvent(room, "propSpawn", prop.x, prop.y, 0.8, { propId: prop.id });
+    }
+  }
+
   // Explosive splash with M19 radial falloff: ~0.7x damage and knockback at
   // the core tapering to 0.2x at the blast edge. One helper for wall
-  // detonations, body detonations and range-cap air bursts.
+  // detonations, body detonations and range-cap air bursts. M25: rocket
+  // blasts also cook barrels at half damage — chain fuel.
   const detonate = (projectile: ProjectileState, x: number, y: number, skipId?: string) => {
     emitEvent(room, "explosion", x, y, clamp(projectile.explosiveRadius / 90, 0.6, 1.5), { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary });
     for (const nearby of room.players.values()) {
@@ -893,11 +1010,22 @@ function updateRoom(room: Room, dt: number) {
       const falloff = clamp(0.7 - 0.5 * (distance / projectile.explosiveRadius), 0.2, 0.7);
       damage(room, nearby, projectile.damage * falloff, projectile.knockback * falloff, x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: true });
     }
+    for (const prop of room.props) {
+      if (!prop.alive) continue;
+      if (Math.hypot(prop.x - x, prop.y - y) >= projectile.explosiveRadius + PROP_TUNING.radius) continue;
+      damageProp(room, prop, projectile.damage * 0.5, projectile.ownerId);
+    }
   };
 
   for (const projectile of room.projectiles) {
     const attackDef = WEAPONS[projectile.weaponId][projectile.secondary ? "secondary" : "primary"];
     const speed = Math.hypot(projectile.vx, projectile.vy);
+    // M24 swept hit detection: remember this tick's pre-move position so the
+    // body test runs against the full flight segment, not the arrival point.
+    // A 780px/s pellet moves ~13px per tick — more than the old 12px hit
+    // radius — so fast rounds could previously pass clean through a torso.
+    const prevX = projectile.x;
+    const prevY = projectile.y;
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
     projectile.vy += 720 * dt;
@@ -932,11 +1060,30 @@ function updateRoom(room: Room, dt: number) {
         break;
       }
     }
+    // M25: swept segment vs barrels — the round's prev→next flight path must
+    // miss every live barrel for it to survive the tick. Barrels never block
+    // the round's own progress; they just take the damage (and a rocket still
+    // detonates normally).
+    if (!dead) for (const prop of room.props) {
+      if (!prop.alive) continue;
+      if (!segmentHitsProp(prop, prevX, prevY, projectile.x, projectile.y, projectile.radius)) continue;
+      damageProp(room, prop, projectile.damage, projectile.ownerId);
+      if (projectile.explosiveRadius) detonate(projectile, projectile.x, projectile.y);
+      else emitEvent(room, "impact", projectile.x, projectile.y, Math.min(1, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
+      if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
+      else dead = true;
+      break;
+    }
     if (!dead) for (const target of room.players.values()) {
-      if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target) || !intersectsCircle({ x: projectile.x, y: projectile.y, r: projectile.radius }, { x: target.x, y: target.y - PLAYER_TARGET_OFFSET, r: PLAYER_HIT_RADIUS })) continue;
+      if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target)) continue;
+      // M24 swept capsule test: the projectile's prev→next segment must miss
+      // the whole capsule for the round to pass by. Tunneling is now
+      // geometrically impossible regardless of projectile speed.
+      const impact = segmentImpactPoint(target, prevX, prevY, projectile.x, projectile.y);
+      if (!impact) continue;
       projectile.hitIds.push(target.id);
       const travelFalloff = rangeFalloff(projectile.travelled, attackDef.range);
-      damage(room, target, projectile.damage * travelFalloff, projectile.knockback, projectile.x - projectile.vx, projectile.x, projectile.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
+      damage(room, target, projectile.damage * travelFalloff, projectile.knockback, prevX, impact.x, impact.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
       if (projectile.explosiveRadius) {
         detonate(projectile, projectile.x, projectile.y, target.id);
       }
@@ -992,6 +1139,7 @@ function snapshot(room: Room): ServerSnapshot {
     players: [...room.players.values()].map((player) => ({ ...player, limbs: { ...player.limbs }, ammoByWeapon: { ...player.ammoByWeapon } })),
     projectiles: room.projectiles.map((projectile) => ({ ...projectile })),
     crates: room.crates.map((crate) => ({ ...crate })),
+    props: room.props.map((prop) => ({ ...prop })),
     hazards: room.hazards.map((hazard) => ({ ...hazard })),
     movers: room.movers.map((mover) => ({ ...mover })),
     events: room.events.map((event) => ({ ...event })),
@@ -1094,8 +1242,14 @@ wss.on("connection", (ws) => {
     else if (message.type === "sandbox_respawn" && client.room && client.id === client.room.hostId) respawnSandboxPlayer(client.room, client.id);
     else if (message.type === "config" && client.room && client.id === client.room.hostId) setConfig(client.room, message.patch || {});
     else if (message.type === "input" && client.room) {
-      // Whitelist known input fields �?never trust client payloads wholesale.
+      // Whitelist known input fields — never trust client payloads wholesale.
+      // M24b: weaponSlot is MERGED, not replaced — a plain movement message
+      // arriving between a slot keypress and the next tick used to overwrite
+      // the pending slot (~50% of presses raced the 33ms input cadence against
+      // the 16.7ms tick). An absent field now preserves the pending slot, and
+      // stepPlayer still clears it the tick it is consumed.
       const raw = message.input || {};
+      const slot = raw.weaponSlot === undefined ? client.input.weaponSlot : Math.max(1, Math.min(7, Number(raw.weaponSlot) || 0)) || undefined;
       client.input = {
         seq: Number(raw.seq) || client.input.seq + 1,
         left: raw.left === true,
@@ -1104,7 +1258,7 @@ wss.on("connection", (ws) => {
         drop: raw.drop === true,
         primary: raw.primary === true,
         secondary: raw.secondary === true,
-        weaponSlot: raw.weaponSlot === undefined ? undefined : Math.max(1, Math.min(7, Number(raw.weaponSlot) || 0)) || undefined,
+        weaponSlot: slot,
       };
     }
     else if (message.type === "leave_room" && client.room) leaveRoom(client);

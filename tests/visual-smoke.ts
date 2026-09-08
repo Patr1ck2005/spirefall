@@ -1,6 +1,6 @@
 import { chromium, type Page } from "playwright";
 import { mkdir } from "node:fs/promises";
-import { launchOptions, webUrl } from "./helpers/runtime.js";
+import { launchOptions, pinEnglish, webUrl } from "./helpers/runtime.js";
 const viewports = [
   { width: 1024, height: 768, name: "1024x768" },
   { width: 1280, height: 820, name: "1280x820" },
@@ -36,6 +36,7 @@ const browser = await chromium.launch(launchOptions());
 for (const viewport of viewports) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
   const page = await context.newPage();
+  await pinEnglish(page);
   page.on("pageerror", (error) => console.error(`[pageerror ${viewport.name}]`, error));
   await page.goto(webUrl(), { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.locator("#name").waitFor({ timeout: 30000 });

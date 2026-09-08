@@ -56,6 +56,10 @@ assert(started.snapshot.mode === "match", "Normal start did not use match mode")
 assert(started.snapshot.config.mapId === "factory", "Room config was not applied");
 assert(started.snapshot.crates.length === 0, "Crates were not disabled by config");
 assert(started.snapshot.hazards.some((hazard: any) => hazard.kind === "conveyor"), "Factory hazards were not synchronized");
+// M25 destructible props: every map spawns its barrels alive with full hp and
+// they travel in the snapshot stream.
+assert(started.snapshot.props.length >= 3, "Factory barrels were not initialized");
+assert(started.snapshot.props.every((prop: any) => prop.alive && prop.hp === 30), "Barrels did not spawn at full hp");
 
 host.send(JSON.stringify({ type: "input", input: { seq: 1, left: false, right: false, jump: false, drop: false, primary: true, secondary: true } }));
 let dualAttack = false;
@@ -273,6 +277,10 @@ for (let i = 0; i < 50; i++) {
 }
 assert(respawned, "Solo sandbox did not respawn with replenished lives");
 assert(restoredLimbs, "Solo respawn did not restore limb integrity");
+
+// M25 note: barrel detonation end-to-end is covered by ai-smoke (its bots
+// fight on the lanes where barrels sit); here we assert the snapshot sync
+// contract (done above) — scripted run-and-gun choreography is too fragile.
 
 const returnedToLobby = waitFor(solo, "room");
 solo.send(JSON.stringify({ type: "return_lobby" }));
