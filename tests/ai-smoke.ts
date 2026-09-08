@@ -117,7 +117,14 @@ async function botAggression() {
   let scanned = 0;
   const seenPickupIds = new Set<number>();
   const seenAttackIds = new Set<number>();
-  while (Date.now() - started < 70_000) {
+  // M26: the window is load-sensitive — the blade only enters play after a
+  // crate trip, which the weapon manager triggers on deep ammo drain. Under
+  // heavy machine load (external CI/agent processes) serverTick runs ~2×
+  // slow, so shots drain ammo at half rate and 70s wall clock was not enough
+  // for the pickup → hold → switch cycle even though the bot was fighting.
+  // 140s wall ≈ the original 70s of game time on a loaded box, per this
+  // suite's "judge by ticks, not the clock" doctrine.
+  while (Date.now() - started < 140_000) {
     // Scan EVERY new snapshot (20Hz stream, ~100ms poll): the blade hold can
     // be as short as one decision cycle, so sparse sampling misses it. Events
     // live for a full second, so dedupe by id — the same attack would
@@ -149,7 +156,7 @@ async function botAggression() {
   // bots only pull the trigger inside the weapon's true range with line of
   // sight, so a ~70s duel logs far fewer attacks than the old fire-at-
   // everything loop. Real engagement = limbs actually grinding down.
-  assert(damaged, "Bot never damaged the idle human within 70s");
+  assert(damaged, "Bot never damaged the idle human within the aggression window");
   assert(sawBlade && sidearmAfterBlade, `Weapon manager never cycled blade→sidearm (sawBlade=${sawBlade}) — smart switching is broken`);
   console.log(`  fortress: bot fired ${attacks} disciplined shots, ground the human down, cycled blade→sidearm`);
   send(ws, "leave_room");

@@ -97,6 +97,12 @@ async function selectWeapon(page: import("playwright").Page, key: string, label:
 }
 
 // --- M16/M17 combat-feedback checks first, while the pilot is freshly spawned ---
+// M26: the poster light engine must be installed on WebGL (headless
+// SwiftShader included). The hook is set by ensureLighting().
+const lightState = await solo.evaluate(() => (window as unknown as { __spireLight?: { poster: boolean; fallback: boolean } }).__spireLight);
+if (!lightState) throw new Error("Lighting system never installed (no __spireLight hook)");
+if (!lightState.poster && !lightState.fallback) throw new Error("Poster Light2D pipeline not installed on a WebGL renderer");
+
 // Scatter pellets: projectiles must produce impact events at surfaces.
 await solo.evaluate(() => { (window as unknown as { __spireEvents: unknown[] }).__spireEvents = []; });
 await selectWeapon(solo, "2", "Breach Scatter");

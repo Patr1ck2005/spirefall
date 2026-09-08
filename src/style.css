@@ -1,22 +1,24 @@
 :root {
   font-family: Inter, "Segoe UI", Arial, sans-serif;
   color: #e8ece6;
-  background: #070a0c;
+  background: #0a0d10;
   font-synthesis: none;
-  --ink: #070a0c;
-  --panel: #101518;
-  --panel-2: #171d20;
-  --line: #333d40;
-  --muted: #849092;
-  --cyan: #56d9d0;
-  --amber: #e0a346;
-  --red: #d84b44;
+  /* M26: shell palette aligned to the poster scene palettes (palette.ts) —
+     the console frame reads as part of the same world as the maps. */
+  --ink: #0a0d10;
+  --panel: #12171b;
+  --panel-2: #1a2126;
+  --line: #37424a;
+  --muted: #8b979b;
+  --cyan: #43d3e0;
+  --amber: #e0a43c;
+  --red: #e0455a;
   --green: #78936d;
 }
 
 * { box-sizing: border-box; letter-spacing: 0; }
 html { min-width: 320px; min-height: 100%; background: var(--ink); }
-body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; background: #070a0c; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; background: #0a0d10; }
 button, input, select { font: inherit; }
 button { min-height: 42px; border: 1px solid #4b5659; background: #181f22; color: #eef1eb; padding: 10px 16px; border-radius: 3px; cursor: pointer; transition: border-color .15s, background .15s, color .15s, transform .15s; }
 button:hover { border-color: var(--cyan); background: #222c2f; }
@@ -30,7 +32,7 @@ input, select { width: 100%; min-height: 43px; border: 1px solid #414b4e; border
 input:focus, select:focus { border-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); }
 select { cursor: pointer; }
 
-.app-backdrop { position: fixed; inset: 0; width: 100vw; overflow: clip; contain: strict; pointer-events: none; background: #070a0c; }
+.app-backdrop { position: fixed; inset: 0; width: 100vw; overflow: clip; contain: strict; pointer-events: none; background: #0a0d10; }
 .app-backdrop > div { position: absolute; inset: 0; opacity: .42; background-image: linear-gradient(90deg, transparent 0 7%, rgba(76,95,96,.18) 7% 7.2%, transparent 7.2% 19%, rgba(76,95,96,.12) 19% 19.3%, transparent 19.3% 80%, rgba(154,80,49,.1) 80% 80.4%, transparent 80.4%), linear-gradient(0deg, transparent 0 11%, rgba(82,98,97,.15) 11% 11.4%, transparent 11.4% 84%, rgba(82,98,97,.12) 84% 84.4%, transparent 84.4%); }
 .app-backdrop > i { position: absolute; display: block; background: #111719; border: 1px solid #273033; transform: skewX(-11deg); }
 .app-backdrop > i:nth-of-type(1) { left: -80px; top: 0; width: 290px; height: 100%; }

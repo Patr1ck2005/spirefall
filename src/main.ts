@@ -28,14 +28,15 @@ import {
   drawEnvironment,
   drawHazard,
   drawMover,
-  drawPlatformBodies,
-  drawPlatformCaps,
-  drawPlatforms,
   drawPlayer,
   drawProjectile,
   drawProp,
+  mixColor,
 } from "./art";
 import { LightingSystem, type OccluderRect } from "./lighting";
+import { buildAllPlates, type PlateSet } from "./sceneplate";
+import { installPosterPipeline } from "./posterlight";
+import { portraitDataUrl } from "./portrait";
 import "./style.css";
 import { i18n, type I18nKey } from "./i18n";
 
@@ -187,7 +188,8 @@ let gameInstance: Phaser.Game | undefined;
 let manualConnectionAction = false;
 let resumeAttempted = false;
 let lastRosterKey = "";
-const availablePortraits = new Set<number>();
+// M26: every slot gets a procedural poster portrait (data URL, no assets).
+const availablePortraits = new Set<number>([0, 1, 2, 3]);
 
 const savedVisuals = JSON.parse(localStorage.getItem("spirefall-visuals") || "null");
 const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false, digits: savedVisuals?.digits !== false, lighting: savedVisuals?.lighting !== false };
@@ -286,7 +288,7 @@ function renderPlayers(room: RoomMessage) {
   const slots = Array.from({ length: 4 }, (_, index) => {
     const player = room.players[index];
     const archetype = ARCHETYPES[player?.archetype ?? index];
-    const portraitStyle = availablePortraits.has(player?.archetype ?? index) ? ` style="background-image:url('${archetype.portrait}')"` : "";
+    const portraitStyle = availablePortraits.has(player?.archetype ?? index) ? ` style="background-image:url('${portraitDataUrl(player?.archetype ?? index)}')"` : "";
     if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>${i18n.t("openSlot")}</strong><small>${archetype.name}</small></div><em>${i18n.t("waiting")}</em></div>`;
     const accent = colorCss(player.color);
     const statusKey = player.id === room.hostId ? "statusHost" : player.isBot ? "statusBot" : player.connected ? "statusReady" : "statusReconnect";
@@ -360,7 +362,9 @@ function showGame() {
       width: Math.round(WORLD.width * RENDER_SCALE),
       height: Math.round(WORLD.height * RENDER_SCALE),
       backgroundColor: "#080b0d",
-      render: { antialias: true, pixelArt: false },
+      // M26: the poster light pipeline compiles its uniform array from
+      // maxLights — must match POINT_POOL in lighting.ts.
+      render: { antialias: true, pixelArt: false, maxLights: 16 },
       scene: [ArenaScene],
       scale: { mode: Phaser.Scale.NONE },
     });
@@ -482,12 +486,9 @@ window.addEventListener("keyup", (event) => {
 });
 window.addEventListener("blur", () => syncWeaponPanel(false));
 for (const [index, archetype] of ARCHETYPES.entries()) {
-  const image = new Image();
-  image.onload = () => {
-    availablePortraits.add(index);
-    if (currentRoom) renderPlayers(currentRoom);
-  };
-  image.src = archetype.portrait;
+  // Prime the procedural portrait cache so lobby slots render complete.
+  archetype.name;
+  portraitDataUrl(index);
 }
 
 // First user gesture unlocks the AudioContext; later event-driven sounds can play freely.
@@ -560,13 +561,10 @@ class ArenaScene extends Phaser.Scene {
     }
   }
   private lastChargeStep = -1;
-  private backgrounds = new Map<MapId, Phaser.GameObjects.Image>();
-  private materialsReady = new Set<MapId>();
+  private plates?: Record<MapId, PlateSet>;
   private lighting?: LightingSystem;
   private lightingMap: MapId | "" = "";
-  private platformLayer?: Phaser.GameObjects.RenderTexture;
   private decalLayer?: Phaser.GameObjects.RenderTexture;
-  private bakedMapId = "";
   private atmosphere: Array<{ x: number; y: number; vx: number; vy: number; kind: "rain" | "dust" | "ember" }> = [];
   private atmosphereMap: MapId | "" = "";
 
@@ -580,13 +578,12 @@ class ArenaScene extends Phaser.Scene {
     // full 1000×560 arena while the canvas itself draws 1.3× larger.
     this.cameras.main.setZoom(RENDER_SCALE).centerOn(WORLD.width / 2, WORLD.height / 2);
     this.graphics = this.add.graphics();
-    // M25 cinematic lighting (respects the FX toggle and skips on Canvas).
-    if (visualPrefs.lighting && this.game.renderer.type === Phaser.WEBGL) {
-      this.lighting = new LightingSystem(this);
-      this.lighting.setEnabled(true);
-      this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
-    }
-    this.loadGeneratedBackgrounds();
+    // M26 poster scene plates: procedural albedo + Sobel normal maps for the
+    // Light2D pipeline. Built once, synchronously (~a few hundred ms), before
+    // the first snapshot arrives.
+    this.plates = buildAllPlates(this);
+    // M25/M26 cinematic lighting (respects the FX toggle; skipped on Canvas).
+    this.ensureLighting();
     this.input.keyboard!.addCapture("TAB");
     this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     // M24b: weapon-slot presses go through a pending retry queue. A single
@@ -609,6 +606,31 @@ class ArenaScene extends Phaser.Scene {
     });
   }
 
+  /** Create (or recreate) the poster lighting stack. Idempotent. */
+  private ensureLighting() {
+    if (this.lighting) return;
+    if (!visualPrefs.lighting || this.game.renderer.type !== Phaser.WEBGL) return;
+    // Bench/diagnostic flag: ?spirefall-lighting=fallback installs the system
+    // WITHOUT the engine pipeline — exactly what the governor's
+    // PointLights-off tier renders (the verified M25b additive look).
+    const forceFallback = new URLSearchParams(location.search).get("spirefall-lighting") === "fallback";
+    const pipeline = forceFallback ? undefined : installPosterPipeline(this.game);
+    // The plates carry normal maps; route them through the poster light pass.
+    if (this.plates && pipeline) {
+      for (const set of Object.values(this.plates)) {
+        set.background.setPipeline(pipeline);
+        set.world.setPipeline(pipeline);
+      }
+    }
+    this.lighting = new LightingSystem(this, pipeline);
+    this.lighting.setEnabled(true);
+    this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
+    if (this.lightingMap) this.lighting.setMap(this.lightingMap);
+    // Test hook: browser-smoke asserts the engine light pass is installed
+    // (WebGL only — the Canvas renderer never gets it).
+    (window as unknown as { __spireLight?: { poster: boolean; fallback: boolean } }).__spireLight = { poster: !!pipeline, fallback: forceFallback };
+  }
+
   /** Queue a weapon-slot request until a snapshot confirms the switch. */
   private queueWeaponSlot(slot: number) {
     this.pendingSlot = { slot, queuedAt: performance.now() };
@@ -625,10 +647,7 @@ class ArenaScene extends Phaser.Scene {
       const inputVx = ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * Math.min(MOVE_TUNING.maxSpeed, MOVE_TUNING.accelerate * MOVE_TUNING.groundFriction / (1 - MOVE_TUNING.groundFriction));
       predicted.x += inputVx * delta / 1000;
     }
-    // Fake parallax: nudge the background plate against self movement.
-    const offsetX = (predicted?.x ?? WORLD.width / 2) - WORLD.width / 2;
-    const mid = this.backgrounds.get(this.snapshot?.config.mapId ?? "canopy");
-    mid?.setPosition(WORLD.width / 2 - offsetX * 0.03, WORLD.height / 2);
+    // M26 poster plates are fully static — no parallax nudge (poster style).
     // M24b: speed afterimages — the self pilot leaves faint echoes at full
     // sprint so velocity reads at a glance (budget-capped, subtle alpha).
     const mineNow = this.snapshot?.players.find((player) => player.id === selfId);
@@ -700,7 +719,6 @@ class ArenaScene extends Phaser.Scene {
     this.updatePhaseAudio(snapshot, previousPhase, previousMode);
     this.updateHud(snapshot);
     this.refreshWeaponPanel();
-    this.bakePlatformLayer();
     const finished = snapshot.phase === "results";
     $("result").classList.toggle("hidden", !finished);
     $("sandbox-actions").classList.toggle("hidden", snapshot.mode !== "sandbox" || snapshot.phase !== "playing");
@@ -767,12 +785,7 @@ class ArenaScene extends Phaser.Scene {
     // M25: the lighting toggle also needs to work mid-match. When the system
     // never existed (Canvas renderer) there is nothing to re-enable.
     if (this.lighting) this.lighting.setEnabled(visualPrefs.lighting);
-    else if (visualPrefs.lighting && this.game.renderer.type === Phaser.WEBGL) {
-      this.lighting = new LightingSystem(this);
-      this.lighting.setEnabled(true);
-      this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
-      if (this.lightingMap) this.lighting.setMap(this.lightingMap);
-    }
+    else this.ensureLighting();
   }
 
   /** M19: gore lifecycle reset — fresh match, room switch, or gore toggle-off. */
@@ -925,10 +938,12 @@ class ArenaScene extends Phaser.Scene {
           if (event.weaponId === "scatter" && !event.secondary) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 8, color, width: 3 });
           if (event.weaponId === "rocket") this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 10, color, width: 3 });
         }
-        // M25: every muzzle is a light source — beams/rails glow down the line.
+        // M25/M26: every muzzle is a light source — beams/rails glow down the
+        // line, and heavy rounds spill real light onto the walls behind.
         const muzzleRadius = event.pattern === "beam" ? 120 : event.weaponId === "rocket" ? 110 : event.weaponId === "scatter" ? 95 : 70;
         const muzzleLife = event.pattern === "beam" ? 0.12 : 0.14;
-        this.lighting?.flash(muzzleX, event.y, muzzleRadius, color, 0.55, muzzleLife);
+        const muzzlePoint = event.pattern === "beam" || event.weaponId === "rocket" || event.weaponId === "sniper" ? 0.9 : 0;
+        this.lighting?.flash(muzzleX, event.y, muzzleRadius, color, 0.55, muzzleLife, undefined, muzzlePoint);
       } else if (event.type === "crateSpawn") {
         sfx.play("crateSpawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y - 16, color, 18, "energy", 0);
@@ -945,7 +960,7 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y - 12, 0xf0a14a, 18, "spark", 0);
         this.spawnBurst(event.x, event.y - 12, 0x343b3b, 20, "smoke", 0);
         this.rings.push({ x: event.x, y: event.y - 12, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 95, double: true });
-        this.lighting?.flash(event.x, event.y - 12, 170, 0xffc27a, 0.7, 0.34, 100);
+        this.lighting?.flash(event.x, event.y - 12, 170, 0xffc27a, 0.7, 0.34, 100, 1.4);
         this.stampScorch(event.x, event.y);
         this.punchHitstop(event.strength);
         this.shake(event.strength, true);
@@ -1031,8 +1046,8 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y, 0xf0a14a, 14, "spark", 0);
         this.spawnBurst(event.x, event.y, 0x343b3b, 18, "smoke", 0);
         this.rings.push({ x: event.x, y: event.y, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 90, double: true });
-        // M25: explosions blast the darkness open for a beat.
-        this.lighting?.flash(event.x, event.y, 150, 0xffd9a0, 0.65, 0.3, 90);
+        // M25/M26: explosions blast the darkness open and splash the walls.
+        this.lighting?.flash(event.x, event.y, 150, 0xffd9a0, 0.65, 0.3, 90, 1.5);
         this.punchHitstop(event.strength);
         this.shake(event.strength, true);
       } else if (event.type === "dismember") {
@@ -1055,8 +1070,8 @@ class ArenaScene extends Phaser.Scene {
         this.rings.push({ x: event.x, y: event.y, life: 0.55, maxLife: 0.55, radius: 10, color: target?.color || 0xf0a14a, width: 4, grow: 130, double: true });
         // Kill pillar: a vertical light shaft marks the elimination spot.
         this.tracers.push({ x1: event.x, y1: Math.max(0, event.y - 210), x2: event.x, y2: event.y + 26, life: 0.4, color: target?.color || 0xf0a14a, width: 7, core: 2.6 });
-        // M25: the death light shaft now also lights the area.
-        this.lighting?.flash(event.x, event.y - 60, 190, target?.color || 0xf0a14a, 0.5, 0.42);
+        // M25/M26: the death light shaft also lights the area.
+        this.lighting?.flash(event.x, event.y - 60, 190, target?.color || 0xf0a14a, 0.5, 0.42, undefined, 1.1);
         this.punchHitstop(1.2);
         this.shake(1.4, true);
         // M20 kill feed: every client sees the attribution row; the killer's
@@ -1240,19 +1255,22 @@ class ArenaScene extends Phaser.Scene {
     const snapshot = this.snapshot;
     if (!snapshot) return;
     const map = MAPS[snapshot.config.mapId];
-    for (const [mapId, background] of this.backgrounds) background.setVisible(mapId === snapshot.config.mapId);
-    this.graphics.clear();
-    drawEnvironment(this.graphics, snapshot.config.mapId, time, this.backgrounds.has(snapshot.config.mapId));
-    this.drawDecals();
-    if (this.platformLayer && this.bakedMapId === snapshot.config.mapId) {
-      this.platformLayer.setVisible(true);
-    } else {
-      drawPlatforms(this.graphics, snapshot.config.mapId);
+    // M26: visibility switching for the static plate layers.
+    if (this.plates) {
+      for (const [mapId, set] of Object.entries(this.plates) as Array<[MapId, PlateSet]>) {
+        const show = mapId === snapshot.config.mapId;
+        set.background.setVisible(show);
+        set.world.setVisible(show);
+        set.glow.setVisible(show);
+      }
     }
+    this.graphics.clear();
+    drawEnvironment(this.graphics, snapshot.config.mapId, time, !!this.plates);
+    this.drawDecals();
     for (const hazard of snapshot.hazards) drawHazard(this.graphics, hazard, map.accent, time);
     for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
-    for (const prop of snapshot.props) if (prop.alive) drawProp(this.graphics, prop, time);
-    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind);
+    for (const prop of snapshot.props) if (prop.alive) drawProp(this.graphics, prop, time, this.lighting?.sampleLight(prop.x, prop.y - 12));
+    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind, this.lighting?.sampleLight(crate.x, crate.y));
     for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile, time);
     this.drawDashGhosts();
     this.drawTracers();
@@ -1284,13 +1302,21 @@ class ArenaScene extends Phaser.Scene {
     // flashlight strapped to the character (hard-edged wedge following the
     // pilot). Characters stay lit by the environment: muzzle flashes,
     // explosions, static rigs and lightning do all the lighting.
-    // Projectile glows (skip the cheap tiny pellets under load).
+    // Projectile glows (skip the cheap tiny pellets under load). Big rounds
+    // also pour real Light2D light onto the normal-mapped plates.
     for (const projectile of snapshot.projectiles) {
       const color = WEAPONS[projectile.weaponId].color;
-      if (projectile.weaponId === "rocket") lighting.add({ x: projectile.x, y: projectile.y, radius: 70, tint: 0xf0a24a, alpha: 0.5, tier: 0 });
-      else if (projectile.weaponId === "scatter" && projectile.secondary) lighting.add({ x: projectile.x, y: projectile.y, radius: 56, tint: 0xf06b2f, alpha: 0.45, tier: 1 });
-      else if (projectile.pattern === "bounce") lighting.add({ x: projectile.x, y: projectile.y, radius: 40, tint: color, alpha: 0.4, tier: 1 });
-      else lighting.add({ x: projectile.x, y: projectile.y, radius: 26, tint: color, alpha: 0.28, tier: 2 });
+      if (projectile.weaponId === "rocket") {
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 70, tint: 0xf0a24a, alpha: 0.5, tier: 0 });
+        lighting.addPoint(projectile.x, projectile.y, 90, 0xf0a24a, 0.7, 0);
+      } else if (projectile.weaponId === "scatter" && projectile.secondary) {
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 56, tint: 0xf06b2f, alpha: 0.45, tier: 1 });
+        lighting.addPoint(projectile.x, projectile.y, 70, 0xf06b2f, 0.55, 1);
+      } else if (projectile.pattern === "bounce") {
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 40, tint: color, alpha: 0.4, tier: 1 });
+      } else {
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 26, tint: color, alpha: 0.28, tier: 2 });
+      }
     }
     // Live crates pulse; hazards announce themselves in light.
     for (const crate of snapshot.crates) {
@@ -1308,11 +1334,15 @@ class ArenaScene extends Phaser.Scene {
     for (const prop of snapshot.props) {
       if (!prop.alive) continue;
       occluders.push({ x: prop.x - 9, y: prop.y - 24, width: 18, height: 24 });
-      // Damaged barrels light themselves: leaking fire becomes a beacon.
+      // Damaged barrels light themselves: leaking fire becomes a beacon
+      // (additive glow for the flame + a real PointLight so the drum and the
+      // wall behind it catch the firelight).
       const fraction = prop.hp / 30;
       if (fraction < 0.6) {
         const intensity = (0.6 - fraction) / 0.6;
-        lighting.add({ x: prop.x, y: prop.y - 12, radius: 34 + intensity * 26, tint: 0xf0873c, alpha: 0.3 + intensity * 0.25, tier: 1 });
+        const radius = 34 + intensity * 26;
+        lighting.add({ x: prop.x, y: prop.y - 12, radius, tint: 0xf0873c, alpha: 0.3 + intensity * 0.25, tier: 1 });
+        lighting.addPoint(prop.x, prop.y - 12, radius * 1.6, 0xf0873c, 0.4 + intensity * 0.5, 1);
       }
     }
     for (const player of snapshot.players) {
@@ -1320,62 +1350,6 @@ class ArenaScene extends Phaser.Scene {
       occluders.push({ x: player.x - 8, y: player.y - 32, width: 16, height: 32 });
     }
     lighting.finish(occluders);
-  }
-
-  private loadGeneratedBackgrounds() {
-    for (const mapId of Object.keys(MAPS) as MapId[]) {
-      const source = new Image();
-      source.onload = () => {
-        const key = `environment-${mapId}`;
-        if (!this.textures.exists(key)) this.textures.addImage(key, source);
-        const background = this.add.image(WORLD.width / 2, WORLD.height / 2, key).setDisplaySize(WORLD.width * 1.06, WORLD.height * 1.06).setDepth(-2).setVisible(this.snapshot?.config.mapId === mapId);
-        this.backgrounds.set(mapId, background);
-      };
-      source.src = MAPS[mapId].backgroundAsset;
-      const materialSource = new Image();
-      materialSource.onload = () => {
-        const key = `material-${mapId}`;
-        if (!this.textures.exists(key)) this.textures.addImage(key, materialSource);
-        this.materialsReady.add(mapId);
-        this.bakePlatformLayer();
-      };
-      materialSource.src = `/assets/materials/${mapId}.webp`;
-    }
-  }
-
-  // Bake the static platform stack once per map into a RenderTexture: shadow,
-  // body fill, bright cap and rivets from drawPlatforms' geometry plus a tiled
-  // material overlay when the generated texture is available.
-  private bakePlatformLayer() {
-    const snapshot = this.snapshot;
-    if (!snapshot || !this.materialsReady.has(snapshot.config.mapId)) return;
-    const mapId = snapshot.config.mapId;
-    if (this.platformLayer) {
-      if (this.bakedMapId === mapId) return;
-      this.platformLayer.destroy();
-      this.platformLayer = undefined;
-    }
-    try {
-      const layer = this.add.renderTexture(0, 0, WORLD.width, WORLD.height).setOrigin(0, 0).setDepth(-1);
-      const brush = this.make.graphics({ x: 0, y: 0 }, false);
-      drawPlatformBodies(brush, mapId);
-      layer.draw(brush);
-      brush.destroy();
-      for (const platform of MAPS[mapId].platforms) {
-        const tile = this.add.tileSprite(platform.x, platform.y, platform.width, platform.height + 8, `material-${mapId}`).setOrigin(0, 0).setAlpha(0.26);
-        layer.draw(tile);
-        tile.destroy();
-      }
-      const caps = this.make.graphics({ x: 0, y: 0 }, false);
-      drawPlatformCaps(caps, mapId);
-      layer.draw(caps);
-      caps.destroy();
-      this.platformLayer = layer;
-      this.bakedMapId = mapId;
-    } catch {
-      this.platformLayer = undefined;
-      this.bakedMapId = "";
-    }
   }
 
   // M19: gore decals live in `decals` (single source of truth) and are painted
@@ -1722,13 +1696,14 @@ class ArenaScene extends Phaser.Scene {
     }
     label.setText(`${player.name.toUpperCase()}  ${player.lives}`).setPosition(position.x, position.y - 54).setVisible(player.respawnTimer <= 0);
     if (player.respawnTimer > 0) return;
-    // M24: swing/heat state rides along to the art layer.
+    // M24: swing/heat state rides along to the art layer. M26: the sampled
+    // key light drives rim + armor response — the pilot reacts to the room.
     const swing = this.swingStateOf(player.id);
     drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId, {
       squash,
       swing,
       dashSlash: swing?.secondary && swing.progress < 0.8,
-    });
+    }, this.lighting?.sampleLight(position.x, position.y - 30));
     // M24: overhead integrity bar — total limb pool, color shifts to amber/red
     // as limbs grind down. Hidden at full health to keep the scene clean.
     const totalIntegrity = LIMB_IDS.reduce((sum, limbId) => sum + player.limbs[limbId], 0);

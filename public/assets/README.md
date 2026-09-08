@@ -1,11 +1,15 @@
-# Generated runtime art
+# Runtime art
 
-Original Spirefall runtime art described in `docs/ART_DIRECTION.md`. All images here are original generations produced from the clean-room prompts in that document (Volcengine Ark / doubao-seedream-5.0-lite); nothing was extracted or traced from the reference SWF.
+**Since M26 there are no image assets.** All runtime art is procedural:
 
-Contents:
+- Scene plates, platforms and the walkable cap strips are drawn in code at
+  load time (`src/sceneplate.ts`) with Sobel-derived normal maps for the
+  Light2D pipeline.
+- Lobby portraits are flat-vector canvas busts generated on the fly
+  (`src/portrait.ts`, cached data URLs).
+- Every glow, cone and shadow texture is canvas-generated at boot
+  (`src/lighting.ts`).
 
-- `environments/canopy.webp`, `fortress.webp`, `factory.webp`: 2048 x 1152 background plates (generated at 2560 x 1440, downsampled). Regenerated 2026-09 with open compositions — structure at the edges, calm centers.
-- `portraits/breacher.webp`, `warden.webp`, `rigger.webp`, `hunter.webp`: 1024 x 1024 lobby portraits (generated at 1920 x 1920, downsampled).
-- `materials/canopy.webp`, `fortress.webp`, `factory.webp`: 1024 x 1024 seamless textures, loaded by the client and baked as low-alpha overlays on platform bodies.
-
-The procedural renderer remains the required fallback whenever a file is missing or fails to load. Regenerate any plate by re-running its prompt from `docs/ART_DIRECTION.md`; never place extracted or traced SWF resources here.
+Do not add raster art here. The AI-generated plates/portraits that used to
+live in this folder were retired in M26 when the project committed to the
+industrial-poster style (see `docs/ART_DIRECTION.md`).

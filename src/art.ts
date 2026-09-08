@@ -1,13 +1,15 @@
 import Phaser from "phaser";
 import { MAPS, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
+import { POSTER } from "./palette";
+import type { KeyLightSample } from "./lighting";
 
 export const PLAYER_HEX = PLAYER_COLORS.map((color) => `#${color.toString(16).padStart(6, "0")}`) as readonly string[];
 
 export const ARCHETYPES = [
-  { name: "BREACHER", role: "HEAVY ENTRY", portrait: "/assets/portraits/breacher.webp" },
-  { name: "WARDEN", role: "BASTION GUARD", portrait: "/assets/portraits/warden.webp" },
-  { name: "RIGGER", role: "SYSTEMS RAIDER", portrait: "/assets/portraits/rigger.webp" },
-  { name: "HUNTER", role: "CROWN SCOUT", portrait: "/assets/portraits/hunter.webp" },
+  { name: "BREACHER", role: "HEAVY ENTRY" },
+  { name: "WARDEN", role: "BASTION GUARD" },
+  { name: "RIGGER", role: "SYSTEMS RAIDER" },
+  { name: "HUNTER", role: "CROWN SCOUT" },
 ] as const;
 
 export const MAP_COPY: Record<MapId, { index: string; title: string; brief: string }> = {
@@ -49,165 +51,20 @@ export type WeaponDrawFx = {
   swing?: { progress: number; secondary: boolean };
 };
 
-export function drawEnvironment(graphics: Phaser.GameObjects.Graphics, mapId: MapId, time: number, rasterLoaded = false) {
-  const map = MAPS[mapId];
-  // M15: lighter overlays keep the painted backdrop readable as backdrop —
-  // the heavy dims made every map read murky and cluttered.
-  graphics.fillStyle(map.color, rasterLoaded ? 0.12 : 1);
-  graphics.fillRect(0, 0, 1000, 560);
-  if (!rasterLoaded) {
-    drawAtmosphere(graphics, mapId, time);
-    drawMegastructure(graphics, mapId, time);
-  }
-  graphics.fillStyle(0x05090c, 0.08);
-  graphics.fillRect(0, 0, 1000, 560);
-  if (rasterLoaded) {
-    // Per-map readability scrims: suppress painted details that compete with
-    // gameplay (factory's glowing furnace reads as a fake floor; fortress's
-    // white searchlight shafts read as tracers).
-    if (mapId === "factory") {
-      graphics.fillStyle(0x050806, 0.42);
-      graphics.fillRect(0, 430, 1000, 130);
-    } else if (mapId === "fortress") {
-      graphics.fillStyle(0x05070a, 0.16);
-      graphics.fillRect(0, 60, 1000, 340);
-    }
-  }
-}
-
-function drawAtmosphere(graphics: Phaser.GameObjects.Graphics, mapId: MapId, time: number) {
-  const shift = Math.sin(time * 0.00011);
-  if (mapId === "canopy") {
-    graphics.fillStyle(0x233b43, 0.72);
-    graphics.fillRect(0, 0, 1000, 210);
-    graphics.fillStyle(0x6c7d7f, 0.13);
-    for (let i = 0; i < 8; i++) graphics.fillEllipse(70 + i * 145 + shift * 18, 125 + (i % 3) * 34, 230, 76);
-    graphics.fillStyle(0xe7c884, 0.08);
-    graphics.fillRect(0, 188, 1000, 80);
-  } else if (mapId === "fortress") {
-    graphics.fillStyle(0x0d1115, 0.72);
-    graphics.fillRect(0, 0, 1000, 560);
-    graphics.fillStyle(0x8d2628, 0.09 + Math.max(0, shift) * 0.03);
-    graphics.fillTriangle(120, 0, 430, 560, 620, 560);
-    graphics.fillTriangle(880, 0, 580, 560, 430, 560);
-  } else {
-    graphics.fillStyle(0x151a17, 0.82);
-    graphics.fillRect(0, 0, 1000, 560);
-    graphics.fillStyle(0xe0682d, 0.12 + Math.max(0, shift) * 0.04);
-    graphics.fillEllipse(500, 590, 880, 260);
-    graphics.fillStyle(0x667257, 0.08);
-    for (let i = 0; i < 7; i++) graphics.fillEllipse(80 + i * 170 + shift * 22, 165 + (i % 2) * 70, 250, 95);
-  }
-}
-
-function drawMegastructure(graphics: Phaser.GameObjects.Graphics, mapId: MapId, time: number) {
-  if (mapId === "canopy") {
-    graphics.fillStyle(0x0b1418, 0.75);
-    for (let i = 0; i < 6; i++) {
-      const x = 35 + i * 190;
-      graphics.fillRect(x, 0, 36, 560);
-      graphics.fillTriangle(x - 28, 560, x + 18, 70, x + 64, 560);
-      graphics.lineStyle(2, 0x75999b, 0.18);
-      graphics.lineBetween(x + 18, 0, x + 18, 560);
-    }
-    graphics.lineStyle(3, 0x0b1013, 0.9);
-    for (let i = 0; i < 8; i++) {
-      const sway = Math.sin(time * 0.0007 + i) * 5;
-      graphics.lineBetween(80 + i * 130, 0, 95 + i * 130 + sway, 210 + (i % 3) * 70);
-    }
-    graphics.fillStyle(0x50d5cf, 0.65);
-    for (let i = 0; i < 5; i++) graphics.fillRect(74 + i * 214, 74 + (i % 2) * 45, 3, 18);
-  } else if (mapId === "fortress") {
-    graphics.fillStyle(0x111418, 0.92);
-    graphics.fillRect(0, 0, 145, 560);
-    graphics.fillRect(855, 0, 145, 560);
-    graphics.fillRect(390, 0, 220, 560);
-    graphics.fillStyle(0x343238, 0.65);
-    for (let i = 0; i < 6; i++) {
-      graphics.fillRect(15, 55 + i * 94, 115, 7);
-      graphics.fillRect(870, 55 + i * 94, 115, 7);
-    }
-    graphics.fillStyle(0xd43c38, 0.65 + Math.sin(time * 0.006) * 0.18);
-    for (const x of [165, 835]) graphics.fillCircle(x, 66, 5);
-    graphics.lineStyle(2, 0x6f6c70, 0.25);
-    for (let y = 45; y < 540; y += 48) graphics.lineBetween(400, y, 600, y + 30);
-  } else {
-    graphics.fillStyle(0x101412, 0.9);
-    for (const x of [25, 190, 785, 950]) graphics.fillRect(x, 0, 44, 560);
-    graphics.lineStyle(18, 0x151b18, 1);
-    graphics.lineBetween(0, 95, 1000, 95);
-    graphics.lineBetween(0, 165, 1000, 165);
-    graphics.lineStyle(3, 0x566157, 0.45);
-    for (let x = 10; x < 1000; x += 82) graphics.lineBetween(x, 89, x + 44, 171);
-    graphics.fillStyle(0xc9582c, 0.44 + Math.sin(time * 0.004) * 0.12);
-    for (const x of [135, 500, 870]) graphics.fillRect(x, 425, 78, 135);
-    graphics.fillStyle(0xf4a24b, 0.16);
-    for (const x of [174, 539, 909]) graphics.fillEllipse(x, 500, 130, 180);
-  }
-}
-
-export function drawPlatforms(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
-  drawPlatformBodies(graphics, mapId);
-  drawPlatformCaps(graphics, mapId);
-}
-
-// Static platform stack split in two passes so the RenderTexture baker can
-// sandwich a tiled material overlay between the body fill and the bright cap.
-export function drawPlatformBodies(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
-  const map = MAPS[mapId];
-  for (const platform of map.platforms) {
-    graphics.fillStyle(0x0b0e10, 0.72);
-    graphics.fillRect(platform.x + 5, platform.y + 8, platform.width - 10, Math.max(8, platform.height + 12));
-    graphics.fillStyle(platform.solid ? 0x23282b : 0x343c3f, 1);
-    graphics.fillRect(platform.x, platform.y, platform.width, platform.height);
-    if (platform.solid) {
-      graphics.fillStyle(0x14181a, 1);
-      graphics.fillRect(platform.x + platform.width * 0.18, platform.y + 4, platform.width * 0.64, Math.max(2, platform.height - 8));
-    }
-    for (let x = platform.x + 13; x < platform.x + platform.width - 8; x += 38) {
-      graphics.fillStyle(0x090c0e, 0.8);
-      graphics.fillCircle(x, platform.y + platform.height - 4, 2);
-    }
-  }
-}
-
-export function drawPlatformCaps(graphics: Phaser.GameObjects.Graphics, mapId: MapId) {
-  const map = MAPS[mapId];
-  for (const platform of map.platforms) {
-    if (platform.solid) {
-      // M19 cover wall readout: armor plating + hot accent edges so players
-      // learn "this blocks shots" at a glance. Tall solids get rivet bands.
-      graphics.fillStyle(0x2e373a, 1);
-      graphics.fillRect(platform.x, platform.y, platform.width, platform.height);
-      graphics.fillStyle(0x1a2124, 1);
-      for (let y = platform.y + 10; y < platform.y + platform.height - 6; y += 16) {
-        graphics.fillRect(platform.x + 4, y, platform.width - 8, 3);
-      }
-      graphics.lineStyle(2, map.accent, 1);
-      graphics.strokeRect(platform.x + 1, platform.y + 1, platform.width - 2, platform.height - 2);
-      // Corner brackets: the wall keeps its "blocks shots" silhouette even on
-      // bright backgrounds (Canopy's cloud band) where a thin stroke washes out.
-      graphics.lineStyle(3, map.accent, 0.95);
-      graphics.lineBetween(platform.x - 3, platform.y - 3, platform.x + 7, platform.y - 3);
-      graphics.lineBetween(platform.x - 3, platform.y - 3, platform.x - 3, platform.y + 7);
-      graphics.lineBetween(platform.x + platform.width + 3, platform.y - 3, platform.x + platform.width - 7, platform.y - 3);
-      graphics.lineBetween(platform.x + platform.width + 3, platform.y - 3, platform.x + platform.width + 3, platform.y + 7);
-      graphics.lineBetween(platform.x - 3, platform.y + platform.height + 3, platform.x + 7, platform.y + platform.height + 3);
-      graphics.lineBetween(platform.x - 3, platform.y + platform.height + 3, platform.x - 3, platform.y + platform.height - 7);
-      graphics.lineBetween(platform.x + platform.width + 3, platform.y + platform.height + 3, platform.x + platform.width - 7, platform.y + platform.height + 3);
-      graphics.lineBetween(platform.x + platform.width + 3, platform.y + platform.height + 3, platform.x + platform.width + 3, platform.y + platform.height - 7);
-      graphics.fillStyle(0xf2f5f2, 0.5);
-      graphics.fillRect(platform.x, platform.y, platform.width, 2);
-      continue;
-    }
-    // Bright cap line is the primary "walkable here" signal — keep it loud.
-    graphics.fillStyle(map.accent, platform.oneWay ? 1 : 0.95);
-    graphics.fillRect(platform.x, platform.y, platform.width, 4.5);
-    graphics.fillStyle(0xf2f5f2, platform.oneWay ? 0.35 : 0.2);
-    graphics.fillRect(platform.x, platform.y, platform.width, 1.2);
-    graphics.lineStyle(1, 0x93a0a4, 0.4);
-    graphics.lineBetween(platform.x + 8, platform.y + 7, platform.x + platform.width - 8, platform.y + 7);
-  }
+/**
+ * M26: the scene plates (sceneplate.ts) ARE the environment. This fallback
+ * only paints the flat poster field while/without plates — Canvas renderers
+ * and the frames before plate textures exist. Structure lives in the plates.
+ */
+export function drawEnvironment(graphics: Phaser.GameObjects.Graphics, mapId: MapId, _time: number, platesLoaded = false) {
+  if (platesLoaded) return;
+  const poster = POSTER[mapId];
+  graphics.fillStyle(poster.skyTop, 1);
+  graphics.fillRect(0, 0, 1000, 232);
+  graphics.fillStyle(poster.sky, 1);
+  graphics.fillRect(0, 232, 1000, 328);
+  graphics.fillStyle(poster.fog, 0.3);
+  graphics.fillRect(0, 258, 1000, 46);
 }
 
 export function drawMover(graphics: Phaser.GameObjects.Graphics, mover: MoverState, accent: number, time: number) {
@@ -272,15 +129,17 @@ export function drawHazard(graphics: Phaser.GameObjects.Graphics, hazard: Hazard
   }
 }
 
-export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1, kind: "weapon" | "repair" = "weapon") {
+export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1, kind: "weapon" | "repair" = "weapon", light?: KeyLightSample) {
   const weapon = WEAPONS[weaponId];
   const special = kind === "repair" || !["sidearm", "scatter", "rifle"].includes(weaponId);
   const pulse = 0.72 + Math.sin(time * (special ? 0.008 : 0.004) + generation) * (special ? 0.22 : 0.1);
   const bob = Math.sin(time * 0.004 + x) * 3;
   const tint = kind === "repair" ? 0x4fd07a : weapon.color;
+  // M26 light response: the box face warms toward the key light.
+  const face = light && light.intensity > 0.05 ? mixColor(kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e, light.color, Math.min(0.3, light.intensity * 0.35)) : kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e;
   graphics.fillStyle(0x080b0d, 0.55);
   graphics.fillEllipse(x, y + 20, 38, 10);
-  graphics.fillStyle(kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e, 1);
+  graphics.fillStyle(face, 1);
   graphics.fillRect(x - 16, y - 16 + bob, 32, 32);
   graphics.lineStyle(special ? 3 : 2, tint, pulse);
   graphics.strokeRect(x - 16, y - 16 + bob, 32, 32);
@@ -309,10 +168,12 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
  * As HP grinds down, glowing cracks leak fire light — damaged barrels become
  * visible targets. `y` is the platform surface the barrel sits on.
  */
-export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: number; y: number; hp: number }, time: number) {
+export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: number; y: number; hp: number }, time: number, light?: KeyLightSample) {
   const x = prop.x;
   const groundY = prop.y;
   const damageFraction = Math.max(0, Math.min(1, prop.hp / 30));
+  // M26 light response: warm the lit band toward the key light.
+  const bandLit = light && light.intensity > 0.05 ? mixColor(0x9a3a24, light.color, Math.min(0.4, light.intensity * 0.4)) : 0x9a3a24;
   // Body: tapered drum with three shading bands (left shadow, core, right light).
   graphics.fillStyle(0x080b0d, 0.5);
   graphics.fillEllipse(x, groundY + 1, 26, 6);
@@ -321,7 +182,7 @@ export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: numbe
   graphics.fillRect(x - 9, topY, 18, 24);
   graphics.fillStyle(0x7d2c1d, 1);
   graphics.fillRect(x - 6, topY, 9, 24);
-  graphics.fillStyle(0x9a3a24, 1);
+  graphics.fillStyle(bandLit, 1);
   graphics.fillRect(x + 2, topY, 4, 24);
   // Rim rings (top lip + mid seam + foot).
   graphics.fillStyle(0x3f1610, 1);
@@ -452,6 +313,32 @@ const armorPalette = (flash: boolean): ArmorPalette =>
     ? { base: 0xf4f6f2, mid: 0xffffff, hi: 0xffffff, dark: 0xd9dfdc }
     : { base: 0x46525a, mid: 0x5d6c75, hi: 0x84969f, dark: 0x242d31 };
 
+/** Channel mix between two 0xRRGGBB colors. */
+export function mixColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+
+/**
+ * M26 light response: warm the armor set toward the sampled key light (and
+ * cool the shadows). No light → the neutral set (identical to pre-M26 look).
+ */
+function lightShades(armor: ArmorPalette, light?: KeyLightSample): ArmorPalette {
+  if (!light || light.intensity <= 0.02) return armor;
+  const c = light.color;
+  const k = Math.min(0.5, light.intensity * 0.42);
+  return {
+    base: mixColor(armor.base, c, k * 0.8),
+    mid: mixColor(armor.mid, c, k),
+    hi: mixColor(armor.hi, c, k * 0.9),
+    dark: mixColor(armor.dark, 0x05070a, Math.min(0.35, light.intensity * 0.3)),
+  };
+}
+
 /** M25: a plated limb segment — dark underlay + base fill (perf: 2 passes). */
 function limbSegment(
   graphics: Phaser.GameObjects.Graphics,
@@ -481,6 +368,7 @@ export function drawPlayer(
   time: number,
   isSelf: boolean,
   fx?: PlayerDrawFx,
+  light?: KeyLightSample,
 ) {
   const s = PLAYER_SCALE;
   const color = player.color;
@@ -502,7 +390,10 @@ export function drawPlayer(
   const squash = clampAngle(fx?.squash ?? 1, 0.82, 1.18);
   const flash = player.hitFlash > 0;
   // M25 armor palette: dark industrial base with bevel steps so plating reads.
-  const armor = armorPalette(flash);
+  // M26: the set warms toward the strongest nearby light (sampleLight) — the
+  // pilot visibly reacts to the environment without carrying a light.
+  const armor = lightShades(armorPalette(flash), light);
+  const keySide = light ? (light.dirX >= 0 ? 1 : -1) : 0;
   const bodyX = x + lean * s;
   // M25 anchor fix: boots rest ON the platform surface. The old +14 body
   // offset put the boot line ~7px below the walkable cap — the rig visibly
@@ -672,6 +563,12 @@ export function drawPlayer(
   // crown rim light from above
   graphics.lineStyle(1.1 * s, armor.hi, 0.8);
   graphics.lineBetween(bodyX - 6 * s, headY - 8.2 * s, bodyX + 5 * s, headY - 8.6 * s);
+  // M26 key-light rim: a single accent stroke on the lit side of the helmet.
+  if (light && light.intensity > 0.18 && keySide !== 0) {
+    graphics.lineStyle(1.4 * s, mixColor(armor.hi, light.color, 0.55), Math.min(0.95, light.intensity));
+    if (keySide > 0) graphics.lineBetween(bodyX + 2 * s, headY - 8.8 * s, bodyX + 10 * s, headY - 7 * s);
+    else graphics.lineBetween(bodyX - 10 * s, headY - 7 * s, bodyX - 2 * s, headY - 8.8 * s);
+  }
   // emissive visor slit with a soft pulse
   const visorPulse = 0.82 + Math.sin(time * 0.006 + player.x) * 0.12;
   graphics.fillStyle(color, visorPulse);

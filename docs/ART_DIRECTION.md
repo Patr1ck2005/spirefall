@@ -4,25 +4,29 @@
 
 All runtime art is original. The reference SWF is used only to compare high-level play feel. Do not extract, trace, imitate, or redistribute its sprites, fonts, sound, logos, or branding.
 
-## Visual language
+## Visual language (M26 industrial poster)
 
-- World: one vertical brutalist industrial megastructure, shown at three altitudes.
-- Tone: severe decay, dense machinery, smoke, weather, oil, rust, concrete, and controlled pools of utility light.
-- Combat readability: quiet activity band, bright platform caps, strong player outlines, and fixed cyan/coral/amber/violet pilot accents.
-- Characters: semi-realistic comic mercenaries with a shared rig and four silhouettes: Breacher, Warden, Rigger, Hunter.
-- Violence: stylized dismemberment and persistent blood decals. Gore can be disabled without changing authoritative limb state.
+- **Style: industrial poster.** Flat, confident color fields with hard edges — 2-3 value steps per form (shade / base / lit), bold silhouettes, no airbrush gradients, no painted texture. The design thesis: the sets are cardboard, the lights are real. Depth comes from actual per-pixel lighting, never from baked realism.
+- **Depth from light, not rendering.** Scene plates and platforms carry height-derived normal maps and render through the poster-graded Light2D pipeline (`src/posterlight.ts`, half-lambert wrap so flat fields still catch broad light). Every event light — muzzle, explosion, barrel fire, searchlight, lightning — visibly splashes the walls around it.
+- **One palette per sector, one source of truth.** `src/palette.ts` defines the sky / far / mid / near silhouette tones, platform value steps, the walkable cap color and the Light2D ambient grade per map. UI accents read from the same family.
+- **Combat readability (hard rules).** The walkable cap strip is the loudest bright value in the world and lives on a non-lit emissive plate so lighting can never dim it (M20 rule). The central combat band stays a calm field with structure pushed to the frame edges and top (M15 rule). Cover walls keep full-opacity accent edges plus corner brackets on any backdrop.
+- **Characters: vector v3, lit by the room.** Pilots are flat-vector rigs with per-archetype silhouettes. They carry no personal lights (M25b); instead the strongest nearby light is sampled each frame and warms their armor palette and paints a rim stroke on the lit side of the helmet — light responds onto the character without following them.
+- **Violence: stylized dismemberment and persistent blood decals.** Gore can be disabled without changing authoritative limb state.
 
 ## Runtime assets
 
-Final generated files belong under `public/assets/`:
+**There are none.** Since M26 the project ships zero image assets:
 
-- `environments/canopy.webp`, `fortress.webp`, `factory.webp`: 2048 x 1152 opaque background plates.
-- `portraits/breacher.webp`, `warden.webp`, `rigger.webp`, `hunter.webp`: 1024 x 1024 opaque character portraits.
-- `materials/canopy.webp`, `fortress.webp`, `factory.webp`: 1024 x 1024 seamless material references.
+- Scene plates (albedo + height + Sobel normal map) and the platform world plate are drawn in code at load (`src/sceneplate.ts`) and registered as canvas textures.
+- Walkable cap strips and cover-wall accent marks are baked into a separate emissive plate that never darkens.
+- Lobby portraits are flat-vector canvas busts cached as data URLs (`src/portrait.ts`).
+- All glow / cone / shadow textures are canvas-generated at boot (`src/lighting.ts`).
 
-The current build renders a complete procedural fallback, so missing raster assets never create a blank canvas. Generated plates must sit behind gameplay geometry and must not contain apparent walkable ledges in the central combat band.
+The AI-generated webp plates, portraits and material overlays that preceded M26 were retired (deleted from `public/assets/`) when the project pivoted from the semi-realistic "American comic" look to the industrial-poster style. Their generation-prompt archive below is kept as history only — do not resurrect it without a style-direction decision.
 
-## Image generation prompts
+## Image generation prompts (RETIRED 2026-09, M26)
+
+Everything below this line documents the retired AI-image pipeline. It no longer runs at load and the assets are gone. Preserved verbatim for provenance.
 
 Generation pipeline (2026-08-23, environment plates regenerated 2026-09 with open compositions): Volcengine Ark `doubao-seedream-5.0-lite` via the local `~/.claude/scripts/genimg.sh` helper, opaque output, then converted to WebP at spec size with Pillow (environments generated 2560 x 1440 -> downsampled to 2048 x 1152; portraits and materials 1920 x 1920 -> 1024 x 1024). The earlier `gpt-image-2` plan was superseded when the local key proved invalid against the official API. Portrait equipment-light colors follow the fixed pilot accents (Breacher cyan, Warden coral, Rigger amber, Hunter violet). Generate each asset as a distinct job. No prompt may use the original game or Armor Games as a style reference.
 
@@ -193,3 +197,35 @@ Playtest-driven pass, all original and procedural:
   then decorative lights, then the entire pass when the frame-time EMA
   exceeds 26ms, and restores them below 15.5ms. The FX panel toggles the
   full system ("Dynamic lighting / 动态光影").
+
+## M26 industrial poster reset + engine lighting (2026-09)
+
+Playtest verdict that drove this milestone: the semi-realistic "American
+comic" direction was unrefined, and the M25 lighting read as pasted glow
+blobs. User decisions: characters stay procedural vector with light
+response; scene art drops the AI-painted plates for a flat graphic style.
+
+- **Style pivot** - the whole game commits to the industrial-poster
+  language: procedural color-field plates per map (structure at frame
+  edges, calm combat band), 2-3 value steps per form, palette single
+  source in `src/palette.ts` (also feeds the shell UI). The ten AI webps
+  (3 environments, 4 portraits, 3 materials) and the `backgroundAsset`
+  contract field were deleted — the project now ships zero image assets.
+- **Real engine lighting** - scene plates and the static world plate are
+  drawn with paired height fields; a Sobel pass derives normal maps at
+  load. They render through `PosterLightPipeline` (Phaser Light2D
+  subclass, half-lambert wrap) with per-map ambient grades. PointLights
+  (pool of 16 = `maxLights`) carry the static rig anchors baked into the
+  plate art, plus explosions, rocket/flame rounds, burning barrels,
+  muzzle flashes of heavy weapons and lightning strokes — light splashes
+  the walls per-pixel.
+- **Character light response** - `sampleLight(x,y)` picks the strongest
+  light near an entity; drawPlayer warms its armor palette toward it and
+  strokes a rim on the key-light side of the helmet; barrels and crates
+  tint toward it. No light fixture follows any entity (M25b rule).
+- **Fallback ladder** - governor order is now shadows → PointLights →
+  decorative tiers → off; dropping the engine lights restores the
+  verified M25b additive look (veil + glow pool + shadows), so the perf
+  gate survives even where Light2D is too heavy (software rasterizers).
+- **Lobby** - procedural flat-vector portraits (data URLs) replace the
+  AI webps; shell palette aligned to the poster palettes.

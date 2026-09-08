@@ -446,7 +446,6 @@ export type MapDef = {
   color: number;
   accent: number;
   atmosphere: number;
-  backgroundAsset: string;
   platforms: Platform[];
   spawns: Array<{ x: number; y: number }>;
   crateSockets: CrateSocket[];
@@ -465,7 +464,6 @@ export const MAPS: Record<MapId, MapDef> = {
     color: 0x16242a,
     accent: 0x49c9b8,
     atmosphere: 0x99b7bb,
-    backgroundAsset: "/assets/environments/canopy.webp",
     platforms: [
       { x: 0, y: 530, width: 280, height: 30 },
       { x: 420, y: 530, width: 200, height: 30 },
@@ -511,7 +509,6 @@ export const MAPS: Record<MapId, MapDef> = {
     color: 0x241f27,
     accent: 0xe4574f,
     atmosphere: 0xa68b7c,
-    backgroundAsset: "/assets/environments/fortress.webp",
     platforms: [
       { x: 0, y: 530, width: 260, height: 30 },
       { x: 400, y: 530, width: 240, height: 30 },
@@ -555,7 +552,6 @@ export const MAPS: Record<MapId, MapDef> = {
     color: 0x27241f,
     accent: 0xf28a38,
     atmosphere: 0x71806b,
-    backgroundAsset: "/assets/environments/factory.webp",
     platforms: [
       { x: 0, y: 530, width: 240, height: 30 },
       { x: 380, y: 530, width: 260, height: 30 },

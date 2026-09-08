@@ -447,6 +447,40 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 - **回归**：tsc + logic + smoke + visual 全绿；solo 基准 lighting ON 88.4 FPS / OFF 115.7；dist 重建 + hub restart + 截图刷新
 **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
 
+### M26 工业海报美术重置 + Light2D 引擎光照（2026-09，DSH/glm-5.3-flash）
+
+用户判定：M25 的美式写实路线整体不够精美、光影像"糊光斑"，给出条件规则——网页架构里有好的 2D 光影引擎就用，没有就回退网页原生风格并重画全部美术。查证结论：Phaser 3.90（本就一直在用的引擎）内置 Light2D 管线（逐像素法线光照）；M25 没用它、用的是 Canvas 加色贴片。用户两项拍板：**角色 = 矢量 v3 + 受光响应**；**底图 = 重绘平面图形化**（AI plates 退役）。
+
+**Step 0 存量还原点**：M24-M25b 以 `eb3b8cc` 单提交入库（用户批准，Origin: ai-assisted:glm-5.3-flash-dsh）；hub 会话文件（Spirefall.bat、deploy/README.md、6 个未追踪 hub 文件）排除在外未动。
+
+**A 海报色板**（新 `src/palette.ts`）：每图一张 PosterPalette（sky/skyTop/far/mid/near/fog + 平台三阶值 + cap/capCore/accent/glowWarm + Light2D ambient 浮点组 + veil 兜底组），三图/平台/灯光/界面同源。
+
+**B 场景底图程序化**（新 `src/sceneplate.ts`）：
+- 每图三画布：albedo（海报构图）+ height（同几何灰度深度图）+ glow（帽条/掩体 accent 线，**独立非受光层**——M20"能走"信号永远不被压暗）
+- Sobel 3×3 由 height 生成切空间法线（y-up 约定，canvas-y 梯度翻转），1.3× 分辨率（=RENDER_SCALE，屏幕 1:1 texel）
+- 构图沿 M15 规则：结构推到画框边缘与顶部、中段战斗带安静——canopy 左塔架群+右桅杆林+底部云海双色带、fortress 对称闸门凹廊+侧墙装甲分块+顶部桁架、factory 双主管道+角落立柱+炉口三连拱（拱口是暗结构，光由灯组来）
+- `PLATE_ANCHORS` 从画面里导出静态灯锚点（canopy 7 / fortress 2 / factory 3）——**看得到的灯就是亮着的灯**
+- 退役：删除 `public/assets/{environments,materials,portraits}` 共 10 个 AI webp；`shared/game.ts` 删 `MapDef.backgroundAsset` 字段（客户端独占消费，服务器/测试零波纹）；main.ts 删 backgrounds Map/假视差/webp 加载/platformLayer 烘焙整链
+
+**C Light2D 引擎光照**（新 `src/posterlight.ts` + lighting.ts 扩展）：
+- `PosterLightPipeline` 继承 Phaser LightPipeline，片元着色器唯一改动：diffuse 换半兰伯特 wrap（`dot*0.62+0.38`）——纯平海报面的法线与面内光向近乎垂直，原版 diffuse≈0.1 会"吃不到光"；wrap 后平面基础响应 ~0.44、倒角边缘冲到 1.0，海报浮雕感刚好
+- game config `maxLights:16`（=POINT_POOL，编译期展开着色器灯数组）；LightsManager 自带镜头剔除+超员距离裁剪
+- 点光池：常驻 rig（锚点）+ 事件借用（爆炸/火箭/火舌/燃烧桶/重武器枪口/闪电）；Fortress 探照锥 = ADD 体积锥 + 随摆动移动的点光——光束扫过处墙面真实点亮
+- 受光对象：sceneplate 背景/世界两层 + glow 层默认管线（永不受光）；动态实体保持 Graphics（无 UV 采样，走 D 的受光响应）
+- **降级塔扩序**：shadows → PointLights（退回 M25b 贴片光模式，已验证 45 FPS 门槛的安全网）→ 装饰 tier → 全关；恢复逆序
+- veil 保留（海报色调滤层），ambient 由 Light2D 承担主压暗
+
+**D 角色 v3 + 受光响应**（art.ts）：
+- `sampleLight(x,y)`（lighting.ts）：遍历当帧已解析点光，权重=intensity×(1−d/radius) 取最强，返回 {dirX,dirY,color,intensity}（滞后一帧，不可感知）
+- `lightShades()`：armor 三阶值整体向 key 光混色（暖化受光侧、压暗暗部）；躯干胸甲嵌片向受光侧偏移；头盔受光侧单笔 rim 描边（accent×光色）；无光时回退中性色板（M25b 观感不变）
+- drawProp 桶身亮带/描边、drawCrate 箱面向光 tint 同样接 sampleLight
+- **角色仍然零随身光源**（M25b 规则硬化为架构：光响应进画法，不进光源表）
+
+**E 程序化肖像 + 界面**：新 `src/portrait.ts` canvas 胸像（海报语言：双色墙+accent 扫描线+职业盔形剪影+面罩发光+左受光侧 rim），dataURL 缓存，`availablePortraits` 全量可用；ARCHETYPES 删 webp 路径字段；style.css 根变量对齐三图海报色板
+
+**回归**：tsc + build + logic + smoke + ai + browser（新增 `__spireLight` 钩子断言：WebGL 下海报管线必须安装）+ visual + **performance 73.2 FPS / p95 23.5ms（1.3× 渲染尺度历史新高，M25b 基线 52.1——静态层烘焙成底图后每帧 Graphics 填充成本消失，Light2D 逐像素循环在 GPU 管线内近乎免费）**；三模式基准（solo factory：Light2D 全开 170.0 / ADD 兜底 148.5 / 全关 170.0 FPS——前两者顶测量上限，引擎光照成本实测为零，veil+光斑池反而是更贵的路径）；AI 套件曾三连败于"blade→sidearm 切枪"断言，根因是**负载敏感性**（外部 15+ Codex 进程压慢 serverTick → 弹药深耗触发找箱的时点推迟 → 70s 墙钟不够拾取→持有→切回全程；服务器 bot 零改动且探针证明对局正常解决）——按本套件"时长判 tick 不判墙钟"教义把窗口放宽到 140s 墙钟（≈负载下原 70s 游戏时间）后稳定通过；docs/screenshots 全量重生成；dist 重建 + hub restart 双端口 200
+**状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）
