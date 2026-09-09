@@ -396,12 +396,12 @@ function respawnSandboxPlayer(room: Room, playerId: string) {
 function setConfig(room: Room, patch: Partial<MatchConfig>) {
   if (room.phase !== "lobby") return;
   const mapId = patch.mapId && patch.mapId in MAPS ? patch.mapId : room.config.mapId;
-  const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 7);
+  const requestedWeapons = patch.weaponSet?.filter((id): id is WeaponId => id in WEAPONS).slice(0, 8);
   if (requestedWeapons && !requestedWeapons.includes("sidearm")) {
     requestedWeapons.unshift("sidearm");
     // Trim ONLY on overflow: setting length on a shorter array would grow it
     // with sparse holes, and every WEAPONS[weaponSet[slot]] reader would crash.
-    if (requestedWeapons.length > 7) requestedWeapons.length = 7;
+    if (requestedWeapons.length > 8) requestedWeapons.length = 8;
   }
   const botSkill = patch.botSkill === "casual" || patch.botSkill === "brutal" ? patch.botSkill : patch.botSkill === "standard" ? patch.botSkill : room.config.botSkill;
   room.config = {
@@ -536,7 +536,9 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
   // Charge releases below the minimum fraction fizzle (stepPlayer owns charge state).
   if (!secondary && def.chargeMax !== undefined && chargeFraction < (def.chargeMin ?? 0.25)) return;
   const chargeScale = !secondary && def.chargeMax !== undefined ? 1 + chargeFraction * 1.6 : 1;
+  // M27: wounded arms widen the cone (server-authoritative — bots suffer too).
   const modifiers = calculateLimbModifiers(player.limbs);
+  const spread = def.spread * modifiers.spread;
   player[cooldownKey] = def.cooldown * modifiers.cooldown;
   player.ammo -= def.ammoCost;
   player.ammoByWeapon[player.weapon] = player.ammo;
@@ -592,7 +594,7 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
     const platforms = MAPS[room.config.mapId].platforms;
     const shots = def.pattern === "burst" ? def.count : 1;
     for (let shot = 0; shot < shots; shot++) {
-      const angle = (shot - (shots - 1) / 2) * def.spread;
+      const angle = (shot - (shots - 1) / 2) * spread;
       const directionX = Math.cos(angle) * player.facing;
       const directionY = Math.sin(angle);
       // M19: the ray stops at the first solid cover �?lasers and bullets no
@@ -642,9 +644,9 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
 
   const count = def.pattern === "pellet" || def.pattern === "cluster" ? def.count : 1;
   for (let index = 0; index < count; index++) {
-    const spread = def.pattern === "pellet"
-      ? (index - (count - 1) / 2) * (def.spread / Math.max(1, count - 1))
-      : def.pattern === "cluster" ? (index - 1) * def.spread : (Math.random() - 0.5) * def.spread;
+    const arc = def.pattern === "pellet"
+      ? (index - (count - 1) / 2) * (spread / Math.max(1, count - 1))
+      : def.pattern === "cluster" ? (index - 1) * spread : (Math.random() - 0.5) * spread;
     room.projectiles.push({
       id: room.nextProjectile++,
       ownerId: player.id,
@@ -652,8 +654,8 @@ function attack(room: Room, player: PlayerState, secondary: boolean, chargeFract
       secondary,
       x: originX,
       y: originY,
-      vx: Math.cos(spread) * player.facing * def.speed,
-      vy: Math.sin(spread) * def.speed,
+      vx: Math.cos(arc) * player.facing * def.speed,
+      vy: Math.sin(arc) * def.speed,
       radius: def.radius,
       damage: def.damage * chargeScale,
       knockback: def.knockback * chargeScale,
@@ -683,6 +685,7 @@ function detonateProp(room: Room, prop: PropState) {
   if (!prop.alive) return;
   prop.alive = false;
   prop.hp = 0;
+  prop.burning = undefined;
   prop.nextSpawnTick = room.tick + randomBetween(PROP_TUNING.respawnMin * WORLD.tickRate, PROP_TUNING.respawnMax * WORLD.tickRate);
   prop.respawnTimer = (prop.nextSpawnTick - room.tick) / WORLD.tickRate;
   emitEvent(room, "propDestroy", prop.x, prop.y, clamp(PROP_TUNING.blastRadius / 90, 0.6, 1.2), { propId: prop.id, actorId: prop.lastActorId });
@@ -696,15 +699,19 @@ function detonateProp(room: Room, prop: PropState) {
     const falloff = clamp(0.7 - 0.5 * (distance / PROP_TUNING.blastRadius), 0.2, 0.7);
     damage(room, nearby, PROP_TUNING.damage * falloff, PROP_TUNING.knockback * falloff, prop.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: actor, explosive: true });
   }
-  // Chain: other barrels in the blast take half damage and detonate through
-  // this same function (alive-guard makes it terminate).
+  // Chain: other barrels in the blast catch FIRE instead of losing hp — the
+  // M27 propagation model. Fire spreads barrel-to-barrel with a per-barrel
+  // fuse, so the chain reaction reads as advancing flames (each drum lights
+  // up, burns visibly, then pops) rather than a same-tick detonation wave.
+  // The alive-guard in detonateProp keeps the recursion bounded.
   for (const other of room.props) {
     if (!other.alive || other.id === prop.id) continue;
     const distance = Math.hypot(other.x - prop.x, other.y - prop.y);
     if (distance >= PROP_TUNING.blastRadius + PROP_TUNING.radius) continue;
-    other.hp -= PROP_TUNING.damage * 0.5;
-    other.lastActorId = actor;
-    if (other.hp <= 0) detonateProp(room, other);
+    if (other.burning === undefined || other.burning <= 0) {
+      other.burning = 0.45 + Math.random() * 0.35;
+      other.lastActorId = actor;
+    }
   }
 }
 
@@ -984,16 +991,27 @@ function updateRoom(room: Room, dt: number) {
 
   // M25 destructible props: respawn scheduling for destroyed barrels. The
   // barrels themselves never block movement or shots — they are pure targets.
+  // M27 Pyre Vent: a burning drum counts down each tick and cooks off at zero
+  // — the flamethrower's burst tool against clustered cover.
   for (const prop of room.props) {
-    if (prop.alive) continue;
-    prop.respawnTimer = Math.max(0, (prop.nextSpawnTick - room.tick) / WORLD.tickRate);
-    if (room.tick >= prop.nextSpawnTick) {
-      prop.alive = true;
-      prop.hp = PROP_TUNING.hp;
-      prop.respawnTimer = 0;
-      prop.generation += 1;
-      prop.lastActorId = undefined;
-      emitEvent(room, "propSpawn", prop.x, prop.y, 0.8, { propId: prop.id });
+    if (!prop.alive) {
+      prop.respawnTimer = Math.max(0, (prop.nextSpawnTick - room.tick) / WORLD.tickRate);
+      if (room.tick >= prop.nextSpawnTick) {
+        prop.alive = true;
+        prop.hp = PROP_TUNING.hp;
+        prop.respawnTimer = 0;
+        prop.generation += 1;
+        prop.lastActorId = undefined;
+        prop.burning = undefined;
+        emitEvent(room, "propSpawn", prop.x, prop.y, 0.8, { propId: prop.id });
+      }
+      continue;
+    }
+    if (prop.burning !== undefined && prop.burning > 0) {
+      prop.burning = Math.max(0, prop.burning - dt);
+      if (prop.burning === 0) {
+        detonateProp(room, prop);
+      }
     }
   }
 
@@ -1028,7 +1046,10 @@ function updateRoom(room: Room, dt: number) {
     const prevY = projectile.y;
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
-    projectile.vy += 720 * dt;
+    // M27 ballistics: flame is lighter than air — it RISES as it burns out,
+    // everything else keeps the standard 720 sag. The Pyre Vent's arc hugs
+    // ledges and licks up over cover instead of dropping short.
+    projectile.vy += (projectile.weaponId === "flame" ? -190 : 720) * dt;
     projectile.ttl -= dt;
     // M19 hard range cap: rounds measure travel from the muzzle. Rockets
     // air-burst at the cap; every other round fizzles out mid-flight.
@@ -1067,6 +1088,19 @@ function updateRoom(room: Room, dt: number) {
     if (!dead) for (const prop of room.props) {
       if (!prop.alive) continue;
       if (!segmentHitsProp(prop, prevX, prevY, projectile.x, projectile.y, projectile.radius)) continue;
+      // M27 Pyre Vent: flame doesn't chip barrels — it LIGHTS them. The drum
+      // burns for ~0.8s (visible fire + its own light the whole time), then
+      // cooks off through the same detonation path as a shot barrel.
+      if (projectile.weaponId === "flame") {
+        if (!prop.burning) {
+          prop.burning = 0.8;
+          prop.lastActorId = projectile.ownerId;
+          emitEvent(room, "impact", prop.x, prop.y - 14, 0.6, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
+        }
+        if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
+        else dead = true;
+        break;
+      }
       damageProp(room, prop, projectile.damage, projectile.ownerId);
       if (projectile.explosiveRadius) detonate(projectile, projectile.x, projectile.y);
       else emitEvent(room, "impact", projectile.x, projectile.y, Math.min(1, speed / 700), { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
@@ -1249,7 +1283,7 @@ wss.on("connection", (ws) => {
       // the 16.7ms tick). An absent field now preserves the pending slot, and
       // stepPlayer still clears it the tick it is consumed.
       const raw = message.input || {};
-      const slot = raw.weaponSlot === undefined ? client.input.weaponSlot : Math.max(1, Math.min(7, Number(raw.weaponSlot) || 0)) || undefined;
+      const slot = raw.weaponSlot === undefined ? client.input.weaponSlot : Math.max(1, Math.min(8, Number(raw.weaponSlot) || 0)) || undefined;
       client.input = {
         seq: Number(raw.seq) || client.input.seq + 1,
         left: raw.left === true,

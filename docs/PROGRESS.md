@@ -479,6 +479,70 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 **E 程序化肖像 + 界面**：新 `src/portrait.ts` canvas 胸像（海报语言：双色墙+accent 扫描线+职业盔形剪影+面罩发光+左受光侧 rim），dataURL 缓存，`availablePortraits` 全量可用；ARCHETYPES 删 webp 路径字段；style.css 根变量对齐三图海报色板
 
 **回归**：tsc + build + logic + smoke + ai + browser（新增 `__spireLight` 钩子断言：WebGL 下海报管线必须安装）+ visual + **performance 73.2 FPS / p95 23.5ms（1.3× 渲染尺度历史新高，M25b 基线 52.1——静态层烘焙成底图后每帧 Graphics 填充成本消失，Light2D 逐像素循环在 GPU 管线内近乎免费）**；三模式基准（solo factory：Light2D 全开 170.0 / ADD 兜底 148.5 / 全关 170.0 FPS——前两者顶测量上限，引擎光照成本实测为零，veil+光斑池反而是更贵的路径）；AI 套件曾三连败于"blade→sidearm 切枪"断言，根因是**负载敏感性**（外部 15+ Codex 进程压慢 serverTick → 弹药深耗触发找箱的时点推迟 → 70s 墙钟不够拾取→持有→切回全程；服务器 bot 零改动且探针证明对局正常解决）——按本套件"时长判 tick 不判墙钟"教义把窗口放宽到 140s 墙钟（≈负载下原 70s 游戏时间）后稳定通过；docs/screenshots 全量重生成；dist 重建 + hub restart 双端口 200
+**状态**：已提交 `1ccaecd`（用户批准，Origin: ai:glm-5.3-flash-dsh）
+
+### M27 风格化阴影 v2 + 火力上修 + Pyre Vent（2026-09，DSH/glm-5.3-flash）
+
+用户实测 M26 后判定：fortress 太暗、阴影起止生硬（二值开关、硬边楔形、无衰减端点）；要求系统增强光效 + 个别武器重设计 + 武器/爆炸物伤害上调 + 躯干血量反映到操作。两轮追加：阴影必须**渐变中断**（不能硬切）、**所有强光效都要投影**、加一把喷火武器、增强环境交互。
+
+**A 阴影系统 v2**（lighting.ts）：
+- **连续 governor**：`shadowsOn`/`lights2DOn` 布尔降级塔改为 `shadowLevel`/`light2DLevel ∈ [0,1]` 连续值（EMA 选目标档，实际值 1.8/s 线性缓动）——降级/恢复全程无跳变；PointLight 强度、阴影 alpha 全乘 level
+- **三层渐变楔**：`SHADOW_BANDS` = 本影 1.25×半径（α×1.0）+ 1.5×（α×0.3）+ 1.75×（α×0.13），外带先画核心后画——阴影末端从"硬切"变为三级溶解（海报平色语言内的渐变）
+- **双层半影**：每条背向边先画"光源沿边中点方向外推 12px"的宽楔（α×0.42）再叠本影——几何假 spreads 光源
+- **瞬态阴影**：`flash()` 新增第 9 参 `shadow`（强度 0-1.5），随 flash 包络 t=life/maxLife 衰减；辉光先灭时以 `shadowOnly` 作业延续阴影尾——**全部枪口（0.3-0.9 按武器重量）、爆炸 1.4、桶爆 1.3、死亡 0.9、canopy 闪电 1.6（全游戏最强投影）都投影**
+- 每帧投影作业上限 6（按锥光优先+强度排序截断）；per-map 阴影色（palette `shadowColor/shadowAlpha`：fortress 蓝紫 0x1a2036/0.30、factory 暖褐 0x2a1c10/0.30、canopy 冷蓝 0x101c2a/0.26）替换硬编码黑
+- veil 电影化淡入（2.4/s 指数缓动，开局/切图触发）；大半径静态灯锚点（r≥90）自投影
+- `__spireLight` 钩子扩展 levels 字段（测试可读 governor 状态）
+
+**B fortress 提亮**（palette.ts + sceneplate.ts）：ambient [0.2,0.21,0.26]→[0.3,0.31,0.37]、veilAlpha 0.5→0.38、sky/far/mid/panelLit 全档上提一阶；`PLATE_ANCHORS.fortress` 2→6 灯（门廊吊灯×2 暖白 + 城墙壁灯×2 accent 红，灯具全部画进底图——吊灯有吊杆+灯罩+炽芯，壁灯有托架）；探照灯锥 300→360 半径、α 0.36→0.44、点光随动 170→200。light-check 实测 fortress idle luma 49.7（canopy 51.3 同级，修复前图面观感"死黑"）
+
+**C 弹道光升级 + 人物微光**（main.ts + art.ts）：maxLights 16→20（POINT_POOL 同步）；rocket/Pyre 火舌/Echo Shard 每弹常驻 PointLight + shadow 作业（飞行阴影）；rifle piercing 光线光；机关灯带投影；人物 rim 升级为低强度自发光晕（accent 色 halo，强调"发光材质"而非光源——不违背 M25b 零随身光）；重腿跛行步幅（stride ×(0.45+0.55·腿完整度)）
+
+**D 英雄武器视觉**：Voltrail 蓄能枪口聚能双环（charge 驱动收缩，满蓄白芯脉冲）；Forge Rocket 彗尾重绘（火舌锯齿+亮芯拖线）；Echo Shard 弹跳光冠（剩余反弹数→光晕半径/亮度，配合 shadow 作业"边弹边投影"）
+
+**E 火力上修 + 伤残强化**（shared/game.ts + server.ts，用户本轮明确解除"不动服务器战斗数值"约束——**仅伤害/爆炸参数；冷却/机关周期仍冻结**）：
+- 全武器伤害上调：sidearm 9→11/10→12、scatter 9→11/4→5、rifle 6→8/38→48、sniper 32→40/35→44、rocket 46→58/25→30（爆径 88→96）、blade 38→46/60→74、echo 13→16/34→42
+- `PROP_TUNING`：damage 32→46、blastRadius 70→88、knockback 280→330（hp 30 不动；仍严格处于 rocket 包络内，band 断言保持）
+- `calculateLimbModifiers` 强化：cooldown ×(1+0.35·armSev)、recoil ×(1+0.3·armSev)、**spread ×(1+0.3·armSev)（新增——`attack()` 三处散布全部接入，服务器权威，bot 同受）**、move ×(1−0.3·legSev)、jump ×(1−0.25·legSev)（双腿毁 = ×0.4 爬行/×0.5 跳）
+- main.ts：`flash` 枪口阴影按武器重量分档（rocket 0.9 → sidearm 0.3）
+
+**F Pyre Vent 喷火枪**（第 8 武器）：主攻击 = 锥形燃料喷射（0.045s 冷却/伤害 6/射程 230/速度 430），副攻击 = 8 弹宽锥爆燃点（1.6s/伤害 9/ammoCost 8）；**火焰弹道浮力 −190（轻于空气上飘）** vs 常规 720 下坠；**点桶即点燃**（不削血，燃烧 0.8s 后 cook-off 走同一 detonateProp 路径）；枪形 = 工业喷炬（燃料罐+喇叭口+常明引焰）；弹道 = 双色火球白炽芯；bot ENGAGEMENT_BAND [0,210]；**协议兼容**：PropState 增 `burning?` 可选字段，weaponSet 钳位/slice 上限 7→8（服务器两处 + 客户端键位 Digit8/Numpad8 + 回退 1-8 解析）
+- **环境交互强化**：桶爆炸的连锁从"半伤同刻爆"改为**火焰传播**——邻近桶被点燃（0.45-0.8s 随机引信逐桶起火 → 逐桶爆），连锁读感从瞬时波变推进火线
+
+**G 验收工具**（tests/tools/light-check.ts）：三图各抓 idle/开火/爆炸三相位元素截图 → PNG 注回页面 2D canvas → luma 亮度 + 暗部占比报告 + fortress/factory 亮度比值断言行（工具非 CI 门禁；WebGL 无 preserveDrawingBuffer 的截图-回注法沿用 M25 教训）
+
+**H M27b 阴影物理返工**（用户两轮纠偏后定稿：①"人物进入光区瞬间出现阴影/淡出不够平滑"②"不存在什么阴影范围，离得远的阴影效果弱就好了"③"光晕不受遮挡，体积光和阴影组合"）：
+- **影子无独立生命周期**：楔形 alpha = baseAlpha × smoothstep(1 − d(光→遮挡物)/radius)（锥光再乘角衰减）——走近灯影子自动变深、出半径自动溶解，无任何淡入淡出状态机（presence 方案被用户否决）
+- **三成分光效分离**：volume（depth 2.1，影子层下，被楔形凿开 = 体积光与阴影组合）+ bloom（2.30，相机光晕，不受遮挡）+ core（2.31，发射体亮珠，不被自己的影子压暗）——每请求三槽位，LIGHT_POOL 56→72，新增 bloom/core canvas 贴图与池；锥光为纯体积光（留在 2.09 被凿）
+- **软化通道**：楔形画进不可见 Graphics → 每帧合成进 0.5× RenderTexture → RT 以 ×2 双线性放大上屏（缩放低通 ≈ 廉价高斯边）；楔带 3→4 级（α 1.0/0.5/0.22/0.09 @ 1.25/1.45/1.65/1.9×半径）；Canvas 渲染器回退直绘
+- **曲线**：瞬态包络线性 → smoothstep t²(3−2t)（光与影同曲线消亡）；governor 线性 approach → 指数缓动（3/s）
+- 人物脚底假阴影椭圆删除（真实投影是唯一接地阴影）；燃烧桶点燃 0.2s 渐旺（渐变作用在光上，影子经衰减自动跟随——单一因果链）；命中爆闪 radius 46→92 + shadow 0.35（补漏）
+- 效果实测：light-bench 三模式全部顶 170 FPS 测量上限（RT 通道成本不可见）；performance 55.9 FPS（54 node 进程重负载下）；light-check 目检确认探照灯锥边缘平滑溶解、火箭弹核/晕压在场景上、体积光被正确凿开
+
+**I M27b 修复轮**（用户实测发现三个问题）：
+- **RT 坐标系 bug（"右下角固定阴影"根因）**：楔形以世界坐标全尺寸画进 0.5× RT——整层影子被放大 2×、向右下整体偏移，所有影子偏离投射体。修复：绘制时按 SHADOW_RT_SCALE 预缩放坐标（projectOccluderShadow 分流 scaled/direct 两路），世界坐标 1:1 对齐 RT texel
+- **"一切发光都投影"模型**：shadowJobs 不再要求显式 shadow 参数与 r≥90 阈值——任何 glow 请求都投影，强度 = 该光的辉光 alpha（`min(0.9, alpha×2.2)`；显式 shadow 值仍优先生效于探照灯/静态灯等 set piece）。枪口星芒、命中爆闪、弹道光、机关灯全部自然入列；弱光影子经衰减自然不可见（"光弱了离得远了弱了自然就看不到"）
+- **假阴影全删**：箱子的地面椭圆、桶的地面椭圆、factory 地面大椭圆全部移除——全场只承认真实投影一种影子
+- 回归：tsc/build/logic/network/browser/visual 全绿；light-bench FULL 168.8 / ADD 170.0 / OFF 168.8（全栈成本 0）；performance 50.6 FPS（重负载）；muzzle-probe 放大目检枪口光晕对位正确、假阴影零残留
+
+**J M27c 伤害-光效匹配 + 拖尾延长 + 机甲自发光**（用户：最强狙击枪要有最强烈光效；阴影拖尾拉平滑；机甲面罩/武器加弱光效光晕）：
+- **Voltrail 光效之王**：主攻击枪口 radius 70→150、alpha 0.55→0.85、寿命 0.14→0.34s、shadow 1.4（全场最强枪口投影）；双描线 Rail（品红 lance + 白色闪电芯）；满蓄（≥0.8 即执行线）追加第二道慢速白环；弹道光 radius 60→110 / alpha 0.4→0.6 / tier 0 / shadow 0.7；**蓄能预告光**——蓄能期间枪口辉光随 charge 增长（radius 34+100c、alpha 0.12+0.55c、PointLight 0.9c），持枪者的影子随蓄能加深——开枪前全世界都看得见
+- **拖尾延长**：SHADOW_BANDS 4→6 级（α 1.0/0.62/0.38/0.23/0.14/0.08 @ 1.25→2.75×半径），衰减尾拉长且更平滑
+- **机甲自发光**（材质语言，不进光源表）：面罩辉光（bloom 贴在 visor 后，蓄能时随 charge 增亮——"rail 点亮驾驶员的脸"）；胸甲反应堆舷窗（呼吸脉冲，受击闪白）；Rigger 双琥珀镜片自带余晖
+- **武器自发光**：每把枪一枚状态 LED/能量芯（sidearm 弹膛 LED、scatter 弹数灯、rifle 光束芯、sniper 双电容槽、echo 谐振灯、flame 燃料灯、blade 握柄灯），呼吸脉冲
+- **线光源（用户指正：蓄能枪的射线本身是光源，且是线光源）**：新 `flashLine(x0,y0,x1,y1,step,...)`——沿弹道几何布点发光，每点都是带阴影的完整光源，远端衰减 35%（光束扩散感）。三处接入：Voltrail Rail（step 42 / r84 / α0.42 / 0.3s / PointLight 0.5——整条走廊被点亮，穿越者被切成剪影）、Longbeam beam（step 55 / r70 / α0.3，按帧刷新成连续光管）、rifle piercing 副攻击（step 60 / r56 / α0.26）。rail-probe 目检：粉白光带贯穿全屏、沿路平台边缘全部受光
+- **K M27c 修正轮**（用户四条）：
+  - **严格线光**：flashLine 远端衰减 35%→12%（近乎均匀强度），链条改 volume-only（弹道本身是线的视觉核心，不再叠 bloom/core 珠），密度提高（Rail step 30 / r92、beam step 34 / r78 / α0.5、piercing step 40 / r62 / α0.34），Rail 线光 α 随 charge 0.34+0.4c——**激光越亮光强越亮**；瞬态池 24→90（线光链条数量大）
+  - **长影子淡出绝对平滑**：楔带 6→8 级（reach 拉到 3.35×），合成链从单次 0.5× 缩放升级为**三级下采样/上采样乒乓模糊**（A½→B¼→C⅛→B→A，Kawase 式）——色带完全融为连续渐变，SHADOW_CHAIN_GAIN 1.14 补偿模糊削峰；缓冲区极小（500×280→125×70）成本可忽略
+  - **近战闪光灯**：Cutter Blade 挥砍原地爆冷白闪光灯（r150/α0.42/0.22s），突刺 dashSlash 最强档（r200/α0.55/0.3s/shadow 1.3）——canopy 闪电级亮度，周围剪影逆光
+  - **面罩辉光常驻**：改为机甲恒定特征（0.3 呼吸），与充能武器无关（用户明确）
+  - **朝左武器镜像 bug 修复**：fillRect 恒向屏幕右扩展，朝左时枪身画到握把错误侧——新增 `grx(anchor,width)` 镜像辅助，8 把枪全部矩形段改走镜像路径（combined-probe 左向持枪目检确认）
+  - 回归：tsc/build/logic/network/browser/visual/performance 45.9 FPS 全绿；combined-probe 三帧目检（左向武器 / Rail 严格线光贯穿 / 刀突刺闪光灯）
+- **L 线光源投影补全**（用户："线光源还要投射影子"）：线光珠不再各自抢占投影额度（volumeOnly 排除于 caster 列表），改为 **flashLine 注册独立线影作业**——从线段上多个采样原点（≤6 个，间距 ≥180px）分别投影楔形，强度 = 线 alpha×2.2 × smoothstep 包络 × 远端 30% 衰减，与全 glow 投影法则同源。Rail 释放帧目检：光带下方平台的投影清晰、上方平台背光楔形正确；衰减帧余辉平滑
+  - 回归：logic/network/browser/visual/performance 45.5 FPS（26 node 负载）全绿；bench 顶 170 上限
+- 回归：tsc/build/logic/network/browser/visual 全绿；bench 顶 170 上限；performance 47.6→60.5 FPS（外部负载波动区间）；rail-probe 目检满蓄白热弹头+全屏贯穿+线光走廊+面罩辉光
+
+**回归**：tsc + build + logic（新断言：M27 伤害表/冷却冻结/spread 线性/桶参数/Pyre Vent 身份/武器数=8）+ network（slot7→echo、slot8→flame 切枪回归——**排障发现 setConfig 第 399 行残留 `.slice(0, 7)` 硬上限，flame 在 trim 前就被丢弃**）+ browser（armory 8 枪/面板 16 range bars/Pyre Vent 沙盒开火冒烟）+ visual + ai（FFA 三图全解、桶爆 266 次、blade→sidearm 切枪、悬崖守卫——火焰传播上线前后各跑一轮全绿）+ **performance 45.4 FPS/p95 35.3ms（机器 43 node 进程高负载下过线；light-bench FULL 157 FPS/ADD 143.3/关 170——半影+渐变+弹道光全栈成本 ~13-30 FPS，门禁 45 的 3 倍余量）**；light-check fortress/factory 比值 1.79（目标 ≥0.85 达成，fortress 与 canopy 同级亮度）；docs/screenshots 全量重生成
 **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）

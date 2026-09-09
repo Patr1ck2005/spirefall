@@ -42,19 +42,22 @@ export const PLAYER_HIT_RADIUS = 12;
 export const MAX_JUMPS = 3;
 
 // M25 destructible props — explosive barrels. Damage/blast sit inside the M20
-// balance band (under rocket primary 46 / radius 88): a barrel is a hazard you
-// shoot, not a better rocket. Cooldowns and machine cycles untouched.
+// balance band (under rocket primary): a barrel is a hazard you shoot, not a
+// better rocket. M27: barrels became the map's landmine-tier threat — damage
+// and radius scale up with the rocket (the band assertion still holds), while
+// hp stays fixed so the detonation threshold is unchanged. Cooldowns and
+// machine cycles untouched.
 export const PROP_TUNING = {
   /** Barrel hit radius (px) — also the visual cylinder half-width. */
   radius: 12,
   /** Damage points before detonation (one scatter volley or two rifle bursts). */
   hp: 30,
   /** Splash damage radius (px). */
-  blastRadius: 70,
+  blastRadius: 88,
   /** Core splash damage at the centre, tapering outward (same falloff as rockets). */
-  damage: 32,
+  damage: 46,
   /** Knockback at the blast centre. */
-  knockback: 280,
+  knockback: 330,
   /** Respawn window after detonation (seconds), matching the crate cadence. */
   respawnMin: 6,
   respawnMax: 10,
@@ -82,6 +85,11 @@ export type PropState = {
   lastActorId?: string;
   /** Tick when a destroyed barrel respawns (meaningful while `alive` is false). */
   nextSpawnTick: number;
+  /**
+   * M27 Pyre Vent: seconds of burn left before the drum cooks off (absent/0
+   * while dry). The client draws fire + a light from this state alone.
+   */
+  burning?: number;
 };
 
 // M24 hit capsule: the authoritative body shape every attack resolves
@@ -220,7 +228,7 @@ export const segmentHitsProp = (
 };
 
 export type MapId = "canopy" | "fortress" | "factory";
-export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade" | "echo";
+export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "blade" | "echo" | "flame";
 export type AttackKind = "projectile" | "hitscan" | "melee" | "explosive";
 export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash" | "beam" | "bounce";
 export type MatchMode = "match" | "sandbox";
@@ -656,41 +664,52 @@ const atk = (spec: Partial<AttackDef> & Pick<AttackDef, "kind" | "cooldown" | "d
 // 消散（火箭空爆），60%-100% 射程段伤害线性衰减至 0.6。
 // M20 Echo Shard：几何反弹枪 —— 碎片撞平台按法线反射，可绕过掩体与拐角，
 // 奖励对地形/立柱的利用。range 仍是硬上限（含反弹段全部路程）。
+// M27 火力上修：全表伤害 +8%~+25%（击杀节奏收紧到四肢毁伤可感的区间），
+// 火箭爆炸半径 88→96、桶随之上调（band 断言仍成立）。冷却/射程/散布基线不动。
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
   sidearm: {
     id: "sidearm", label: "Vein Ripper", ammo: 90, color: 0xd8b45f,
-    primary: atk({ kind: "hitscan", cooldown: 0.09, damage: 9, knockback: 55, recoil: 8, range: 640, spread: 0.045, pattern: "single" }),
-    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 10, knockback: 95, recoil: 26, range: 700, spread: 0.07, pattern: "burst", count: 6, pierce: 0 }),
+    primary: atk({ kind: "hitscan", cooldown: 0.09, damage: 11, knockback: 55, recoil: 8, range: 640, spread: 0.045, pattern: "single" }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 12, knockback: 95, recoil: 26, range: 700, spread: 0.07, pattern: "burst", count: 6, pierce: 0 }),
   },
   scatter: {
     id: "scatter", label: "Breach Scatter", ammo: 32, color: 0x9fc6d1,
-    primary: atk({ kind: "projectile", cooldown: 0.68, damage: 9, knockback: 95, recoil: 85, speed: 780, spread: 0.26, radius: 4, range: 400, pattern: "pellet", count: 8 }),
-    secondary: atk({ kind: "projectile", cooldown: 0.08, damage: 4, knockback: 30, recoil: 6, speed: 560, spread: 0.34, radius: 3, range: 260, pattern: "pellet", count: 2 }),
+    primary: atk({ kind: "projectile", cooldown: 0.68, damage: 11, knockback: 95, recoil: 85, speed: 780, spread: 0.26, radius: 4, range: 400, pattern: "pellet", count: 8 }),
+    secondary: atk({ kind: "projectile", cooldown: 0.08, damage: 5, knockback: 30, recoil: 6, speed: 560, spread: 0.34, radius: 3, range: 260, pattern: "pellet", count: 2 }),
   },
   rifle: {
     id: "rifle", label: "Longbeam", ammo: 90, color: 0x75c795,
-    primary: atk({ kind: "hitscan", cooldown: 0.12, damage: 6, knockback: 22, recoil: 4, range: 900, pattern: "beam" }),
-    secondary: atk({ kind: "hitscan", cooldown: 0.95, damage: 38, knockback: 320, recoil: 70, range: 950, ammoCost: 3, pattern: "piercing", pierce: 3 }),
+    primary: atk({ kind: "hitscan", cooldown: 0.12, damage: 8, knockback: 22, recoil: 4, range: 900, pattern: "beam" }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.95, damage: 48, knockback: 320, recoil: 70, range: 950, ammoCost: 3, pattern: "piercing", pierce: 3 }),
   },
   sniper: {
     id: "sniper", label: "Voltrail", ammo: 6, color: 0xd797c7,
-    primary: atk({ kind: "hitscan", cooldown: 0.55, damage: 32, knockback: 210, recoil: 60, range: 1400, pattern: "piercing", pierce: 3, chargeMax: 1.1, chargeMin: 0.25 }),
-    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 35, knockback: 260, recoil: 55, range: 1050, pattern: "piercing", pierce: 1 }),
+    primary: atk({ kind: "hitscan", cooldown: 0.55, damage: 40, knockback: 210, recoil: 60, range: 1400, pattern: "piercing", pierce: 3, chargeMax: 1.1, chargeMin: 0.25 }),
+    secondary: atk({ kind: "hitscan", cooldown: 0.85, damage: 44, knockback: 260, recoil: 55, range: 1050, pattern: "piercing", pierce: 1 }),
   },
   rocket: {
     id: "rocket", label: "Forge Rocket", ammo: 5, color: 0xe9793d,
-    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 46, knockback: 300, recoil: 110, speed: 520, radius: 7, range: 900, explosiveRadius: 88 }),
-    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 25, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, range: 640, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
+    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 58, knockback: 300, recoil: 110, speed: 520, radius: 7, range: 900, explosiveRadius: 96 }),
+    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 30, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, range: 640, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
   },
   blade: {
     id: "blade", label: "Cutter Blade", ammo: 999, color: 0xbfcbd0,
-    primary: atk({ kind: "melee", cooldown: 0.32, damage: 38, knockback: 270, recoil: 65, range: 70, pattern: "slash" }),
-    secondary: atk({ kind: "melee", cooldown: 1.0, damage: 60, knockback: 520, recoil: 110, range: 130, pattern: "dashSlash", dashDistance: 92, dashSpeed: 560 }),
+    primary: atk({ kind: "melee", cooldown: 0.32, damage: 46, knockback: 270, recoil: 65, range: 70, pattern: "slash" }),
+    secondary: atk({ kind: "melee", cooldown: 1.0, damage: 74, knockback: 520, recoil: 110, range: 130, pattern: "dashSlash", dashDistance: 92, dashSpeed: 560 }),
   },
   echo: {
     id: "echo", label: "Echo Shard", ammo: 48, color: 0x7fb8ff,
-    primary: atk({ kind: "projectile", cooldown: 0.55, damage: 13, knockback: 70, recoil: 20, speed: 620, radius: 4, range: 900, pattern: "bounce", count: 2, bounces: 3 }),
-    secondary: atk({ kind: "projectile", cooldown: 1.1, damage: 34, knockback: 300, recoil: 55, speed: 560, radius: 5, range: 1100, pattern: "bounce", count: 1, bounces: 5, ammoCost: 2 }),
+    primary: atk({ kind: "projectile", cooldown: 0.55, damage: 16, knockback: 70, recoil: 20, speed: 620, radius: 4, range: 900, pattern: "bounce", count: 2, bounces: 3 }),
+    secondary: atk({ kind: "projectile", cooldown: 1.1, damage: 42, knockback: 300, recoil: 55, speed: 560, radius: 5, range: 1100, pattern: "bounce", count: 1, bounces: 5, ammoCost: 2 }),
+  },
+  // M27 Pyre Vent: a pressure-spray flamethrower. Primary is a cone of short-
+  // range fuel projectiles (a denser, tighter variant of the scatter pellet
+  // geometry) that ignites barrels it touches; secondary is a wide short
+  // burst for point-blank panic buttons. Ammo regen keeps the tank topped up.
+  flame: {
+    id: "flame", label: "Pyre Vent", ammo: 100, color: 0xff7a3c,
+    primary: atk({ kind: "projectile", cooldown: 0.045, damage: 6, knockback: 18, recoil: 3, speed: 430, spread: 0.15, radius: 6, range: 230, pattern: "single" }),
+    secondary: atk({ kind: "projectile", cooldown: 1.6, damage: 9, knockback: 60, recoil: 45, speed: 340, spread: 0.5, radius: 7, range: 170, pattern: "pellet", count: 8, ammoCost: 8 }),
   },
 };
 
@@ -705,7 +724,7 @@ export const DEFAULT_CONFIG: MatchConfig = {
   mapId: "canopy",
   lives: 3,
   crates: true,
-  weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo"],
+  weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo", "flame"],
   bots: 0,
   botSkill: "standard",
 };
@@ -715,14 +734,20 @@ export const LIMB_IDS: LimbId[] = ["leftArm", "rightArm", "leftLeg", "rightLeg"]
 export const freshLimbs = (): LimbIntegrity => ({ leftArm: 100, rightArm: 100, leftLeg: 100, rightLeg: 100 });
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
+// M27 wound model: limb integrity feeds four concrete control penalties. Arm
+// damage slows the trigger, deepens recoil AND widens spread (new — accuracy
+// is now an arm resource); leg damage drags movement and jump. Two destroyed
+// arms = ×1.7 cooldown / ×1.6 recoil / ×1.6 spread, two destroyed legs =
+// ×0.4 move (a crawl) / ×0.5 jump. Server-authoritative: bots suffer identically.
 export const calculateLimbModifiers = (limbs: LimbIntegrity) => {
   const armSeverity = (200 - limbs.leftArm - limbs.rightArm) / 100;
   const legSeverity = (200 - limbs.leftLeg - limbs.rightLeg) / 100;
   return {
-    cooldown: 1 + 0.2 * armSeverity,
-    recoil: 1 + 0.15 * armSeverity,
-    move: 1 - 0.15 * legSeverity,
-    jump: 1 - 0.1 * legSeverity,
+    cooldown: 1 + 0.35 * armSeverity,
+    recoil: 1 + 0.3 * armSeverity,
+    spread: 1 + 0.3 * armSeverity,
+    move: 1 - 0.3 * legSeverity,
+    jump: 1 - 0.25 * legSeverity,
   };
 };
 

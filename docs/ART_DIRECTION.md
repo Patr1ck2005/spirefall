@@ -229,3 +229,77 @@ response; scene art drops the AI-painted plates for a flat graphic style.
   gate survives even where Light2D is too heavy (software rasterizers).
 - **Lobby** - procedural flat-vector portraits (data URLs) replace the
   AI webps; shell palette aligned to the poster palettes.
+
+## M27 stylized shadow language + fire + wound model (2026-09)
+
+Playtest verdict on M26: fortress was too dark, and shadows started/stopped
+abruptly (binary governor tiers, hard wedge tips, no decay on transient
+lights). User direction: gradient falloff everywhere, every strong light
+casts, a flamethrower joins the armory, and the environment becomes more
+interactive.
+
+- **Gradient shadow vocabulary** - a shadow has NO life of its own: its
+  strength is exactly the light hitting the occluder, run through the same
+  smooth attenuation curve the light follows (plus an angular falloff inside
+  cone beams). Walking toward a lamp deepens the shadow smoothly; leaving
+  the radius dissolves it — there is no fade-in/fade-out machinery to pop.
+  Each caster fills a penumbra wedge (light pushed 12px back off the edge,
+  α×0.42) plus four nested umbra bands (α 1.0/0.5/0.22/0.09 out to 1.9× the
+  light radius), and the whole wedge pass composites through a
+  half-resolution RenderTexture that is upscaled 2× with linear filtering —
+  a cheap low-pass that reads as a gaussian edge. Per-map shadow tints
+  (fortress cold violet, factory soot brown, canopy storm blue) keep the
+  cast shadow inside each map's grade.
+- **Three-component light physics (M27b)** - every light splits into volume
+  (the light pouring through the scene — lives BELOW the shadow wedges and
+  is carved by them), bloom (the camera glow — rides ABOVE the shadows,
+  never occluded) and core (the emitter bead — above everything, never
+  darkened by its own cast). Transients die on a smoothstep envelope so
+  light and shadow share one decay curve; the governor levels ease
+  exponentially. No tier transition pops, and a flash's halo is never
+  swallowed by the shadow it throws.
+- **Everything strong casts** - every muzzle flash (strength 0.3-0.9 by
+  weapon weight), explosions (1.4), barrel blasts (1.3), hit blooms (0.35),
+  deaths (0.9), lightning (1.6 — the strongest caster in the game),
+  searchlight cones, hazard lamps, large static lamps (r≥90) and big
+  projectiles (rocket, flame, shard) all throw shadows scaled by the light
+  actually arriving at each occluder. A `shadowOnly` job keeps the wedges
+  alive after a flash's glow dies. Cap: 6 concurrent casters (cones outrank
+  points by strength). Pilots no longer carry a painted contact shadow —
+  the real cast shadow is the only grounded shadow they get.
+- **Fortress brightening** - ambient 0.2→0.31, veil 0.5→0.38, one value
+  step up across sky/structure, and the anchor rig grows from 2 beacons
+  to 6 lamps (two gate-corridor pendants, two bastion sconces — all
+  drawn into the plate art: visible lamp = lit lamp). Searchlight cones
+  widened to 360px and brightened. The light-check tool measures luma:
+  fortress now sits at canopy level instead of near-black.
+- **Pyre Vent (slot 8)** - a cone-spray flamethrower: 0.045s fuel puffs
+  (range 230) that are LIGHTER THAN AIR (−190 buoyancy vs the standard
+  720 sag — the arc licks up over cover), secondary = an 8-puff wide
+  burst. Flame does not chip barrels — it IGNITES them (0.8s fuse, the
+  burning drum is its own flickering light + shadow caster), and barrel
+  detonations now spread FIRE to neighbours (0.45-0.8s fuses) instead of
+  half-damaging them: chain reactions read as an advancing fire line.
+- **Wound model v2** - arm damage now widens the cone too (spread
+  ×(1+0.3·sev), server-authoritative, bots included) alongside deeper
+  cooldown/recoil penalties; leg damage drags movement to a ×0.4 crawl
+  and halves the jump, with the client shortening the run stride to
+  match. Full damage table raised ~10-25% (barrels to 46/88/330, still
+  inside the rocket's envelope); cooldowns and machine cycles untouched.
+- **Hero weapon visuals** - Voltrail charges a converging muzzle focus
+  ring (white-hot core at full charge), Forge Rocket flies a jagged
+  comet tongue, Echo Shard grows a crystal crown with every bounce.
+  The rail — the strongest gun — gets the strongest light in the game
+  (M27c): the biggest muzzle flash, twin tracer strokes around a white
+  lightning core, a charging pilot whose glow deepens before the shot,
+  and the heaviest projectile shadow. Its lance is also a STRICT LINE
+  LIGHT that CASTS — dense, uniform glow points along the true shot
+  geometry light the whole corridor end-to-end, and the line projects
+  real shadow wedges from several sample origins along the beam, so
+  anything under or behind the lance is shaded by the extended source
+  itself (the held Longbeam lance works the same way; brightness tracks
+  the lance's damage class). Blade swings pop a cold flashbulb at the
+  pilot's feet — the dash slash at lightning brightness. Pilots wear
+  emissive gear — a constant visor glow on every mech, a breathing
+  chest reactor porthole, and a status LED on every gun — material
+  language only; nothing enters the lighting rig (M25b holds).

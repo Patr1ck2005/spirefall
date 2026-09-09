@@ -46,6 +46,9 @@ export type PosterPalette = {
   /** Ambient veil tint for the additive-fallback lighting tier. */
   veilColor: number;
   veilAlpha: number;
+  /** M27 stylized shadow pass: per-map tinted shadow fill + base opacity. */
+  shadowColor: number;
+  shadowAlpha: number;
 };
 
 export const POSTER: Record<MapId, PosterPalette> = {
@@ -66,24 +69,33 @@ export const POSTER: Record<MapId, PosterPalette> = {
     ambient: [0.36, 0.42, 0.5],
     veilColor: 0x14263c,
     veilAlpha: 0.36,
+    shadowColor: 0x101c2a,
+    shadowAlpha: 0.26,
   },
   fortress: {
-    sky: 0x14161c,
-    skyTop: 0x191d26,
-    far: 0x1b1f29,
-    mid: 0x232837,
-    near: 0x0e1016,
-    fog: 0x232838,
-    panelBase: 0x2c313d,
-    panelShade: 0x1d212b,
-    panelLit: 0x3d4353,
+    // M27 brightening pass: the graphite void was crushing the mid-band to
+    // near-black. One value step up across sky/structure (the two-tone poster
+    // split survives), ambient raised 0.2→0.31, veil 0.5→0.38, plus four new
+    // static lamps in the combat band (sceneplate PLATE_ANCHORS).
+    sky: 0x1b1e28,
+    skyTop: 0x21252f,
+    far: 0x232838,
+    mid: 0x2c3142,
+    near: 0x12151c,
+    fog: 0x2b3046,
+    panelBase: 0x363c4c,
+    panelShade: 0x242936,
+    panelLit: 0x4a5164,
     cap: 0xd8dee9,
     capCore: 0xffffff,
     accent: 0xe0455a,
     glowWarm: 0xff9a6a,
-    ambient: [0.2, 0.21, 0.26],
+    ambient: [0.3, 0.31, 0.37],
     veilColor: 0x0a0d18,
-    veilAlpha: 0.5,
+    veilAlpha: 0.38,
+    // Cold violet-tinted shadows — the fortress signature hue.
+    shadowColor: 0x1a2036,
+    shadowAlpha: 0.3,
   },
   factory: {
     sky: 0x1a1512,
@@ -102,5 +114,8 @@ export const POSTER: Record<MapId, PosterPalette> = {
     ambient: [0.3, 0.24, 0.18],
     veilColor: 0x1d130a,
     veilAlpha: 0.46,
+    // Warm soot-brown shadows near the furnace band.
+    shadowColor: 0x2a1c10,
+    shadowAlpha: 0.3,
   },
 };

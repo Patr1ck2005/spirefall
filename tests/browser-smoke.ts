@@ -161,23 +161,26 @@ await solo.locator("#weapon-panel:not(.hidden)").waitFor({ timeout: 3000 });
 const panelText = await solo.locator("#weapon-panel").textContent();
 if (!panelText?.includes("Vein Ripper")) throw new Error("Weapon panel did not list the held weapon");
 // M19: every weapon row carries PRI/SEC range bars driven by --range vars.
-// M20: seven weapons now 鈥?Echo Shard joins the panel with its own bars.
+// M27: eight weapons now — the Pyre Vent joins the panel with its own bars.
 if (!panelText?.includes("Echo Shard")) throw new Error("Weapon panel did not list the Echo Shard (slot 7)");
+if (!panelText?.includes("Pyre Vent")) throw new Error("Weapon panel did not list the Pyre Vent (slot 8)");
 const rangeBars = await solo.locator("#weapon-panel .range-bar").count();
-if (rangeBars < 14) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 14 for 7 weapons 脳 PRI/SEC)`);
+if (rangeBars < 16) throw new Error(`Weapon panel is missing range bars (found ${rangeBars}, need >= 16 for 8 weapons × PRI/SEC)`);
 const firstRange = await solo.locator("#weapon-panel .range-bar em").first().getAttribute("style");
 if (!firstRange?.includes("--range")) throw new Error("Range bar lacks its --range width variable");
 await solo.keyboard.up("Tab");
 await solo.locator("#weapon-panel.hidden").waitFor({ state: "attached", timeout: 3000 });
 
 // M20 combat feedback HUD: the kill feed container and vignette overlay ship
-// with the game HUD; the lobby armory exposes all seven weapons.
+// with the game HUD; the lobby armory exposes all eight weapons (M27 added
+// the Pyre Vent as slot 8).
 if ((await solo.locator("#kill-feed").count()) !== 1) throw new Error("Kill feed HUD container is missing");
 if ((await solo.locator("#vignette").count()) !== 1) throw new Error("Low-health vignette overlay is missing");
 const armoryOptions = await solo.locator("#weapon-options .weapon-option").count();
-if (armoryOptions !== 7) throw new Error(`Lobby armory does not list all seven weapons (found ${armoryOptions})`);
-// Slot 7 selects the Echo Shard in the sandbox (HUD confirms the switch).
-await selectWeapon(solo, "7", "Echo Shard");
+if (armoryOptions !== 8) throw new Error(`Lobby armory does not list all eight weapons (found ${armoryOptions})`);
+// Slot 8 selects the Pyre Vent in the sandbox (HUD confirms the switch) and
+// held fire must produce flame attack events without errors.
+await selectWeapon(solo, "8", "Pyre Vent");
 await solo.keyboard.down("j");
 await solo.waitForTimeout(700);
 await solo.keyboard.up("j");

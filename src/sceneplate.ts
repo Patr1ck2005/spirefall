@@ -49,8 +49,16 @@ export const PLATE_ANCHORS: Record<MapId, PlateAnchor[]> = {
     { x: 214, y: 302, color: 0xe7c884, radius: 70, intensity: 0.55 },
   ],
   fortress: [
+    // Top-truss alarm beacons (the M26 pair).
     { x: 165, y: 64, color: 0xe0455a, radius: 110, intensity: 0.7 },
     { x: 835, y: 64, color: 0xe0455a, radius: 110, intensity: 0.7 },
+    // M27: gate-corridor pendant lamps hanging off the top truss — the mid
+    // duel lane finally gets standing light instead of only sweeping beams.
+    { x: 450, y: 156, color: 0xffd9a8, radius: 125, intensity: 0.62 },
+    { x: 550, y: 156, color: 0xffd9a8, radius: 125, intensity: 0.62 },
+    // M27: bastion-wall sconces flanking the mid lane entrances.
+    { x: 352, y: 296, color: 0xe0455a, radius: 95, intensity: 0.5 },
+    { x: 648, y: 296, color: 0xe0455a, radius: 95, intensity: 0.5 },
   ],
   factory: [
     { x: 500, y: 600, color: 0xff9a4a, radius: 260, intensity: 0.9 },
@@ -299,6 +307,11 @@ function drawFortressBackdrop(ctx: Ctx2D, hctx: Ctx2D, p: PosterPalette) {
     softRect(ctx, bx - 3, 61, 6, 6, p.accent, 0.95);
     softRect(ctx, bx - 1, 70, 2, 30, p.near, 0.4);
     heightOnly(hctx, bx - 1, 70, 2, 30, 190);
+    // M27 bastion sconce facing the mid lane (PointLight at the same spot).
+    const sx = wallX === 0 ? 352 : 648;
+    dualRect(ctx, hctx, sx - 7, 290, 14, 4, p.panelShade, 190);
+    dualRect(ctx, hctx, sx - 3, 286, 6, 14, p.panelShade, 196);
+    softRect(ctx, sx - 2.5, 294, 5, 5, p.accent, 0.95);
   }
 
   // Center gate corridor: a deep void with three nested gate rims.
@@ -320,6 +333,16 @@ function drawFortressBackdrop(ctx: Ctx2D, hctx: Ctx2D, p: PosterPalette) {
   dualRect(ctx, hctx, 0, 516, 1000, 44, p.near, 90);
   for (let y = 522; y < 556; y += 22) {
     softRect(ctx, 0, y, 1000, 2, p.panelShade, 0.45);
+  }
+
+  // M27 gate-corridor pendant lamps (PointLights at the same spots): a rod
+  // drops from the top truss, a wide flat shade caps a hot warm-white core.
+  for (const px of [450, 550]) {
+    dualRect(ctx, hctx, px - 1.5, 72, 3, 74, p.near, 185);
+    dualPoly(ctx, hctx, [[px - 14, 142], [px + 14, 142], [px + 9, 158], [px - 9, 158]], p.mid, 200);
+    dualRect(ctx, hctx, px - 9, 158, 18, 3, p.panelLit, 215);
+    softRect(ctx, px - 4, 158, 8, 4, 0xffd9a8, 0.98);
+    softRect(ctx, px - 7, 157, 14, 2, 0xffd9a8, 0.4);
   }
 }
 

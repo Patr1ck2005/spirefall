@@ -5,6 +5,7 @@ import {
   MAPS,
   MOVE_TUNING,
   PLAYER_TARGET_OFFSET,
+  PROP_TUNING,
   WEAPONS,
   WORLD,
   clamp,
@@ -363,8 +364,9 @@ function showGame() {
       height: Math.round(WORLD.height * RENDER_SCALE),
       backgroundColor: "#080b0d",
       // M26: the poster light pipeline compiles its uniform array from
-      // maxLights — must match POINT_POOL in lighting.ts.
-      render: { antialias: true, pixelArt: false, maxLights: 16 },
+      // maxLights — must match POINT_POOL in lighting.ts. M27: 20 so rocket
+      // / flame / shard trails get their own point lights.
+      render: { antialias: true, pixelArt: false, maxLights: 20 },
       scene: [ArenaScene],
       scale: { mode: Phaser.Scale.NONE },
     });
@@ -498,8 +500,8 @@ window.addEventListener("keydown", unlockAudio);
 
 // Physical-key → weapon slot map for Digit row and numpad (IME-proof).
 const WeaponSlotCodes: Record<string, number> = {
-  Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5, Digit6: 6, Digit7: 7,
-  Numpad1: 1, Numpad2: 2, Numpad3: 3, Numpad4: 4, Numpad5: 5, Numpad6: 6, Numpad7: 7,
+  Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5, Digit6: 6, Digit7: 7, Digit8: 8,
+  Numpad1: 1, Numpad2: 2, Numpad3: 3, Numpad4: 4, Numpad5: 5, Numpad6: 6, Numpad7: 7, Numpad8: 8,
 };
 
 class ArenaScene extends Phaser.Scene {
@@ -564,6 +566,7 @@ class ArenaScene extends Phaser.Scene {
   private plates?: Record<MapId, PlateSet>;
   private lighting?: LightingSystem;
   private lightingMap: MapId | "" = "";
+  private lightingHook?: { poster: boolean; fallback: boolean; levels: { shadow: number; lights2d: number } };
   private decalLayer?: Phaser.GameObjects.RenderTexture;
   private atmosphere: Array<{ x: number; y: number; vx: number; vy: number; kind: "rain" | "dust" | "ember" }> = [];
   private atmosphereMap: MapId | "" = "";
@@ -593,7 +596,7 @@ class ArenaScene extends Phaser.Scene {
     // Key matching uses event.code (physical Digit keys) so IME/shifted
     // layouts (fullwidth "１"、punctuation) cannot silently swallow presses.
     this.input.keyboard!.on("keydown", (event: KeyboardEvent) => {
-      const slot = WeaponSlotCodes[event.code] ?? (event.key >= "1" && event.key <= "7" ? Number(event.key) : 0);
+      const slot = WeaponSlotCodes[event.code] ?? (event.key >= "1" && event.key <= "8" ? Number(event.key) : 0);
       if (slot) this.queueWeaponSlot(slot);
     });
     this.input.on("wheel", (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
@@ -627,8 +630,10 @@ class ArenaScene extends Phaser.Scene {
     this.lighting.onStrike = () => sfx.play("thunder", { strength: 0.8 });
     if (this.lightingMap) this.lighting.setMap(this.lightingMap);
     // Test hook: browser-smoke asserts the engine light pass is installed
-    // (WebGL only — the Canvas renderer never gets it).
-    (window as unknown as { __spireLight?: { poster: boolean; fallback: boolean } }).__spireLight = { poster: !!pipeline, fallback: forceFallback };
+    // (WebGL only — the Canvas renderer never gets it). M27: the governor's
+    // eased levels ride along so tooling can verify smooth transitions.
+    this.lightingHook = { poster: !!pipeline, fallback: forceFallback, levels: { shadow: 1, lights2d: 1 } };
+    (window as unknown as { __spireLight?: { poster: boolean; fallback: boolean; levels?: { shadow: number; lights2d: number } } }).__spireLight = this.lightingHook;
   }
 
   /** Queue a weapon-slot request until a snapshot confirms the switch. */
@@ -906,15 +911,25 @@ class ArenaScene extends Phaser.Scene {
         } else if (event.weaponId === "sniper" && !event.secondary) {
           // Charged rail: length matches the true 1400×(1+0.25c) reach, capped
           // by cover; full release adds a shock ring and boom.
+          // M27c: the strongest gun gets the strongest light — the rail is
+          // the flashiest shot in the game (double lightning-stroke tracer,
+          // white-hot core, execution rings) and its shadow strength tops
+          // the table below.
           const chargedRange = weaponDef.primary.range * (1 + charge * 0.25);
           const railLength = Math.min(chargedRange, raycastSolids(MAPS[this.snapshot!.config.mapId].platforms, event.x, event.y, event.x + facing * chargedRange, event.y) ?? chargedRange);
           const width = 2.5 + charge * 7;
-          this.tracers.push({ x1: muzzleX, y1: event.y, x2: event.x + facing * railLength, y2: event.y, life: 0.2 + charge * 0.22, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
+          const full = charge >= 0.8;
+          // Twin tracer strokes: a jittered magenta lance plus a thin white
+          // lightning core offset above it — reads as a rail, not a laser.
+          this.tracers.push({ x1: muzzleX, y1: event.y, x2: event.x + facing * railLength, y2: event.y, life: 0.2 + charge * 0.24, color, width, core: 1.2 + charge * 1.8, jitter: charge * 2.2 });
+          this.tracers.push({ x1: muzzleX, y1: event.y - 3, x2: event.x + facing * railLength, y2: event.y - 3, life: 0.14 + charge * 0.14, color: 0xffe6f2, width: Math.max(1.2, width * 0.28), core: full ? 2 : 1, thin: true });
           this.spawnBurst(muzzleX, event.y, color, 6 + Math.round(charge * 16), "flash", facing);
-          if (charge >= 0.95) {
+          if (full) {
             this.rings.push({ x: event.x, y: event.y, life: 0.5, maxLife: 0.5, radius: 12, color, width: 5, grow: 120, double: true });
             this.spawnBurst(event.x, event.y, 0xffe6f2, 26, "spark", facing);
             this.spawnBurst(event.x, event.y, 0xffe6f2, 8, "flash", 0);
+            // Execution rail: a second slower shock ring chases the first.
+            this.rings.push({ x: event.x, y: event.y, life: 0.65, maxLife: 0.65, radius: 22, color: 0xffe6f2, width: 2.5, grow: 190 });
             sfx.railBoom();
             this.shake(1.5, true);
           }
@@ -932,6 +947,12 @@ class ArenaScene extends Phaser.Scene {
           if (event.pattern === "slash" || event.pattern === "dashSlash") this.spawnBurst(muzzleX + facing * 24, event.y - 8, color, 14, "energy", facing);
           // M24: rocket launches vent backblast smoke behind the tube.
           if (event.weaponId === "rocket") this.spawnBurst(event.x - facing * 18, event.y + 2, 0x8b9396, 5, "smoke", -facing as 1 | -1 | 0);
+          // M27 Pyre Vent: a vent hiss + flame lick at the nozzle instead of
+          // a gun flash; the projectile puffs carry the fire language.
+          if (event.weaponId === "flame") {
+            this.spawnBurst(muzzleX + facing * 6, event.y, 0xff7a3c, event.secondary ? 12 : 4, "energy", facing);
+            this.spawnBurst(muzzleX - facing * 4, event.y + 2, 0x5c5148, 2, "smoke", -facing as 1 | -1 | 0);
+          }
           // M24: the sidearm ejects brass with gravity on every shot.
           if (event.weaponId === "sidearm" && !event.secondary) this.spawnBurst(event.x - facing * 2, event.y - 4, 0xe8c56a, 2, "spark", -facing as 1 | -1 | 0, 640);
           // Heavy single shots (scatter pellet volleys, rocket launches) get a muzzle ring.
@@ -940,10 +961,46 @@ class ArenaScene extends Phaser.Scene {
         }
         // M25/M26: every muzzle is a light source — beams/rails glow down the
         // line, and heavy rounds spill real light onto the walls behind.
-        const muzzleRadius = event.pattern === "beam" ? 120 : event.weaponId === "rocket" ? 110 : event.weaponId === "scatter" ? 95 : 70;
-        const muzzleLife = event.pattern === "beam" ? 0.12 : 0.14;
-        const muzzlePoint = event.pattern === "beam" || event.weaponId === "rocket" || event.weaponId === "sniper" ? 0.9 : 0;
-        this.lighting?.flash(muzzleX, event.y, muzzleRadius, color, 0.55, muzzleLife, undefined, muzzlePoint);
+        // M27c: light weight matches damage weight — the Voltrail rail (the
+        // strongest gun) gets the biggest, longest, brightest flash and the
+        // strongest muzzle shadow in the game.
+        const muzzleRadius = event.weaponId === "sniper" && !event.secondary ? 150
+          : event.pattern === "beam" ? 120 : event.weaponId === "rocket" ? 110 : event.weaponId === "scatter" ? 95 : event.weaponId === "flame" ? 90 : 70;
+        const muzzleLife = event.weaponId === "sniper" && !event.secondary ? 0.34 : event.pattern === "beam" ? 0.12 : event.weaponId === "flame" ? 0.2 : 0.14;
+        const muzzlePoint = event.pattern === "beam" || event.weaponId === "rocket" || event.weaponId === "sniper" || event.weaponId === "flame" ? 0.9 : 0;
+        const muzzleAlpha = event.weaponId === "sniper" && !event.secondary ? 0.85 : 0.55;
+        const muzzleShadow = event.weaponId === "sniper" && !event.secondary ? 1.4
+          : event.weaponId === "rocket" ? 0.9
+          : event.pattern === "beam" ? 0.8
+          : event.weaponId === "sniper" ? 0.8
+          : event.weaponId === "scatter" ? 0.55
+          : event.weaponId === "rifle" || event.weaponId === "blade" ? 0.5
+          : event.weaponId === "flame" ? 0.45
+          : 0.3;
+        this.lighting?.flash(muzzleX, event.y, muzzleRadius, color, muzzleAlpha, muzzleLife, undefined, muzzlePoint, muzzleShadow);
+        // M27c: the lance itself is a LINE LIGHT — STRICT: dense, uniform
+        // intensity along the whole shot geometry (each point a real
+        // shadow-casting volume light), brightness scaled by the lance's
+        // brightness class (the rail out-shines everything).
+        if (event.pattern === "beam") {
+          const lanceRange = trueRange("primary");
+          this.lighting?.flashLine(event.x, event.y, event.x + facing * lanceRange, event.y, 34, 78, color, 0.5, 0.16);
+        } else if (event.weaponId === "sniper" && !event.secondary) {
+          const chargedRange = weaponDef.primary.range * (1 + charge * 0.25);
+          const railEnd = Math.min(chargedRange, raycastSolids(MAPS[this.snapshot!.config.mapId].platforms, event.x, event.y, event.x + facing * chargedRange, event.y) ?? chargedRange);
+          this.lighting?.flashLine(muzzleX, event.y, event.x + facing * railEnd, event.y, 30, 92, color, 0.34 + charge * 0.4, 0.32, 0.55);
+        } else if (event.pattern === "piercing") {
+          const lanceRange = trueRange("secondary");
+          this.lighting?.flashLine(event.x, event.y, event.x + facing * lanceRange, event.y, 40, 62, color, 0.34, 0.18);
+        }
+        // M27c melee flashbulb: a blade swing pops a cold-white flashbulb at
+        // the pilot's position — the dash slash (突刺) fires the strongest
+        // one, at the canopy-lightning brightness class. Everything nearby
+        // silhouettes against it for a beat.
+        if (event.weaponId === "blade") {
+          const dash = event.pattern === "dashSlash";
+          this.lighting?.flash(event.x, event.y - 12, dash ? 200 : 150, 0xcfe4ff, dash ? 0.55 : 0.42, dash ? 0.3 : 0.22, undefined, 0.8, dash ? 1.3 : 0.9);
+        }
       } else if (event.type === "crateSpawn") {
         sfx.play("crateSpawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y - 16, color, 18, "energy", 0);
@@ -960,7 +1017,7 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y - 12, 0xf0a14a, 18, "spark", 0);
         this.spawnBurst(event.x, event.y - 12, 0x343b3b, 20, "smoke", 0);
         this.rings.push({ x: event.x, y: event.y - 12, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 95, double: true });
-        this.lighting?.flash(event.x, event.y - 12, 170, 0xffc27a, 0.7, 0.34, 100, 1.4);
+        this.lighting?.flash(event.x, event.y - 12, 170, 0xffc27a, 0.7, 0.34, 100, 1.4, 1.3);
         this.stampScorch(event.x, event.y);
         this.punchHitstop(event.strength);
         this.shake(event.strength, true);
@@ -1028,8 +1085,9 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y, 0xfff3d0, Math.round(3 + event.strength * 5), "flash", 0);
         if (event.strength >= 0.45) this.rings.push({ x: event.x, y: event.y, life: 0.26, maxLife: 0.26, radius: 5, color: 0xffd9a0, width: 2.5, grow: 40 + event.strength * 40 });
         if (event.strength >= 0.6) this.punchHitstop(event.strength);
-        // M25: hits bloom briefly at the impact point.
-        this.lighting?.flash(event.x, event.y, 46, 0xfff3d0, 0.3, 0.12);
+        // M25: hits bloom briefly at the impact point. M27b: bumped past the
+        // shadow radius so hard hits throw a brief cast shadow too.
+        this.lighting?.flash(event.x, event.y, 92, 0xfff3d0, 0.3, 0.14, undefined, undefined, 0.35);
         this.shake(event.strength, target?.id === selfId);
         // M20: when I am the victim, remember the attacker's bearing so a red
         // arc can pulse around my pilot pointing back at the shooter.
@@ -1047,7 +1105,9 @@ class ArenaScene extends Phaser.Scene {
         this.spawnBurst(event.x, event.y, 0x343b3b, 18, "smoke", 0);
         this.rings.push({ x: event.x, y: event.y, life: 0.45, maxLife: 0.45, radius: 14, color: 0xf0894a, width: 5, grow: 90, double: true });
         // M25/M26: explosions blast the darkness open and splash the walls.
-        this.lighting?.flash(event.x, event.y, 150, 0xffd9a0, 0.65, 0.3, 90, 1.5);
+        // M27: the blast casts a strong decaying shadow ring from every
+        // nearby occluder.
+        this.lighting?.flash(event.x, event.y, 150, 0xffd9a0, 0.65, 0.3, 90, 1.5, 1.4);
         this.punchHitstop(event.strength);
         this.shake(event.strength, true);
       } else if (event.type === "dismember") {
@@ -1071,7 +1131,7 @@ class ArenaScene extends Phaser.Scene {
         // Kill pillar: a vertical light shaft marks the elimination spot.
         this.tracers.push({ x1: event.x, y1: Math.max(0, event.y - 210), x2: event.x, y2: event.y + 26, life: 0.4, color: target?.color || 0xf0a14a, width: 7, core: 2.6 });
         // M25/M26: the death light shaft also lights the area.
-        this.lighting?.flash(event.x, event.y - 60, 190, target?.color || 0xf0a14a, 0.5, 0.42, undefined, 1.1);
+        this.lighting?.flash(event.x, event.y - 60, 190, target?.color || 0xf0a14a, 0.5, 0.42, undefined, 1.1, 0.9);
         this.punchHitstop(1.2);
         this.shake(1.4, true);
         // M20 kill feed: every client sees the attribution row; the killer's
@@ -1293,6 +1353,8 @@ class ArenaScene extends Phaser.Scene {
    * M25: collect this frame's light emitters and resolve the light pass.
    * Priority order under pool pressure: explosions > muzzle/beam > projectiles
    * > hazard lamps > pulses. Pilots carry no personal lights (M25b).
+   * M27: big rounds also cast stylized shadows (shadow strength on the glow
+   * request) and the governor's eased levels ship to the test hook.
    */
   private drawLighting(snapshot: ServerSnapshot, time: number) {
     const lighting = this.lighting;
@@ -1303,20 +1365,46 @@ class ArenaScene extends Phaser.Scene {
     // pilot). Characters stay lit by the environment: muzzle flashes,
     // explosions, static rigs and lightning do all the lighting.
     // Projectile glows (skip the cheap tiny pellets under load). Big rounds
-    // also pour real Light2D light onto the normal-mapped plates.
+    // also pour real Light2D light onto the normal-mapped plates and cast
+    // moving shadows across them.
     for (const projectile of snapshot.projectiles) {
       const color = WEAPONS[projectile.weaponId].color;
       if (projectile.weaponId === "rocket") {
-        lighting.add({ x: projectile.x, y: projectile.y, radius: 70, tint: 0xf0a24a, alpha: 0.5, tier: 0 });
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 90, tint: 0xf0a24a, alpha: 0.5, tier: 0, shadow: 0.8 });
         lighting.addPoint(projectile.x, projectile.y, 90, 0xf0a24a, 0.7, 0);
+      } else if (projectile.weaponId === "flame") {
+        // M27 Pyre Vent: every flame puff is a small torch — a rising pool of
+        // light that strobes the walls it licks past.
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 62, tint: 0xff7a3c, alpha: 0.42, tier: 0, shadow: 0.4 });
+        lighting.addPoint(projectile.x, projectile.y, 76, 0xff8a4a, 0.5, 0);
       } else if (projectile.weaponId === "scatter" && projectile.secondary) {
         lighting.add({ x: projectile.x, y: projectile.y, radius: 56, tint: 0xf06b2f, alpha: 0.45, tier: 1 });
         lighting.addPoint(projectile.x, projectile.y, 70, 0xf06b2f, 0.55, 1);
       } else if (projectile.pattern === "bounce") {
-        lighting.add({ x: projectile.x, y: projectile.y, radius: 40, tint: color, alpha: 0.4, tier: 1 });
+        // Echo Shard: the crystal carries its own light and strobes the
+        // silhouettes it passes.
+        lighting.add({ x: projectile.x, y: projectile.y, radius: 90, tint: color, alpha: 0.38, tier: 1, shadow: 0.6 });
+        lighting.addPoint(projectile.x, projectile.y, 70, color, 0.45, 1);
+      } else if (projectile.pattern === "piercing") {
+        // Rails streak: a bright line light that drags its own shadow down
+        // the corridor. The Voltrail rail (strongest gun) gets the strongest
+        // projectile light — bigger radius, hotter alpha, heavier shadow.
+        const railHeavy = projectile.weaponId === "sniper";
+        lighting.add({ x: projectile.x, y: projectile.y, radius: railHeavy ? 110 : 60, tint: color, alpha: railHeavy ? 0.6 : 0.4, tier: railHeavy ? 0 : 1, shadow: railHeavy ? 0.7 : 0.3 });
       } else {
         lighting.add({ x: projectile.x, y: projectile.y, radius: 26, tint: color, alpha: 0.28, tier: 2 });
       }
+    }
+    // M27c: a charging Voltrail lights up BEFORE it fires — the glow grows
+    // with the charge so every pilot (and bot) sees the shot coming, and the
+    // pre-fire shadow of the holder deepens as the rail saturates.
+    for (const player of snapshot.players) {
+      const charge = player.charge ?? 0;
+      if (charge < 0.04 || player.respawnTimer > 0) continue;
+      const chargeX = player.x + player.facing * 17;
+      const chargeY = player.y - 22;
+      lighting.add({ x: chargeX, y: chargeY, radius: 34 + charge * 100, tint: 0xd797c7, alpha: 0.12 + charge * 0.55, tier: 0 });
+      lighting.addPoint(chargeX, chargeY, 40 + charge * 110, 0xd797c7, charge * 0.9, 0);
     }
     // Live crates pulse; hazards announce themselves in light.
     for (const crate of snapshot.crates) {
@@ -1325,19 +1413,33 @@ class ArenaScene extends Phaser.Scene {
       lighting.add({ x: crate.x, y: crate.y, radius: 40, tint, alpha: 0.3 + Math.sin(time * 0.006) * 0.08, tier: 2 });
     }
     for (const hazard of snapshot.hazards) {
-      if (hazard.phase === "warning") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 90, tint: 0xe0a43c, alpha: 0.3, tier: 1 });
-      else if (hazard.phase === "active") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 110, tint: 0xd84b44, alpha: 0.4, tier: 0 });
+      if (hazard.phase === "warning") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 90, tint: 0xe0a43c, alpha: 0.3, tier: 1, shadow: 0.3 });
+      else if (hazard.phase === "active") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 110, tint: 0xd84b44, alpha: 0.4, tier: 0, shadow: 0.5 });
     }
-    // Occluders: platforms + solids + movers + live barrels + pilots.
+    // Occluders: platforms + solids + movers + live barrels + pilots. All
+    // boxes share the shadow physics (attenuation-driven alpha) — no per-box
+    // state is needed.
     const occluders: OccluderRect[] = MAPS[snapshot.config.mapId].platforms.map((platform) => ({ x: platform.x, y: platform.y, width: platform.width, height: platform.height }));
     for (const mover of snapshot.movers) occluders.push({ x: mover.x, y: mover.y, width: mover.width, height: mover.height });
     for (const prop of snapshot.props) {
       if (!prop.alive) continue;
       occluders.push({ x: prop.x - 9, y: prop.y - 24, width: 18, height: 24 });
+      // M27 Pyre Vent: a lit drum is a beacon — flickering fire glow, a real
+      // PointLight on the walls behind it, and a shadow caster so anyone
+      // standing near the burning barrel throws a dancing silhouette. The
+      // light ramps in over the first 0.2s of the burn (light grows, its
+      // shadow grows with it — one causal chain).
+      if (prop.burning !== undefined && prop.burning > 0) {
+        const ramp = Math.min(1, (0.8 - prop.burning) / 0.2);
+        const flickerGlow = (0.5 + Math.sin(time * 0.045 + prop.x) * 0.14 + Math.sin(time * 0.013 + prop.y) * 0.1) * ramp;
+        lighting.add({ x: prop.x, y: prop.y - 14, radius: 70, tint: 0xff8a4a, alpha: flickerGlow, tier: 0, shadow: 0.5 * ramp });
+        lighting.addPoint(prop.x, prop.y - 14, 95, 0xff8a4a, 0.75 * ramp, 0);
+        continue;
+      }
       // Damaged barrels light themselves: leaking fire becomes a beacon
       // (additive glow for the flame + a real PointLight so the drum and the
       // wall behind it catch the firelight).
-      const fraction = prop.hp / 30;
+      const fraction = prop.hp / PROP_TUNING.hp;
       if (fraction < 0.6) {
         const intensity = (0.6 - fraction) / 0.6;
         const radius = 34 + intensity * 26;
@@ -1350,6 +1452,7 @@ class ArenaScene extends Phaser.Scene {
       occluders.push({ x: player.x - 8, y: player.y - 32, width: 16, height: 32 });
     }
     lighting.finish(occluders);
+    if (this.lightingHook) this.lightingHook.levels = { shadow: lighting.shadowLevel, lights2d: lighting.light2DLevel };
   }
 
   // M19: gore decals live in `decals` (single source of truth) and are painted
@@ -1698,11 +1801,13 @@ class ArenaScene extends Phaser.Scene {
     if (player.respawnTimer > 0) return;
     // M24: swing/heat state rides along to the art layer. M26: the sampled
     // key light drives rim + armor response — the pilot reacts to the room.
+    // M27: the charge fraction rides along too (Voltrail muzzle focus ring).
     const swing = this.swingStateOf(player.id);
     drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId, {
       squash,
       swing,
       dashSlash: swing?.secondary && swing.progress < 0.8,
+      charge: player.charge,
     }, this.lighting?.sampleLight(position.x, position.y - 30));
     // M24: overhead integrity bar — total limb pool, color shifts to amber/red
     // as limbs grind down. Hidden at full health to keep the scene clean.
@@ -1748,9 +1853,8 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillRect(0, 0, 12, 560);
       this.graphics.fillRect(988, 0, 12, 560);
     } else {
-      this.graphics.fillStyle(0x050806, 0.28);
-      this.graphics.fillEllipse(500 + Math.sin(time * 0.0008) * 80, 570, 780, 70);
-      // M25: steam vents along the assembly gut — periodic cosmetic jets.
+      // M27b: the ground shadow ellipse is gone — every shadow in the game
+      // comes from the real cast-shadow rig now. Only cosmetic steam remains.
       for (const [ventX, phase] of [[120, 0], [470, 2.1], [880, 4.2]] as const) {
         const cycle = ((time * 0.001 + phase) % 6) / 6;
         if (cycle > 0.72) {

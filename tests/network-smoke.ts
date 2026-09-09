@@ -299,8 +299,9 @@ const echoCreated = await waitFor(echoRoom, "room");
 echoRoom.send(JSON.stringify({ type: "config", patch: { mapId: "fortress", lives: 1, crates: false, weaponSet: ["echo"] } }));
 const echoLobby = await waitFor(echoRoom, "room");
 assert(JSON.stringify(echoLobby.room.config.weaponSet) === JSON.stringify(["sidearm", "echo"]), `Partial weapon set was not normalized to [sidearm, echo] (got ${JSON.stringify(echoLobby.room.config.weaponSet)})`);
-// Restore the full armory so slot 7 maps to Echo Shard for the slot checks.
-echoRoom.send(JSON.stringify({ type: "config", patch: { weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo"] } }));
+// Restore the full armory so slot 7 maps to Echo Shard and slot 8 to the
+// Pyre Vent for the slot checks.
+echoRoom.send(JSON.stringify({ type: "config", patch: { weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo", "flame"] } }));
 await waitFor(echoRoom, "room");
 echoRoom.send(JSON.stringify({ type: "start_sandbox" }));
 await waitFor(echoRoom, "snapshot");
@@ -312,14 +313,17 @@ for (let i = 0; i < 10 && !echoSelected; i++) {
   echoSelected = message.snapshot.players.find((p: any) => p.id === echoCreated.selfId)?.weapon === "echo";
 }
 assert(echoSelected, "weaponSlot 7 did not select the Echo Shard (clamp still capped at 6?)");
-// weaponSlot 8 clamps to 7 — the weapon stays Echo Shard, never a crash.
+// weaponSlot 8 must now select the Pyre Vent (M27 raised the clamp to 8).
 echoRoom.send(JSON.stringify({ type: "input", input: { seq: 11, weaponSlot: 8 } }));
-let echoStillHeld = false;
-for (let i = 0; i < 6 && !echoStillHeld; i++) {
+let flameSelected = false;
+for (let i = 0; i < 6 && !flameSelected; i++) {
   const message = await waitFor(echoRoom, "snapshot", 5000);
-  echoStillHeld = message.snapshot.players.find((p: any) => p.id === echoCreated.selfId)?.weapon === "echo";
+  flameSelected = message.snapshot.players.find((p: any) => p.id === echoCreated.selfId)?.weapon === "flame";
 }
-assert(echoStillHeld, "weaponSlot 8 did not clamp to slot 7");
+assert(flameSelected, "weaponSlot 8 did not select the Pyre Vent (clamp still capped at 7?)");
+// Switch back to the Echo Shard — the next check fires ITS projectile.
+echoRoom.send(JSON.stringify({ type: "input", input: { seq: 11, weaponSlot: 7 } }));
+await waitFor(echoRoom, "snapshot");
 // Fire and watch an echo projectile survive a surface impact.
 let bounceBudgetSpent = false;
 let bounceImpactSeen = false;

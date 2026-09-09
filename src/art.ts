@@ -37,6 +37,7 @@ export const MUZZLE_OFFSET: Record<WeaponId, number> = {
   rocket: 32,
   blade: 12,
   echo: 20,
+  flame: 24,
 };
 
 /** Per-weapon transient draw state fed from the scene's animation maps. */
@@ -137,8 +138,8 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
   const tint = kind === "repair" ? 0x4fd07a : weapon.color;
   // M26 light response: the box face warms toward the key light.
   const face = light && light.intensity > 0.05 ? mixColor(kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e, light.color, Math.min(0.3, light.intensity * 0.35)) : kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e;
-  graphics.fillStyle(0x080b0d, 0.55);
-  graphics.fillEllipse(x, y + 20, 38, 10);
+  // M27b: painted contact shadows are gone everywhere — the real cast
+  // shadows from the lighting rig are the only shadows in the game.
   graphics.fillStyle(face, 1);
   graphics.fillRect(x - 16, y - 16 + bob, 32, 32);
   graphics.lineStyle(special ? 3 : 2, tint, pulse);
@@ -168,15 +169,14 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
  * As HP grinds down, glowing cracks leak fire light — damaged barrels become
  * visible targets. `y` is the platform surface the barrel sits on.
  */
-export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: number; y: number; hp: number }, time: number, light?: KeyLightSample) {
+export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: number; y: number; hp: number; burning?: number }, time: number, light?: KeyLightSample) {
   const x = prop.x;
   const groundY = prop.y;
   const damageFraction = Math.max(0, Math.min(1, prop.hp / 30));
   // M26 light response: warm the lit band toward the key light.
   const bandLit = light && light.intensity > 0.05 ? mixColor(0x9a3a24, light.color, Math.min(0.4, light.intensity * 0.4)) : 0x9a3a24;
   // Body: tapered drum with three shading bands (left shadow, core, right light).
-  graphics.fillStyle(0x080b0d, 0.5);
-  graphics.fillEllipse(x, groundY + 1, 26, 6);
+  // M27b: no painted contact shadow — the lighting rig casts the real one.
   const topY = groundY - 24;
   graphics.fillStyle(0x5c1f16, 1);
   graphics.fillRect(x - 9, topY, 18, 24);
@@ -204,6 +204,25 @@ export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: numbe
   // Valve cap on top.
   graphics.fillStyle(0x8a8f92, 1);
   graphics.fillRect(x - 2.5, topY - 2.5, 5, 2.5);
+  // M27 Pyre Vent: a lit drum is fully wreathed — flame licks from the valve
+  // and wrap the seam, flickering hard so the light it casts visibly dances.
+  if (prop.burning !== undefined && prop.burning > 0) {
+    const flick = 0.75 + Math.sin(time * 0.05 + x * 2) * 0.25;
+    graphics.fillStyle(0xf06b2f, 0.85 * flick);
+    graphics.fillCircle(x, topY - 3, 5.5 * flick);
+    graphics.fillStyle(0xffc06a, 0.95 * flick);
+    graphics.fillTriangle(x - 3.5, topY, x, topY - 12 * flick, x + 3.5, topY);
+    graphics.fillStyle(0xfff3d0, 0.8 * flick);
+    graphics.fillCircle(x, topY - 4, 2);
+    for (const side of [-1, 1]) {
+      graphics.fillStyle(0xf06b2f, 0.5 * flick);
+      graphics.fillTriangle(
+        x + side * 9, topY + 4 + (side > 0 ? 4 : 0),
+        x + side * 15, topY + 14 + side * 2,
+        x + side * 6, topY + 16,
+      );
+    }
+  }
   // Damage state: glowing cracks leak fire below 60% hp; below 30% they flicker hard.
   if (damageFraction < 0.6) {
     const intensity = (0.6 - damageFraction) / 0.6;
@@ -227,26 +246,41 @@ export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile
   const color = WEAPONS[projectile.weaponId].color;
   const speed = Math.hypot(projectile.vx, projectile.vy) || 1;
   const isRocket = projectile.weaponId === "rocket";
-  const isFlame = projectile.weaponId === "scatter" && projectile.secondary;
+  const isFlame = (projectile.weaponId === "scatter" && projectile.secondary) || projectile.weaponId === "flame";
   const isShard = projectile.pattern === "bounce";
   const trailLength = isRocket ? 46 : isFlame ? 20 : isShard ? 26 : projectile.pattern === "cluster" ? 30 : projectile.pattern === "piercing" ? 52 : projectile.secondary ? 24 : 14;
   const trailX = projectile.x - projectile.vx / speed * trailLength;
   const trailY = projectile.y - projectile.vy / speed * trailLength;
   if (isFlame) {
-    graphics.fillStyle(0xf06b2f, 0.55);
-    graphics.fillCircle(projectile.x, projectile.y, projectile.radius + 3 + Math.random() * 2);
-    graphics.fillStyle(0xf0a14a, 0.8);
-    graphics.fillCircle(projectile.x, projectile.y, projectile.radius);
+    // M27: Pyre Vent puffs burn bigger and brighter than the Blaze Vent's
+    // pilot dribble — a fat two-tone fireball with a white-hot heart.
+    const big = projectile.weaponId === "flame";
+    const core = projectile.radius + (big ? 4 : 0);
+    const flick = Math.random() * (big ? 3 : 2);
+    graphics.fillStyle(0xf06b2f, 0.5);
+    graphics.fillCircle(projectile.x, projectile.y, core + 4 + flick);
+    graphics.fillStyle(0xf0a14a, 0.85);
+    graphics.fillCircle(projectile.x, projectile.y, core);
+    graphics.fillStyle(0xffe7b0, big ? 0.9 : 0.5);
+    graphics.fillCircle(projectile.x, projectile.y, core * 0.5);
     return;
   }
   // Echo Shard: spinning resonant shard — an elongated diamond along the
-  // flight vector with twin afterimage ghosts; remaining bounces brighten it.
+  // flight vector with twin afterimage ghosts. M27: a crystal crown of
+  // light scales with remaining bounces — the shard visibly charges up as
+  // it ricochets, and the crown is what the shadow rig strobes from.
   if (isShard) {
     const ux = projectile.vx / speed;
     const uy = projectile.vy / speed;
-    const glow = 0.5 + 0.14 * (projectile.bouncesRemaining ?? 0);
+    const bounces = projectile.bouncesRemaining ?? 0;
+    const glow = 0.5 + 0.14 * bounces;
     // M24: occasional crystal glint as the shard tumbles through the air.
     const glint = time > 0 && Math.sin(time * 0.02 + projectile.x * 0.7 + projectile.y) > 0.86;
+    // Crown: a soft halo whose radius and intensity grow with bounces.
+    graphics.fillStyle(color, 0.1 + bounces * 0.045);
+    graphics.fillCircle(projectile.x, projectile.y, 11 + bounces * 3);
+    graphics.fillStyle(0xeaf6ff, 0.12 + bounces * 0.05);
+    graphics.fillCircle(projectile.x, projectile.y, 5 + bounces * 1.5);
     for (let ghost = 2; ghost >= 1; ghost--) {
       const gx = projectile.x - ux * 9 * ghost;
       const gy = projectile.y - uy * 9 * ghost;
@@ -278,16 +312,35 @@ export function drawProjectile(graphics: Phaser.GameObjects.Graphics, projectile
     ], true);
     return;
   }
-  // Rocket exhaust: hot core then fading smoke puffs along the tail.
+  // M27 rocket comet: a jagged flame tongue flickers behind the body, a hot
+  // tracer spine runs the tail, and two dim smoke puffs close the trail.
   if (isRocket) {
-    for (let index = 1; index <= 3; index++) {
+    const ux = projectile.vx / speed;
+    const uy = projectile.vy / speed;
+    const flick = Math.sin(time * 0.055 + projectile.x * 0.9) * 0.5 + 0.5;
+    const tongue = 13 + flick * 7;
+    graphics.lineStyle(2, 0xffd9a0, 0.8);
+    graphics.lineBetween(projectile.x, projectile.y, projectile.x - ux * 24, projectile.y - uy * 24);
+    graphics.fillStyle(0xf06b2f, 0.85);
+    graphics.fillPoints([
+      { x: projectile.x - ux * 3, y: projectile.y - uy * 3 },
+      { x: projectile.x - ux * tongue - uy * 4.5, y: projectile.y - uy * tongue + ux * 4.5 },
+      { x: projectile.x - ux * (tongue + 7 + flick * 4), y: projectile.y - uy * (tongue + 7 + flick * 4) },
+      { x: projectile.x - ux * tongue + uy * 4.5, y: projectile.y - uy * tongue - ux * 4.5 },
+    ], true);
+    graphics.fillStyle(0xffc06a, 0.9);
+    graphics.fillCircle(projectile.x - ux * 6, projectile.y - uy * 6, 3.2);
+    for (let index = 2; index <= 3; index++) {
       const t = index / 3;
-      graphics.fillStyle(index === 1 ? 0xffc06a : 0x5c5148, (1 - t) * (index === 1 ? 0.8 : 0.3));
-      graphics.fillCircle(projectile.x - projectile.vx / speed * 14 * index, projectile.y - projectile.vy / speed * 14 * index, 4 - index * 0.8);
+      graphics.fillStyle(0x5c5148, (1 - t) * 0.3);
+      graphics.fillCircle(projectile.x - projectile.vx / speed * 20 * index, projectile.y - projectile.vy / speed * 20 * index, 3.4 - index * 0.7);
     }
   }
-  // Piercing rounds streak with a bright afterimage line plus a soft glow bead.
+  // Piercing rounds streak with a bright afterimage line plus a twin-layer
+  // glow bead at the head (M27: the rail reads as charged plasma, not a dart).
   if (projectile.pattern === "piercing") {
+    graphics.fillStyle(color, 0.18);
+    graphics.fillCircle(projectile.x, projectile.y, 8);
     graphics.fillStyle(color, 0.35);
     graphics.fillCircle(trailX, trailY, 3.5);
     graphics.lineStyle(1.5, 0xffefc3, 0.5);
@@ -358,6 +411,8 @@ export type PlayerDrawFx = {
   swing?: { progress: number; secondary: boolean };
   /** Dash afterimages live in the scene; art draws the elongated blade slash when set. */
   dashSlash?: boolean;
+  /** M27: Voltrail charge fraction (0-1) — drives the muzzle focus ring. */
+  charge?: number;
 };
 
 export function drawPlayer(
@@ -379,6 +434,10 @@ export function drawPlayer(
   // M24b: distance-locked gait phase (feet plant where they touch, no
   // moonwalking) — phase advances with x, not the wall clock.
   const gait = player.x * 0.085;
+  // M27 wound feedback: the stride shortens as legs degrade — down to a crawl
+  // at zero integrity (the server move penalty bottoms out at ×0.4).
+  const legMin = Math.min(player.limbs.leftLeg, player.limbs.rightLeg) / 100;
+  const stride = 0.45 + 0.55 * legMin;
   // M24: idle breathing — a slow 1px lift when standing still keeps pilots
   // alive on screen even before they move.
   const breathing = moving < 0.05 && player.onGround ? Math.sin(time * 0.0035 + player.x) * 0.9 : 0;
@@ -406,18 +465,26 @@ export function drawPlayer(
   graphics.scaleCanvas(1 / Math.sqrt(squash), squash);
   graphics.translateCanvas(-x, -y);
 
-  // Contact shadow: one soft ellipse (perf: the halo variant cost a fill per
-  // frame per pilot for ~2px of visible spread).
-  graphics.fillStyle(0x050708, 0.45);
-  graphics.fillEllipse(x, y + 3, 34, 7);
+  // M27b: the pilot's painted contact shadow is gone — real cast shadows
+  // (attenuation-driven wedges from every shadowing light) are the only
+  // grounded shadow a pilot gets now.
+
+  // M27 self-glow halo: a pilot-tinted aura so the silhouette stays readable
+  // in the darkest corners. Emissive-material language, NOT a light source —
+  // nothing is added to the lighting rig (M25b: no lights follow the pilot).
+  const haloIntensity = 0.16 + (light ? light.intensity * 0.1 : 0.08) + (flash ? 0.25 : 0);
+  graphics.fillStyle(color, haloIntensity);
+  graphics.fillCircle(x, y - 16 * s, 26 * s);
+  graphics.fillStyle(0xf7f2e8, haloIntensity * 0.35);
+  graphics.fillCircle(x, y - 16 * s, 15 * s);
 
   // M24b limb poses: a run gait (legs counter-swing with knee flexion) blends
   // into an airborne pose (tuck on the way up, reach on the way down).
   const airBlend = player.onGround ? 0 : clampAngle(Math.abs(player.vy) / 320, 0, 1);
   const rising = player.vy < 0;
   const airLeg: LegPose = rising ? { hip: 0.75, knee: 1.35 } : { hip: 0.2, knee: 0.42 };
-  const leftPose = blendPose({ hip: Math.sin(gait) * 0.8 * moving, knee: 0.28 + Math.max(0, Math.sin(gait + 2.2)) * 0.7 * moving }, airLeg, airBlend);
-  const rightPose = blendPose({ hip: Math.sin(gait + Math.PI) * 0.8 * moving, knee: 0.28 + Math.max(0, Math.sin(gait + Math.PI + 2.2)) * 0.7 * moving }, { hip: -airLeg.hip * 0.55, knee: airLeg.knee * 0.85 }, airBlend);
+  const leftPose = blendPose({ hip: Math.sin(gait) * 0.8 * moving * stride, knee: 0.28 + Math.max(0, Math.sin(gait + 2.2)) * 0.7 * moving * stride }, airLeg, airBlend);
+  const rightPose = blendPose({ hip: Math.sin(gait + Math.PI) * 0.8 * moving * stride, knee: 0.28 + Math.max(0, Math.sin(gait + Math.PI + 2.2)) * 0.7 * moving * stride }, { hip: -airLeg.hip * 0.55, knee: airLeg.knee * 0.85 }, airBlend);
 
   // --- M25 behind-torso layer: Warden coat flaps + Rigger backpack ---
   if (player.archetype === 1) {
@@ -571,17 +638,43 @@ export function drawPlayer(
   }
   // emissive visor slit with a soft pulse
   const visorPulse = 0.82 + Math.sin(time * 0.006 + player.x) * 0.12;
+  // M27c: visor GLOW is a CONSTANT feature of every mech — the helmet always
+  // carries a soft pilot-colored bloom around the slit (emissive material,
+  // not a light source; unrelated to weapon charge per the user's note).
+  const visorGlow = 0.3 * (0.85 + Math.sin(time * 0.009 + player.x * 0.7) * 0.15);
+  const visorCX = bodyX + (player.archetype === 0 ? (facing > 0 ? 6 : -6) : 0) * s;
+  const visorCY = headY - (player.archetype === 2 ? 1.8 : 1.2) * s;
+  const visorHW = (player.archetype === 0 ? 7 : player.archetype === 3 ? 6 : 9) * s;
+  graphics.fillStyle(color, visorGlow);
+  graphics.fillCircle(visorCX, visorCY, visorHW * 1.15);
+  graphics.fillStyle(0xffffff, visorGlow * 0.55);
+  graphics.fillCircle(visorCX, visorCY, visorHW * 0.62);
   graphics.fillStyle(color, visorPulse);
   if (player.archetype === 0) graphics.fillRect(bodyX + (facing > 0 ? 1 : -11) * s, headY - 3 * s, 10 * s, 4 * s);
   else if (player.archetype === 1) graphics.fillRect(bodyX - 7 * s, headY - 3 * s, 14 * s, 3.5 * s);
   else if (player.archetype === 2) graphics.fillRect(bodyX - 7 * s, headY - 4 * s, 14 * s, 4.5 * s);
   else graphics.fillRect(bodyX + (facing > 0 ? 0 : -9) * s, headY - 2 * s, 9 * s, 3 * s);
   if (player.archetype === 2) {
-    // amber goggle lenses over the visor band
+    // amber goggle lenses over the visor band — with their own ember glow
+    graphics.fillStyle(0xf0a24a, 0.3);
+    graphics.fillCircle(bodyX - 3.5 * s, headY - 1.5 * s, 4.2 * s);
+    graphics.fillCircle(bodyX + 4 * s, headY - 1.5 * s, 4.2 * s);
     graphics.fillStyle(0xf0a24a, 0.95);
     graphics.fillCircle(bodyX - 3.5 * s, headY - 1.5 * s, 2.4 * s);
     graphics.fillCircle(bodyX + 4 * s, headY - 1.5 * s, 2.4 * s);
+    graphics.fillStyle(0xffe7b0, 0.8);
+    graphics.fillCircle(bodyX - 3.5 * s, headY - 1.5 * s, 1.1 * s);
+    graphics.fillCircle(bodyX + 4 * s, headY - 1.5 * s, 1.1 * s);
   }
+  // M27c: chest core light — every mech carries a small reactor porthole on
+  // the chest inset, pulsing gently in the pilot color (emissive material).
+  const corePulse = 0.5 + Math.sin(time * 0.005 + player.x * 0.5) * 0.18 + (flash ? 0.4 : 0);
+  graphics.fillStyle(color, corePulse * 0.35);
+  graphics.fillCircle(bodyX, bodyY - 35 * s, 4.6 * s);
+  graphics.fillStyle(color, corePulse);
+  graphics.fillCircle(bodyX, bodyY - 35 * s, 2.6 * s);
+  graphics.fillStyle(0xffffff, corePulse * 0.75);
+  graphics.fillCircle(bodyX, bodyY - 35 * s, 1.1 * s);
 
   // --- M25 weapon arm (front layer, tracks the grip incl. recoil kick) ---
   drawArm(graphics, player, "rightArm", bodyX + facing * 3 * s, armY + 2 * s, gripX - facing * 3 * s, gripY - 1 * s, armor, color, s, false);
@@ -598,6 +691,25 @@ export function drawPlayer(
     graphics.lineBetween(bodyX - facing * 26 * s, armY + 8 * s, bodyX + facing * 46 * s, armY - 6 * s);
     graphics.lineStyle(2, color, alpha * 0.9);
     graphics.lineBetween(bodyX - facing * 22 * s, armY + 12 * s, bodyX + facing * 42 * s, armY - 2 * s);
+  }
+
+  // M27 Voltrail muzzle focus-ring: while charging, a shrinking double ring
+  // converges on the muzzle — the visual charge gauge, readable at a glance.
+  if (player.weapon === "sniper" && (fx?.charge ?? 0) > 0.03) {
+    const charge = fx!.charge!;
+    const full = charge >= 1;
+    const ringR = (26 - charge * 16) * s;
+    const muzzleX = bodyX + facing * 34 * s;
+    const muzzleY = armY + 4 * s;
+    graphics.lineStyle(2 * s, full ? 0xffe6f2 : color, (0.4 + charge * 0.5) * (full ? 0.75 + Math.sin(time * 0.03) * 0.25 : 1));
+    graphics.strokeCircle(muzzleX, muzzleY, ringR);
+    graphics.lineStyle(1 * s, 0xffe6f2, charge * 0.5);
+    graphics.strokeCircle(muzzleX, muzzleY, ringR * 0.62);
+    if (full) {
+      // Execution-ready: a hot white core pulses at the muzzle.
+      graphics.fillStyle(0xffffff, 0.5 + Math.sin(time * 0.045) * 0.3);
+      graphics.fillCircle(muzzleX, muzzleY, 3.5 * s);
+    }
   }
 
   if (player.invulnerable > 0) {
@@ -695,46 +807,70 @@ function drawWeapon(
   fx?: WeaponDrawFx,
 ) {
   const color = WEAPONS[weaponId].color;
-  const back = facing < 0;
   const originX = x - facing * Math.min(8, recoil * 5) * scale;
   const px = (value: number) => originX + facing * value * scale;
   const vs = scale * WEAPON_VISUAL_SCALE; // M24: guns draw larger than hands
+  // M27c FIX: fillRect always extends SCREEN-RIGHT from its x anchor, so a
+  // left-facing pilot drew the gun body on the wrong side of the grip (the
+  // "weapon looks wrong facing left" bug). grx(a, w) takes the gun-local
+  // span [a, a+w] (muzzle = +x) and returns the mirrored screen anchor.
+  const grx = (a: number, w: number) => px((facing > 0 ? a : -(a + w)) * vs);
+  // M27c: every gun carries a small emissive signature (status LED / energy
+  // cell) — pure material language, nothing enters the lighting rig.
+  const led = (gx: number, gy: number, r: number, alpha: number, tint: number) => {
+    graphics.fillStyle(tint, alpha * 0.4);
+    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs * 2);
+    graphics.fillStyle(tint, alpha);
+    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs);
+    graphics.fillStyle(0xffffff, alpha * 0.7);
+    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs * 0.45);
+  };
+  const ledPulse = 0.6 + Math.sin((fx?.time ?? 0) * 0.008) * 0.3;
   graphics.lineStyle(3 * vs, 0x0b0e10, 1);
   if (weaponId === "sidearm") {
-    graphics.fillStyle(0x252d2f, 1); graphics.fillRoundedRect(px(-5 * vs), y - 3 * vs, 19 * vs, 7 * vs, 2 * vs);
-    graphics.fillStyle(0x111719, 1); graphics.fillRect(px(-2 * vs), y + 2 * vs, 5 * vs, 10 * vs);
-    graphics.fillStyle(color, 0.9); graphics.fillRect(px(10 * vs), y - 2 * vs, 6 * vs, 2 * vs);
+    graphics.fillStyle(0x252d2f, 1); graphics.fillRoundedRect(grx(-5, 19), y - 3 * vs, 19 * vs, 7 * vs, 2 * vs);
+    graphics.fillStyle(0x111719, 1); graphics.fillRect(grx(-2, 5), y + 2 * vs, 5 * vs, 10 * vs);
+    graphics.fillStyle(color, 0.9); graphics.fillRect(grx(10, 6), y - 2 * vs, 6 * vs, 2 * vs);
+    // M27c: loaded-chamber LED at the slide rear.
+    led(-3, -1.6, 0.9, 0.5 + recoil * 0.5, 0xffd27a);
     // M24: brass ejects on recent fire — a tiny falling glint above the slide.
     if (recoil > 0.5) {
       graphics.fillStyle(0xe8c56a, 0.9);
       graphics.fillCircle(px(-6 * vs), y - 5 * vs - (1 - recoil) * 8 * vs, 1.4 * vs);
     }
   } else if (weaponId === "scatter") {
-    graphics.fillStyle(0x1c2425, 1); graphics.fillRect(px(-8 * vs), y - 5 * vs, 22 * vs, 10 * vs);
+    graphics.fillStyle(0x1c2425, 1); graphics.fillRect(grx(-8, 22), y - 5 * vs, 22 * vs, 10 * vs);
     graphics.lineStyle(5 * vs, 0x111719, 1); graphics.lineBetween(px(12 * vs), y, px(31 * vs), y);
     graphics.lineStyle(1.5 * vs, color, 0.95); graphics.lineBetween(px(17 * vs), y - 3 * vs, px(31 * vs), y - 3 * vs);
+    // M27c: shell-count LED strip on the receiver.
+    led(-5, 0, 0.9, ledPulse, 0x9fc6d1);
     // M24: pump handle slides back then forward after each shot.
     if (recoil > 0) {
       const pumpBack = Math.sin(Math.min(1, (1 - recoil) * 2) * Math.PI) * 5 * vs;
       graphics.fillStyle(0x0d1214, 1);
-      graphics.fillRect(px((14 - pumpBack) * vs), y + 2.5 * vs, 6 * vs, 3.5 * vs);
+      graphics.fillRect(grx(14 - pumpBack, 6), y + 2.5 * vs, 6 * vs, 3.5 * vs);
     }
   } else if (weaponId === "rifle") {
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(px(-10 * vs), y - 3 * vs, 38 * vs, 6 * vs);
-    graphics.fillStyle(color, 0.8); graphics.fillRect(px(2 * vs), y + 3 * vs, 5 * vs, 11 * vs);
-    graphics.fillRect(px(17 * vs), y - 6 * vs, 10 * vs, 2 * vs);
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-10, 38), y - 3 * vs, 38 * vs, 6 * vs);
+    graphics.fillStyle(color, 0.8); graphics.fillRect(grx(2, 5), y + 3 * vs, 5 * vs, 11 * vs);
+    graphics.fillRect(grx(17, 10), y - 6 * vs, 10 * vs, 2 * vs);
+    // M27c: beam-cell indicator at the stock.
+    led(-7, 0, 0.9, 0.45 + ledPulse * 0.4, 0x75c795);
     // M24 signature: cooling vents glow after sustained fire, then fade.
     const heat = fx?.heat ?? 0;
     if (heat > 0.02) {
       for (let vent = 0; vent < 3; vent++) {
         graphics.fillStyle(color, heat * (0.55 - vent * 0.12));
-        graphics.fillRect(px((6 + vent * 7) * vs), y - 1.4 * vs, 4 * vs, 2.8 * vs);
+        graphics.fillRect(grx(6 + vent * 7, 4), y - 1.4 * vs, 4 * vs, 2.8 * vs);
       }
     }
   } else if (weaponId === "sniper") {
-    graphics.fillStyle(0x1b2224, 1); graphics.fillRect(px(-12 * vs), y - 3 * vs, 47 * vs, 6 * vs);
-    graphics.fillStyle(color, 0.95); graphics.fillRect(px(8 * vs), y - 7 * vs, 12 * vs, 2 * vs);
+    graphics.fillStyle(0x1b2224, 1); graphics.fillRect(grx(-12, 47), y - 3 * vs, 47 * vs, 6 * vs);
+    graphics.fillStyle(color, 0.95); graphics.fillRect(grx(8, 12), y - 7 * vs, 12 * vs, 2 * vs);
     graphics.fillCircle(px(29 * vs), y, 3 * vs);
+    // M27c: capacitor cells on the rail flank — breathing even at rest.
+    led(-8, -1.5, 0.9, 0.4 + ledPulse * 0.35, 0xd797c7);
+    led(-4.5, -1.5, 0.9, 0.3 + ledPulse * 0.35, 0xd797c7);
     // M24 signature: charge coils along the rail brighten toward full charge.
     const charge = fx?.charge ?? 0;
     if (charge > 0.03) {
@@ -746,27 +882,56 @@ function drawWeapon(
       }
     }
   } else if (weaponId === "rocket") {
-    graphics.fillStyle(0x273033, 1); graphics.fillRect(px(-8 * vs), y - 8 * vs, 28 * vs, 16 * vs);
+    graphics.fillStyle(0x273033, 1); graphics.fillRect(grx(-8, 28), y - 8 * vs, 28 * vs, 16 * vs);
     graphics.fillStyle(0x121819, 1); graphics.fillCircle(px(21 * vs), y, 8 * vs);
     graphics.lineStyle(2 * vs, color, 0.9); graphics.strokeCircle(px(21 * vs), y, 6 * vs);
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(px(-12 * vs), y + 5 * vs, 7 * vs, 9 * vs);
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-12, 7), y + 5 * vs, 7 * vs, 9 * vs);
   } else if (weaponId === "echo") {
     // M24: the shard gun gets its own silhouette — crystal emitter array with
     // a slow shimmer, replacing the generic default shape it used to share.
     const time = fx?.time ?? 0;
     const shimmer = 0.55 + Math.sin(time * 0.006) * 0.25;
-    graphics.fillStyle(0x1a2229, 1); graphics.fillRect(px(-9 * vs), y - 4.5 * vs, 20 * vs, 9 * vs);
-    graphics.fillStyle(0x0f151c, 1); graphics.fillRect(px(-4 * vs), y + 2 * vs, 5 * vs, 9 * vs);
+    graphics.fillStyle(0x1a2229, 1); graphics.fillRect(grx(-9, 20), y - 4.5 * vs, 20 * vs, 9 * vs);
+    graphics.fillStyle(0x0f151c, 1); graphics.fillRect(grx(-4, 5), y + 2 * vs, 5 * vs, 9 * vs);
+    led(-7, 0, 0.9, 0.35 + shimmer * 0.45, 0x7fb8ff);
     graphics.fillStyle(color, shimmer);
     graphics.fillTriangle(px(9 * vs), y - 5 * vs, px(9 * vs), y + 5 * vs, px(19 * vs), y);
     graphics.lineStyle(1.2 * vs, 0xeaf6ff, shimmer);
     graphics.lineBetween(px(9 * vs), y - 4 * vs, px(17 * vs), y);
     graphics.fillStyle(color, shimmer * 0.5);
-    graphics.fillRect(px(-7 * vs), y - 1.2 * vs, 13 * vs, 2.4 * vs);
+    graphics.fillRect(grx(-7, 13), y - 1.2 * vs, 13 * vs, 2.4 * vs);
+  } else if (weaponId === "flame") {
+    // M27 Pyre Vent: a fat industrial torch — tank drum under the barrel,
+    // wide trumpet nozzle, pilot ember breathing at the mouth.
+    const time = fx?.time ?? 0;
+    const pilot = 0.55 + Math.sin(time * 0.03) * 0.3;
+    graphics.fillStyle(0x2a2019, 1); graphics.fillCircle(px(-4 * vs), y + 6 * vs, 6 * vs);
+    graphics.fillStyle(0xe8632a, 0.9); graphics.fillCircle(px(-4 * vs), y + 6 * vs, 2.4 * vs);
+    graphics.fillStyle(0x262e30, 1); graphics.fillRect(grx(-9, 22), y - 4 * vs, 22 * vs, 8 * vs);
+    graphics.fillStyle(0x121819, 1); graphics.fillRect(grx(4, 6), y + 4 * vs, 6 * vs, 7 * vs);
+    led(-7.5, -1.5, 0.9, 0.4 + ledPulse * 0.35, 0xff7a3c);
+    graphics.fillStyle(color, 0.9);
+    graphics.fillPoints([
+      { x: px(13 * vs), y: y - 3.5 * vs },
+      { x: px(13 * vs), y: y + 3.5 * vs },
+      { x: px(21 * vs), y: y + 6 * vs },
+      { x: px(21 * vs), y: y - 6 * vs },
+    ], true);
+    graphics.lineStyle(1.4 * vs, 0x0b0e10, 1);
+    graphics.strokePoints([
+      { x: px(13 * vs), y: y - 3.5 * vs },
+      { x: px(13 * vs), y: y + 3.5 * vs },
+      { x: px(21 * vs), y: y + 6 * vs },
+      { x: px(21 * vs), y: y - 6 * vs },
+      { x: px(13 * vs), y: y - 3.5 * vs },
+    ], true);
+    graphics.fillStyle(0xffc06a, pilot);
+    graphics.fillCircle(px(22.5 * vs), y, 1.8 * vs);
   } else {
     // Blade: the grip only — the blade itself is drawn by the swing animation
     // when active, or at rest angle when idle.
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(px(-6 * vs), y - 3 * vs, 15 * vs, 6 * vs);
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-6, 15), y - 3 * vs, 15 * vs, 6 * vs);
+    led(-3, 0, 0.8, 0.4 + ledPulse * 0.3, 0xbfcbd0);
     const swing = fx?.swing;
     const restAngle = -0.5;
     const from = swing ? -1.55 : restAngle;

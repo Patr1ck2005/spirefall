@@ -240,6 +240,8 @@ const ENGAGEMENT_BAND: Record<WeaponId, [number, number]> = {
   // Shards reward angled geometry: bots hold mid-range where a banked bounce
   // can reach around cover but the direct line is still usable.
   echo: [200, 700],
+  // M27 Pyre Vent: the flame cone dies at 230 — bots must walk it in.
+  flame: [0, 210],
 };
 
 const bandScore = (weaponId: WeaponId, distance: number): number => {

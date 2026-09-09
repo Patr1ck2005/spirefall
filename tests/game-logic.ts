@@ -7,12 +7,20 @@ const assert = (condition: unknown, message: string) => {
 
 const healthy = calculateLimbModifiers({ leftArm: 100, rightArm: 100, leftLeg: 100, rightLeg: 100 });
 assert(healthy.cooldown === 1 && healthy.recoil === 1 && healthy.move === 1 && healthy.jump === 1, "Healthy limbs changed movement or attack timing");
+assert(healthy.spread === 1, "Healthy limbs must not change spread");
 
+// M27 wound model: destroyed arms nearly double the trigger time, deepen the
+// recoil AND widen the cone by 60%; destroyed legs drop movement to a ×0.4
+// crawl and cut the jump to half — limb damage is now a real control penalty.
 const destroyed = calculateLimbModifiers({ leftArm: 0, rightArm: 0, leftLeg: 0, rightLeg: 0 });
-assert(destroyed.cooldown === 1.4, "Arm damage did not reach the 40% cooldown cap");
-assert(destroyed.recoil === 1.3, "Arm damage did not reach the 30% recoil cap");
-assert(destroyed.move === 0.7, "Leg damage did not reach the 30% movement cap");
-assert(destroyed.jump === 0.8, "Leg damage did not reach the 20% jump cap");
+assert(destroyed.cooldown === 1.7, "Arm damage did not reach the 70% cooldown cap");
+assert(destroyed.recoil === 1.6, "Arm damage did not reach the 60% recoil cap");
+assert(destroyed.spread === 1.6, "Arm damage did not reach the 60% spread cap");
+assert(destroyed.move === 0.4, "Leg damage did not reach the 60% movement drag");
+assert(destroyed.jump === 0.5, "Leg damage did not reach the 50% jump drag");
+// Partial wounds scale linearly: one arm at 50 → severity 0.5 → spread ×1.15.
+const grazed = calculateLimbModifiers({ leftArm: 50, rightArm: 100, leftLeg: 100, rightLeg: 100 });
+assert(Math.abs(grazed.spread - 1.15) < 1e-9, "Grazed arm did not scale the cone linearly");
 
 const player = { x: 100, y: 200 };
 assert(selectLimbAtPoint(player, 82, 160) === "leftArm", "Upper-left hit did not select the left arm");
@@ -132,7 +140,7 @@ assert(WEAPONS.echo.primary.bounces === 3 && WEAPONS.echo.secondary.bounces === 
 assert(WEAPONS.echo.primary.range === 900 && WEAPONS.echo.secondary.range === 1100, "Echo Shard ranges drifted");
 assert(WEAPONS.echo.primary.count === 2, "Echo Shard primary must volley two shards");
 assert(WEAPONS.echo.primary.range <= WEAPONS.rifle.primary.range || WEAPONS.echo.secondary.range <= 1100, "Echo must not out-range the laser identity");
-assert(Object.keys(WEAPONS).length === 7, "Weapon count drifted — slots 1-7 expected");
+assert(Object.keys(WEAPONS).length === 8, "Weapon count drifted — slots 1-8 expected");
 
 // M19 cover walls: exactly one solid platform per map, reachable hops, and no
 // overlap with crate sockets or spawn points.
@@ -258,6 +266,25 @@ assert(PROP_TUNING.damage < WEAPONS.rocket.primary.damage, "Barrel damage matche
 assert(PROP_TUNING.blastRadius < WEAPONS.rocket.primary.explosiveRadius, "Barrel blast radius matched the rocket — barrels must stay under the M20 band");
 assert(PROP_TUNING.hp > 0 && PROP_TUNING.hp <= 40, "Barrel hp drifted — two rifle bursts / one scatter volley should pop it");
 assert(PROP_TUNING.respawnMin >= 5 && PROP_TUNING.respawnMax <= 12, "Barrel respawn window drifted outside the crate cadence");
+
+// ---- M27: damage pass + hazard-grade barrels ---------------------------------
+// Weapon damage table: every primary at or above the M27 floor.
+assert(WEAPONS.sidearm.primary.damage === 11 && WEAPONS.sidearm.secondary.damage === 12, "Sidearm damage drifted from the M27 table");
+assert(WEAPONS.scatter.primary.damage === 11 && WEAPONS.scatter.secondary.damage === 5, "Scatter damage drifted from the M27 table");
+assert(WEAPONS.rifle.primary.damage === 8 && WEAPONS.rifle.secondary.damage === 48, "Longbeam damage drifted from the M27 table");
+assert(WEAPONS.sniper.primary.damage === 40 && WEAPONS.sniper.secondary.damage === 44, "Voltrail damage drifted from the M27 table");
+assert(WEAPONS.rocket.primary.damage === 58 && WEAPONS.rocket.secondary.damage === 30, "Forge Rocket damage drifted from the M27 table");
+assert(WEAPONS.blade.primary.damage === 46 && WEAPONS.blade.secondary.damage === 74, "Cutter Blade damage drifted from the M27 table");
+assert(WEAPONS.echo.primary.damage === 16 && WEAPONS.echo.secondary.damage === 42, "Echo Shard damage drifted from the M27 table");
+// M27 Pyre Vent: cone-spray flamethrower inside the weapon count contract.
+assert(WEAPONS.flame.label === "Pyre Vent" && WEAPONS.flame.primary.range === 230, "Pyre Vent identity drifted");
+assert(WEAPONS.flame.primary.damage === 6 && WEAPONS.flame.secondary.count === 8, "Pyre Vent damage drifted from the M27 table");
+assert(WEAPONS.flame.primary.speed === 430 && WEAPONS.flame.primary.cooldown <= 0.05, "Pyre Vent spray rhythm drifted");
+// Cooldowns stayed frozen (only damage/knockback/blast moved this round).
+assert(WEAPONS.sidearm.primary.cooldown === 0.09 && WEAPONS.rocket.primary.cooldown === 0.9 && WEAPONS.blade.secondary.cooldown === 1.0, "M27 touched cooldowns — the freeze was violated");
+// Barrels became landmine-grade but stay under the rocket's envelope.
+assert(PROP_TUNING.damage === 46 && PROP_TUNING.blastRadius === 88 && PROP_TUNING.knockback === 330, "Barrel tuning drifted from the M27 table");
+assert(PROP_TUNING.hp === 30, "Barrel detonation threshold drifted");
 // Swept segment vs barrel circle: same geometry the projectiles use.
 const barrel = { x: 600, y: 400 };
 assert(segmentHitsProp(barrel, 560, 388, 640, 388), "Crossing segment missed the barrel");
