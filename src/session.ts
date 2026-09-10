@@ -23,11 +23,18 @@ export interface ArenaSceneLike {
   setVisualPreferences(): void;
 }
 
-// M24 render scale: the game canvas renders at 1.3× the world resolution and
-// the camera zooms to match, so every sprite, gun and platform draws 30%
-// larger with no physics, collision or balance change. The visible world
-// stays exactly 1000×560. Drop this to 1.25/1.2 if low-end GPUs dip under
-// the performance floor — it is the single tuning point.
+/**
+ * M29 combat window in WORLD units: the canvas stays at this fixed size (so a
+ * screen shows ~44% of the 1500×840 arena and the camera must follow), while
+ * the world itself grew to 1500×840.
+ */
+export const VIEW = { width: 1000, height: 560 } as const;
+
+// M24/M29 render scale: the game canvas renders at 1.3× the VIEW resolution
+// and the camera zooms to match, so every sprite, gun and platform draws 30%
+// larger with no physics, collision or balance change. The visible window
+// stays exactly 1000×560 world units. Drop this to 1.25/1.2 if low-end GPUs
+// dip under the performance floor — it is the single tuning point.
 export const RENDER_SCALE = 1.3;
 
 export const session = {

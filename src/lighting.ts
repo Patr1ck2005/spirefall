@@ -27,7 +27,7 @@
 // Pilots carry no personal lights (M25b): characters are lit by sampling the
 // strongest nearby PointLight (sampleLight) and shading toward it in art.
 import Phaser from "phaser";
-import { MAPS, type MapId } from "../shared/game.js";
+import { MAPS, WORLD, type MapId } from "../shared/game.js";
 import { POSTER } from "./palette";
 import { PLATE_ANCHORS } from "./sceneplate";
 
@@ -284,17 +284,23 @@ export class LightingSystem {
     makeConeTexture(scene, CONE_KEY);
     makeBloomTexture(scene, BLOOM_KEY);
     makeCoreTexture(scene, CORE_KEY);
-    this.darkness = scene.add.rectangle(500, 280, 1000, 560, 0x000000, 1).setDepth(2).setVisible(false);
+    // M29: darkness/veil covers the whole 1500×840 world (world-space rect —
+    // it scrolls with the camera and only ever shows through the viewport).
+    this.darkness = scene.add.rectangle(WORLD.width / 2, WORLD.height / 2, WORLD.width, WORLD.height, 0x000000, 1).setDepth(2).setVisible(false);
     this.capRelight = scene.add.graphics().setDepth(2.05);
     // M27b: wedges render into this off-screen graphics, get composited into
     // a half-resolution RenderTexture, ping-pong through two smaller buffers
     // (Kawase-style blur), and the base RT is the visible layer (2× upscale).
     this.shadows = scene.add.graphics().setVisible(false);
     if (scene.sys.game.renderer.type === Phaser.WEBGL) {
-      this.shadowRt = scene.add.renderTexture(0, 0, 1000 * SHADOW_RT_SCALE, 560 * SHADOW_RT_SCALE).setOrigin(0, 0).setDepth(2.2);
+      // M29: buffer sizes derive from WORLD (750/375/188 at the new 1500×840;
+      // the eighth-res buffer rounds 187.5 — the blur chain is insensitive).
+      // The RT sits at world origin and scrolls with the camera; wedge draws
+      // are pre-scaled world coordinates, so shadows stay world-locked.
+      this.shadowRt = scene.add.renderTexture(0, 0, Math.round(WORLD.width * SHADOW_RT_SCALE), Math.round(WORLD.height * SHADOW_RT_SCALE)).setOrigin(0, 0).setDepth(2.2);
       this.shadowRt.setScale(1 / SHADOW_RT_SCALE);
-      this.shadowRtB = scene.add.renderTexture(0, 0, 1000 * SHADOW_RT_SCALE * 0.5, 560 * SHADOW_RT_SCALE * 0.5).setOrigin(0, 0).setVisible(false);
-      this.shadowRtC = scene.add.renderTexture(0, 0, 1000 * SHADOW_RT_SCALE * 0.25, 560 * SHADOW_RT_SCALE * 0.25).setOrigin(0, 0).setVisible(false);
+      this.shadowRtB = scene.add.renderTexture(0, 0, Math.round(WORLD.width * SHADOW_RT_SCALE * 0.5), Math.round(WORLD.height * SHADOW_RT_SCALE * 0.5)).setOrigin(0, 0).setVisible(false);
+      this.shadowRtC = scene.add.renderTexture(0, 0, Math.round(WORLD.width * SHADOW_RT_SCALE * 0.25), Math.round(WORLD.height * SHADOW_RT_SCALE * 0.25)).setOrigin(0, 0).setVisible(false);
     }
     for (let i = 0; i < LIGHT_POOL; i++) {
       const image = scene.add.image(0, 0, RADIAL_KEY).setDepth(2.1).setBlendMode(Phaser.BlendModes.ADD).setVisible(false);

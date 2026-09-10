@@ -49,6 +49,9 @@ type Percept = {
   targetDistance: number;
 };
 
+/** M29 nav forensics: SPIRE_NAV_DEBUG=1 traces gap-jump decisions. */
+const navDebug = process.env.SPIRE_NAV_DEBUG === "1";
+
 export type BotTier = {
   decisionEvery: number;
   reactionTicks: number;
@@ -103,6 +106,12 @@ type BotController = {
   switchCooldown: number;
   /** Cooldown (ticks) between mid-air rescue jump inputs (M21). */
   airRescueCooldown: number;
+  /** M29: a gap jump is in flight — replanning is frozen until landing (the
+   *  mid-air re-nearest would steer the bot back onto the shelf it left). */
+  airPlan: boolean;
+  /** M29: consecutive real-time grounded ticks — 3 clears `airPlan` (a 1-2
+   *  tick pillar-corner graze must not unfreeze the arc mid-flight). */
+  groundTicks: number;
   /** Most recent attacker seen in events: { id, tick }. */
   lastAttacker: { id: string; tick: number } | undefined;
 };
@@ -175,6 +184,8 @@ export function ensureControllers(room: Room) {
       wallStuckTicks: 0,
       switchCooldown: 0,
       airRescueCooldown: 0,
+      airPlan: false,
+      groundTicks: 0,
       lastAttacker: undefined,
     });
   }
@@ -352,6 +363,13 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
   const tier = controller.tier;
   const self = percept.self;
 
+  // M29: a deliberate gap jump is in flight. Replanning mid-air re-nearests
+  // the bot onto the shelf it just left (nearestNodeIndex over the gap picks
+  // the old platform) and steers it back east — aborting the crossing. The
+  // last ground plan stays authoritative until the bot lands (confirmed by
+  // groundTicks in updateBots, not by the reaction-delayed percept).
+  if (controller.airPlan && controller.plan) return;
+
   // Default drift toward arena center keeps idle bots lively without hunting.
   let goalX = 500;
   let goalY = self.y;
@@ -428,7 +446,11 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
         ? nextNode.left - (currentPlatform.x + currentPlatform.width)
         : currentPlatform.x - nextNode.right;
       const movingTowardGap = (plan.waypointX > self.x && nextNode.left > currentPlatform.x + currentPlatform.width) || (plan.waypointX < self.x && currentPlatform.x > nextNode.right);
-      plan.gapJump = gap > 40 && gap < 220 && movingTowardGap;
+      // M29: arm up to the nav edge cap (NAV_MAX_GAP+40 = 240) — the 1500px
+      // maps carry 210/220px ground gaps and the old hard 220 exclusion left
+      // the canopy east gap unplannable.
+      plan.gapJump = gap > 40 && gap <= 240 && movingTowardGap;
+      if (navDebug && self.x > 1000 && self.x < 1200) console.log(`[nav] t=${room.tick} plan-gap gap=${Math.round(gap)} armed=${plan.gapJump} toward=${movingTowardGap} wp=${Math.round(plan.waypointX)} route0=${route[0]} from=${fromIndex}`);
     }
   }
 
@@ -490,15 +512,28 @@ function decidePlan(room: Room, controller: BotController, percept: Percept) {
 
   // Bullet dodging (tier-gated): sidestep incoming rounds. M21: prefer the
   // side that actually has floor — a dodge toward a fall gap trades one hit
-  // for a death, so flip the step when the first choice steps off the ledge.
+  // for a death. M29: the floor check runs at the DODGE TARGET (±60px, where
+  // the waypoint actually lands) instead of the current spot, works airborne,
+  // and when both sides hang over a gap the bot flees toward the NEAREST
+  // floor within reach instead of freezing on the lip (one Echo volley used
+  // to juggle a hovering bot straight into the 220px gaps).
   if (percept.incoming.length && Math.random() < tier.dodgeBullets) {
     const nearest = percept.incoming.reduce((best, candidate) => (candidate.distance < best.distance ? candidate : best));
     // Step perpendicular to the projectile's travel; jump if it hugs the ground.
     const side = nearest.vx > 0 ? -1 : 1;
-    const hasFloor = (direction: number) => self.onGround === false || surfaceBelow(map, self.x + direction * (PLAYER_HALF_WIDTH + 6), self.y + PLAYER_FOOT_OFFSET) !== undefined;
-    const dodgeSide = hasFloor(side) ? side : hasFloor(-side) ? -side : side;
-    plan.waypointX = self.x + dodgeSide * 60;
-    if (nearest.y > self.y - 30 && self.onGround && Math.random() < 0.5) plan.hopOver = true;
+    const floorDistance = (direction: number) => {
+      for (let reach = 60; reach <= 240; reach += 60) {
+        if (surfaceBelow(map, self.x + direction * reach, self.y + PLAYER_FOOT_OFFSET) !== undefined) return reach;
+      }
+      return Infinity;
+    };
+    const dodgeSide = floorDistance(side) <= floorDistance(-side) ? side : -side;
+    if (Number.isFinite(floorDistance(dodgeSide))) {
+      plan.waypointX = self.x + dodgeSide * 60;
+      if (nearest.y > self.y - 30 && self.onGround && Math.random() < 0.5) plan.hopOver = true;
+    }
+    // Both directions void for 240px: no dodge override — keep the current
+    // plan (the route march already heads for solid ground).
   }
 
   // Brutal pilots sidestep crusher/piston strike zones during warnings.
@@ -559,10 +594,15 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
       const currentPlatform = graph.nodes.find((node) => node.index === standing.index)!.platform;
       const heading = Math.sign(controller.plan.waypointX - self.x) || 1;
       const edgeX = heading > 0 ? currentPlatform.x + currentPlatform.width : currentPlatform.x;
+      if (navDebug && self.x > 1000 && self.x < 1200) console.log(`[nav] t=${room.tick} exec-gap x=${Math.round(self.x)} edge=${edgeX} diff=${Math.round(edgeX - self.x)} pulse=${controller.jumpPulse} vx=${Math.round(self.vx)}`);
       if (Math.abs(edgeX - self.x) < 34) {
         controller.jumpPulse = 3;
         controller.plan.gapJump = false;
+        controller.airPlan = true; // freeze replans until this arc lands
+        if (navDebug) console.log(`[nav] t=${room.tick} JUMP fired at x=${Math.round(self.x)} vx=${Math.round(self.vx)}`);
       }
+    } else if (navDebug && self.x > 1000 && self.x < 1200) {
+      console.log(`[nav] t=${room.tick} exec-gap NO standing platform at x=${Math.round(self.x)} y=${Math.round(self.y)}`);
     }
   }
 
@@ -575,7 +615,11 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
   // no floor beneath it spends its remaining jumps. Covers short hops (bad
   // takeoff point, dodge-perturbed arcs) that drop the bot into the void
   // between islands — the triple-jump budget exists precisely for this.
-  if (!self.onGround && (input.left || input.right)) {
+  // M29: only fire on the FALLING phase (vy > 0) — the old trigger also fired
+  // at the apex of a healthy deliberate gap jump, resetting vy to the weaker
+  // air-jump (-445 vs -620) mid-arc and dropping the bot short of the far lip
+  // on the 210/220px M29 gaps (140px gaps masked it for years).
+  if (!self.onGround && self.vy > 0 && (input.left || input.right)) {
     const overVoid = surfaceBelow(MAPS[room.config.mapId], self.x, self.y + PLAYER_FOOT_OFFSET) === undefined;
     if (overVoid && controller.airRescueCooldown <= 0) {
       input.jump = true;
@@ -698,6 +742,11 @@ export function updateBots(room: Room, dt: number) {
       }
     }
 
+    // M29 landing confirmation uses the REAL player state (not the reaction-
+    // delayed percept): three consecutive grounded ticks unfreeze replanning.
+    if (player.onGround) controller.groundTicks++; else controller.groundTicks = 0;
+    if (controller.groundTicks >= 3) controller.airPlan = false;
+
     const percept = collectPercept(room, player);
     controller.percepts.push(percept);
     const dueTick = room.tick - controller.tier.reactionTicks;
@@ -735,6 +784,8 @@ export function clearBotInputs(room: Room) {
     controller.chargeHold = 0;
     controller.wallStuckTicks = 0;
     controller.switchCooldown = 0;
+    controller.airPlan = false;
+    controller.groundTicks = 0;
     controller.lastAttacker = undefined;
   }
 }

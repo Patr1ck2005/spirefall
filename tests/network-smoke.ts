@@ -109,11 +109,12 @@ for (let i = 0; i < 40; i++) {
   if (guestPlayer?.invulnerable <= 0) { protectionExpired = true; break; }
 }
 assert(protectionExpired, "Spawn protection did not expire");
-// Terrain v2 spawn points sit ~770px apart with lethal floor gaps between
-// them, so walking into sidearm range is not practical. Both pilots drop
-// through their one-way ledges onto the shared ground floor (same height),
-// then the host switches to the Voltrail (weaponSet slot 4, range 1200)
-// and fires straight across: deterministic geometry.
+// M29: factory ground spawns seat both pilots directly on the wall-free ground
+// floor (120,791) / (1380,791) — 1260px apart with zero solid cover on the
+// line, so walking into sidearm range is not practical. (The old drop-through
+// dance is gone: the new spawns sit on the ground itself.) The host switches
+// to the Voltrail (weaponSet slot 4, range 1400+) and fires straight across:
+// deterministic geometry.
 guest.send(JSON.stringify({ type: "input", input: { seq: 20, drop: true } }));
 host.send(JSON.stringify({ type: "input", input: { seq: 5, drop: true } }));
 let bothGround = false;
@@ -132,7 +133,7 @@ const preShot = (await waitFor(host, "snapshot")).snapshot;
 const preGuest = preShot.players.find((p: any) => p.id === joined.selfId);
 const preHost = preShot.players.find((p: any) => p.id === created.selfId);
 if (preHost.weapon !== "sniper") throw new Error(`Weapon slot switch failed: ${preHost.weapon}`);
-assert(Math.abs(preGuest.x - preHost.x) < 1200 && Math.abs(preGuest.y - preHost.y) < 16, "Pilots are not in a shared-floor sniper line; map geometry broke this test");
+assert(Math.abs(preGuest.x - preHost.x) < 1300 && Math.abs(preGuest.y - preHost.y) < 16, "Pilots are not in a shared-floor sniper line; map geometry broke this test");
 // Voltrail (slot 4) is a charge weapon. Hold primary only until the charge
 // readout clears chargeMin but stays below the 0.8 execution threshold —
 // snapshot pacing varies widely on loaded CI runners, so a fixed 12-snapshot
@@ -168,11 +169,12 @@ assert(limbDamaged || guestDied, "Authoritative hit neither damaged a limb nor k
 assert(hitEventSeen || guestDied, "Authoritative hit did not emit a combat event");
 host.send(JSON.stringify({ type: "input", input: { seq: 32, primary: false } }));
 
-// --- M19: solid cover blocks shots. Canopy spawns seat both pilots on their
-// ground platforms at identical height with the cover wall (452..478, 452..530)
-// squarely on the chest-height line between them — zero driving required.
-// The host fires the Lance Pulse (slot 3, range 950 > 790px line) so only the
-// wall can explain zero damage, then the sidearm (640 < 790px, capped anyway).
+// --- M19/M29: solid cover blocks shots. Canopy spawns seat both pilots on
+// their ground platforms at identical height (200/1300, y=791) with the cover
+// wall (700..740, 715..795) squarely on the chest-height line between them —
+// zero driving required. The host fires the Lance Pulse (slot 3, range 950):
+// the wall intercepts the ray ~530px out, so only the wall can explain zero
+// damage.
 const coverHost = await open();
 coverHost.send(JSON.stringify({ type: "create", name: "Cover-Alpha" }));
 const coverCreated = await waitFor(coverHost, "room");

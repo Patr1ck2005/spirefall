@@ -6,11 +6,11 @@ import { sfx } from "./audio";
 import { ARCHETYPES, MAP_COPY, colorCss } from "./art";
 import { connect, initNet, send } from "./net";
 import { portraitDataUrl } from "./portrait";
-import { availablePortraits, RENDER_SCALE, session, visualPrefs, type ArenaSceneLike, type RoomMessage } from "./session";
+import { availablePortraits, RENDER_SCALE, session, visualPrefs, VIEW, type ArenaSceneLike, type RoomMessage } from "./session";
 import "./style.css";
 import { i18n, type I18nKey } from "./i18n";
 import type { MapId, WeaponId } from "../shared/game.js";
-import { WEAPONS, WORLD } from "../shared/game.js";
+import { WEAPONS } from "../shared/game.js";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const weaponOptions = Object.values(WEAPONS).map((weapon, index) => `
@@ -234,10 +234,11 @@ function showGame() {
     session.gameInstance = new Phaser.Game({
       type: Phaser.AUTO,
       parent: "game",
-      // M24: render at RENDER_SCALE × world size; the camera zoom (set in
-      // create()) maps the visible area back to the full 1000×560 world.
-      width: Math.round(WORLD.width * RENDER_SCALE),
-      height: Math.round(WORLD.height * RENDER_SCALE),
+      // M29: the canvas is FIXED at VIEW×RENDER_SCALE (1300×728) — the camera
+      // zoom (set in create()) makes the visible window 1000×560 world units,
+      // ~44% of the 1500×840 arena; scrolling reveals the rest.
+      width: Math.round(VIEW.width * RENDER_SCALE),
+      height: Math.round(VIEW.height * RENDER_SCALE),
       backgroundColor: "#080b0d",
       // M26: the poster light pipeline compiles its uniform array from
       // maxLights — must match POINT_POOL in lighting.ts. M27: 20 so rocket

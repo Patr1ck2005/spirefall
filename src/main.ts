@@ -108,6 +108,8 @@ class ArenaScene extends Phaser.Scene {
   private lastSpeedGhostAt = 0;
   private prevState = new Map<string, { onGround: boolean; vy: number; jumpsUsed: number }>();
   private digits: Array<{ text: Phaser.GameObjects.Text; life: number }> = [];
+  /** M29 smoothed camera focus point (world coords; eased toward the pilot). */
+  private camTarget = { x: WORLD.width / 2, y: WORLD.height / 2 };
 
   /** Drop processed-event ids when switching rooms (ids restart per room). */
   clearProcessedEvents() {
@@ -141,9 +143,10 @@ class ArenaScene extends Phaser.Scene {
 
   create() {
     session.scene = this;
-    // M24 render scale: zoom the camera so the visible world is still the
-    // full 1000×560 arena while the canvas itself draws 1.3× larger.
-    this.cameras.main.setZoom(RENDER_SCALE).centerOn(WORLD.width / 2, WORLD.height / 2);
+    // M29 camera: zoom keeps the 1.3× art scale while the visible window is
+    // VIEW (1000×560) of the 1500×840 arena — ~44% per screen; bounds clamp
+    // the scroll and update() eases the camera onto the self pilot.
+    this.cameras.main.setZoom(RENDER_SCALE).setBounds(0, 0, WORLD.width, WORLD.height).centerOn(WORLD.width / 2, WORLD.height / 2);
     this.graphics = this.add.graphics();
     // M26 poster scene plates: procedural albedo + Sobel normal maps for the
     // Light2D pipeline. Built once, synchronously (~a few hundred ms), before
@@ -216,6 +219,25 @@ class ArenaScene extends Phaser.Scene {
       const inputVx = ((this.keys.D.isDown ? 1 : 0) - (this.keys.A.isDown ? 1 : 0)) * Math.min(MOVE_TUNING.maxSpeed, MOVE_TUNING.accelerate * MOVE_TUNING.groundFriction / (1 - MOVE_TUNING.groundFriction));
       predicted.x += inputVx * delta / 1000;
     }
+    // M29 camera follow: exponential ease toward the self pilot's render
+    // position (chest height), clamped by the world bounds set in create().
+    // A respawn teleport (>640px away) snaps instead of gliding the whole
+    // arena; the ease (~7/s) reaches 90% in ~0.33s — attached, not swimmy.
+    if (predicted) {
+      const focusX = predicted.x;
+      const focusY = predicted.y - 16;
+      const dx = focusX - this.camTarget.x;
+      const dy = focusY - this.camTarget.y;
+      if (dx * dx + dy * dy > 640 * 640) {
+        this.camTarget.x = focusX;
+        this.camTarget.y = focusY;
+      } else {
+        const ease = 1 - Math.exp(-7 * (delta / 1000));
+        this.camTarget.x += dx * ease;
+        this.camTarget.y += dy * ease;
+      }
+    }
+    this.cameras.main.centerOn(this.camTarget.x, this.camTarget.y);
     // M26 poster plates are fully static — no parallax nudge (poster style).
     // M24b: speed afterimages — the self pilot leaves faint echoes at full
     // sprint so velocity reads at a glance (budget-capped, subtle alpha).
@@ -1431,24 +1453,26 @@ class ArenaScene extends Phaser.Scene {
   private drawForeground(mapId: MapId, time: number) {
     this.graphics.fillStyle(0x050708, 0.2);
     if (mapId === "canopy") {
-      this.graphics.fillRect(0, 545, 1000, 15);
+      // M29: ground band remapped to the 795..840 ground (bottom 15px).
+      this.graphics.fillRect(0, 825, WORLD.width, 15);
       this.graphics.lineStyle(2, 0x9cb6b7, 0.1);
-      for (let x = -40; x < 1000; x += 80) this.graphics.lineBetween(x + (time * 0.01) % 80, 540, x + 80 + (time * 0.01) % 80, 515);
+      for (let x = -40; x < WORLD.width; x += 80) this.graphics.lineBetween(x + (time * 0.01) % 80, 805, x + 80 + (time * 0.01) % 80, 780);
     } else if (mapId === "fortress") {
-      this.graphics.fillRect(0, 0, 12, 560);
-      this.graphics.fillRect(988, 0, 12, 560);
+      this.graphics.fillRect(0, 0, 12, WORLD.height);
+      this.graphics.fillRect(WORLD.width - 12, 0, 12, WORLD.height);
     } else {
       // M27b: the ground shadow ellipse is gone — every shadow in the game
       // comes from the real cast-shadow rig now. Only cosmetic steam remains.
+      // M29: vents remapped +265px onto the 795 ground line.
       for (const [ventX, phase] of [[120, 0], [470, 2.1], [880, 4.2]] as const) {
         const cycle = ((time * 0.001 + phase) % 6) / 6;
         if (cycle > 0.72) {
           const jet = Math.sin((cycle - 0.72) / 0.28 * Math.PI);
           this.graphics.fillStyle(0x8fa39b, 0.14 * jet);
-          this.graphics.fillEllipse(ventX + Math.sin(time * 0.003 + ventX) * 6, 470 - jet * 40, 26 + jet * 14, 60 + jet * 40);
+          this.graphics.fillEllipse(ventX + Math.sin(time * 0.003 + ventX) * 6, 735 - jet * 40, 26 + jet * 14, 60 + jet * 40);
         }
         this.graphics.fillStyle(0x39434a, 0.9);
-        this.graphics.fillRect(ventX - 9, 444, 18, 4);
+        this.graphics.fillRect(ventX - 9, 709, 18, 4);
       }
     }
   }

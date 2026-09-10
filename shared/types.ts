@@ -264,6 +264,12 @@ export type MapDef = {
   props: PropDef[];
   hazards: HazardDef[];
   movers: MoverDef[];
+  /**
+   * M29/M31 hostile mob spawn anchors (static map data, not in snapshots):
+   * wave spawners pick the anchor farthest from live players, then telegraph
+   * before the mob enters. y sits at foot height (platform surface − 4).
+   */
+  mobSpawns?: Array<{ x: number; y: number }>;
 };
 
 export type AttackDef = {

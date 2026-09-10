@@ -142,40 +142,45 @@ assert(WEAPONS.echo.primary.count === 2, "Echo Shard primary must volley two sha
 assert(WEAPONS.echo.primary.range <= WEAPONS.rifle.primary.range || WEAPONS.echo.secondary.range <= 1100, "Echo must not out-range the laser identity");
 assert(Object.keys(WEAPONS).length === 8, "Weapon count drifted — slots 1-8 expected");
 
-// M19 cover walls: exactly one solid platform per map, reachable hops, and no
-// overlap with crate sockets or spawn points.
+// M19/M29 cover walls: 2-4 solid platforms per map (canopy 2 / fortress 3 /
+// factory 3) breaking the long sightlines of the 1500px arena, each with
+// reachable hops and no overlap with crate sockets or spawn points.
 for (const map of Object.values(MAPS)) {
   const walls = map.platforms.filter((platform) => platform.solid);
-  assert(walls.length === 1, `${map.name} must have exactly one cover wall, found ${walls.length}`);
-  const wall = walls[0];
-  assert(!wall.oneWay, `${map.name} cover wall must not be one-way`);
-  for (const socket of map.crateSockets) {
-    const overlaps = socket.x > wall.x - 20 && socket.x < wall.x + wall.width + 20 && Math.abs(socket.y - wall.y) < wall.height + 24;
-    assert(!overlaps, `${map.name} cover wall overlaps crate socket ${socket.id}`);
-  }
-  for (const spawn of map.spawns) {
-    const overlaps = spawn.x > wall.x - 20 && spawn.x < wall.x + wall.width + 20 && spawn.y > wall.y - 40 && spawn.y < wall.y + wall.height + 10;
-    assert(!overlaps, `${map.name} cover wall overlaps a spawn point`);
-  }
-  // A pilot must be able to jump over or onto the wall from somewhere nearby:
-  // either it rests on a platform with a hop-able rise, or it is a free-
-  // standing pillar whose top is within NAV_MAX_RISE of an adjacent surface.
-  // Rest detection picks the HIGHEST spanning surface under the wall — the
-  // ground also spans every wall x-range and must not shadow the real shelf.
-  const rest = map.platforms
-    .filter((platform) => platform !== wall && platform.x <= wall.x && platform.x + platform.width >= wall.x + wall.width && platform.y >= wall.y + wall.height - 4 && !platform.solid)
-    .sort((a, b) => a.y - b.y)[0];
-  if (rest) {
-    const rise = rest.y - wall.y;
-    assert(rise <= 115, `${map.name} cover wall is ${rise}px tall — beyond the NAV_MAX_RISE hop budget`);
-  } else {
-    const stepping = map.platforms.find((platform) => {
-      if (platform === wall || platform.solid) return false;
-      if (platform.y < wall.y || platform.y - wall.y > 115) return false;
-      const gap = platform.x + platform.width <= wall.x ? wall.x - (platform.x + platform.width) : platform.x >= wall.x + wall.width ? platform.x - (wall.x + wall.width) : 0;
-      return gap <= 200;
-    });
-    assert(stepping, `${map.name} cover pillar has no reachable adjacent surface`);
+  assert(walls.length >= 2 && walls.length <= 4, `${map.name} must carry 2-4 cover walls, found ${walls.length}`);
+  for (const wall of walls) {
+    assert(!wall.oneWay, `${map.name} cover wall must not be one-way`);
+    for (const socket of map.crateSockets) {
+      // M29: walls may stand directly beside ground sockets (the crate leans
+      // against the wall face — a classic ambush spot); only true burial
+      // (socket center within 8px of the wall face) fails.
+      const overlaps = socket.x > wall.x - 8 && socket.x < wall.x + wall.width + 8 && Math.abs(socket.y - wall.y) < wall.height + 24;
+      assert(!overlaps, `${map.name} cover wall overlaps crate socket ${socket.id}`);
+    }
+    for (const spawn of map.spawns) {
+      const overlaps = spawn.x > wall.x - 20 && spawn.x < wall.x + wall.width + 20 && spawn.y > wall.y - 40 && spawn.y < wall.y + wall.height + 10;
+      assert(!overlaps, `${map.name} cover wall overlaps a spawn point`);
+    }
+    // A pilot must be able to jump over or onto the wall from somewhere nearby:
+    // either it rests on a platform with a hop-able rise, or it is a free-
+    // standing pillar whose top is within NAV_MAX_RISE of an adjacent surface.
+    // Rest detection picks the HIGHEST spanning surface under the wall — the
+    // ground also spans every wall x-range and must not shadow the real shelf.
+    const rest = map.platforms
+      .filter((platform) => platform !== wall && platform.x <= wall.x && platform.x + platform.width >= wall.x + wall.width && platform.y >= wall.y + wall.height - 4 && !platform.solid)
+      .sort((a, b) => a.y - b.y)[0];
+    if (rest) {
+      const rise = rest.y - wall.y;
+      assert(rise <= 115, `${map.name} cover wall is ${rise}px tall — beyond the NAV_MAX_RISE hop budget`);
+    } else {
+      const stepping = map.platforms.find((platform) => {
+        if (platform === wall || platform.solid) return false;
+        if (platform.y < wall.y || platform.y - wall.y > 115) return false;
+        const gap = platform.x + platform.width <= wall.x ? wall.x - (platform.x + platform.width) : platform.x >= wall.x + wall.width ? platform.x - (wall.x + wall.width) : 0;
+        return gap <= 200;
+      });
+      assert(stepping, `${map.name} cover pillar has no reachable adjacent surface`);
+    }
   }
 }
 
@@ -185,27 +190,30 @@ for (const map of Object.values(MAPS)) {
   assert(graph.nodes.length > 0, `${map.name} nav graph broke after adding cover walls`);
 }
 
-// M21 cliff guard: a grounded bot never steps toward a spot with no surface
-// below it. Canopy east island (780..1000, y=530): its west edge fronts the
-// 620..780 fall gap that repeatedly killed right-spawn bots. surfaceBelow's
-// ±6px x-tolerance puts the last standable probe at x≈774, so a bot standing
-// at x=788 probes 773 — void, vetoed; at x=790 it probes 775 — floor, safe.
+// M21 cliff guard (M29 geometry): a grounded bot never steps toward a spot
+// with no surface below it. Canopy mid island (630..950, y=795) fronts the
+// 420..630 and 950..1170 fall gaps; surfaceBelow's ±6px x-tolerance means a
+// bot standing 8px from a lip probes into the void (vetoed) while 20px from
+// the lip still probes floor (safe) for any probe distance in [15,16]px.
 const canopyPlatforms = MAPS.canopy.platforms;
-const eastFoot = 530 - 4; // PLAYER_FOOT_OFFSET
-const westLipFoot = 530 - 4;
-assert(stepOffLedge(canopyPlatforms, 788, eastFoot, -1, true, false), "Cliff guard failed to veto the fatal step off the east-island lip");
-assert(!stepOffLedge(canopyPlatforms, 800, eastFoot, -1, true, false), "Cliff guard vetoed a step that still has floor ahead");
-// Same island, safe direction (east, toward the world-clamped end): floor ahead.
-assert(!stepOffLedge(canopyPlatforms, 794, eastFoot, 1, true, false), "Cliff guard vetoed a step along solid ground");
-// Route-planned gap crossing is exempt — blocking it would freeze the bot.
-assert(!stepOffLedge(canopyPlatforms, 788, eastFoot, -1, true, true), "Cliff guard must not veto an armed gapJump");
-// Airborne bots are never vetoed (the guard is a walking seatbelt only).
-assert(!stepOffLedge(canopyPlatforms, 788, eastFoot, -1, false, false), "Cliff guard vetoed an airborne bot");
+const groundFoot = 795 - 4; // PLAYER_FOOT_OFFSET
+// West lip of the mid island: the fatal westward step off x=630 is vetoed…
+assert(stepOffLedge(canopyPlatforms, 638, groundFoot, -1, true, false), "Cliff guard failed to veto the fatal step off the mid-island west lip");
+assert(!stepOffLedge(canopyPlatforms, 650, groundFoot, -1, true, false), "Cliff guard vetoed a step that still has floor ahead");
+// …and the east lip (950) exactly the same way.
+assert(stepOffLedge(canopyPlatforms, 942, groundFoot, 1, true, false), "Cliff guard failed to veto the fatal step off the mid-island east lip");
+assert(!stepOffLedge(canopyPlatforms, 930, groundFoot, 1, true, false), "Cliff guard vetoed a step that still has floor ahead");
 // Mid-island standing ground: steps in both directions have floor.
-assert(!stepOffLedge(canopyPlatforms, 500, eastFoot, -1, true, false) && !stepOffLedge(canopyPlatforms, 500, eastFoot, 1, true, false), "Cliff guard vetoed steps on open ground");
-// West island ends at 280 with the 280..420 gap beyond — the fatal eastward
-// step off that lip is vetoed exactly like the east one.
-assert(stepOffLedge(MAPS.canopy.platforms, 274, westLipFoot, 1, true, false), "Cliff guard failed to veto the fatal step off the west-island lip");
+assert(!stepOffLedge(canopyPlatforms, 790, groundFoot, -1, true, false) && !stepOffLedge(canopyPlatforms, 790, groundFoot, 1, true, false), "Cliff guard vetoed steps on open ground");
+// Route-planned gap crossing is exempt — blocking it would freeze the bot.
+assert(!stepOffLedge(canopyPlatforms, 638, groundFoot, -1, true, true), "Cliff guard must not veto an armed gapJump");
+// Airborne bots are never vetoed (the guard is a walking seatbelt only).
+assert(!stepOffLedge(canopyPlatforms, 638, groundFoot, -1, false, false), "Cliff guard vetoed an airborne bot");
+// World edge: G-east ends flush with the x=1500 world bound — the +6px
+// surfaceBelow tolerance keeps the edge probe on the platform.
+assert(!stepOffLedge(canopyPlatforms, 1490, groundFoot, 1, true, false), "Cliff guard vetoed a step along the world-edge floor");
+// West island (0..420): the fatal eastward step off that lip is vetoed too.
+assert(stepOffLedge(canopyPlatforms, 412, groundFoot, 1, true, false), "Cliff guard failed to veto the fatal step off the west-island lip");
 
 // ---- M24: hit capsule + swept projectile geometry --------------------------
 import { MOVE_TUNING, NAV_MAX_RISE, PLAYER_CAPSULE, PLAYER_TARGET_OFFSET, WORLD, segmentHitsPlayer, segmentImpactPoint, segmentSegmentClosest } from "../shared/game.js";

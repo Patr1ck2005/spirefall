@@ -4,8 +4,13 @@
 import type { MatchConfig } from "./types.js";
 
 export const WORLD = {
-  width: 1000,
-  height: 560,
+  // M29: the arena grew to 1500×840 (×1.5 per axis) so a screen holds only
+  // ~44% of the map — the camera now follows the pilot instead of framing the
+  // whole arena. Vertical density does NOT scale with the world (jump apex
+  // 120px is WORLD-independent); the extra height became 2-3 more storeys per
+  // map. Fall/purge thresholds reference WORLD and scale automatically.
+  width: 1500,
+  height: 840,
   tickRate: 60,
   // M24: 20Hz snapshots put the rendered position up to ~100ms behind the
   // authoritative sim on a lerp-only client — a big part of "bullets miss".

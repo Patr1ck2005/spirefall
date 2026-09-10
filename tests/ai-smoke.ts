@@ -1,6 +1,7 @@
 // AI stability suite: bots must resolve matches on their own, fight, survive
 // the M15 layouts, and never lock up mid-charge. Run with `npm run test:ai`.
 import { WebSocket } from "ws";
+import { WORLD } from "../shared/game.js";
 
 const assert = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
 
@@ -224,9 +225,9 @@ async function cliffGuardPressure() {
         if (event.type === "death" && String(event.targetId || "").startsWith("bot") && !seenDeathIds.has(event.id)) {
           seenDeathIds.add(event.id);
           botDeaths++;
-          // Fall deaths are emitted at WORLD.height (560); shot deaths ride
-          // the victim's body position (<= ~545 on the ground islands).
-          if (event.y >= 555) fallDeaths++;
+          // Fall deaths are emitted at WORLD.height (840 since M29); shot
+          // deaths ride the victim's body position (≤ ~795 on the grounds).
+          if (event.y >= WORLD.height - 5) fallDeaths++;
           const tail = track.slice(-40);
           console.log(`  DEATH#${botDeaths} tick=${event.tick} y=${Math.round(event.y)} trail: ${tail.map((s) => `${s.t}:${s.x}${s.onGround ? "g" : "a"}`).join(" ")}`);
         }
