@@ -1,160 +1,260 @@
-# Weapon balance dossier (M20)
+# Spirefall 全武器伤害重计量 —— 阶段 1：平衡分析报告
 
-All numbers derive mechanically from `shared/game.ts` — regenerate the table
-with `npx tsx tests/tools/balance-table.ts` after any tuning change. This file
-is the audit trail; the WEAPONS table is the single tuning point.
+> 数值状态：M28（`shared/game.ts` 当前工作区）。
+> 本轮为**只读分析**：未改任何代码文件、未运行服务器/客户端/任何测试、未做任何 git 操作；本文档是本轮唯一写入的文件。
+> 数据来源：`shared/game.ts`（WEAPONS / PROP_TUNING / AMMO_REGEN_* / rangeFalloff / calculateLimbModifiers / MATCH_TIME_LIMIT_TICKS）、`server/server.ts`（damage / applyLimbDamage / attack / detonate / detonateProp / stepPlayer）、`tests/game-logic.ts`（受保护断言）。全部数字由源码手工推导，未重跑 `tests/tools/balance-table.ts`（该工具的 echo 口径问题见 P1 与附录 B）。
 
-## Method
+---
 
-- **Effective kill pool**: 400 limb points (4 limbs × 100) for kinetic hits;
-  200 explosive-equivalent (explosive damage splits ×0.5 across all four
-  limbs, so the pool a rocket must grind is 200/0.5 per-limb — TTK below uses
-  the effective 400-point pool for comparability).
-- **DPS** = damage × count × `rangeFalloff(distance, range)` ÷ cooldown.
-  Falloff is 1.0 until 60% of range, then linear to 0.6 at the cap (M19).
-- **TTK** = pool ÷ DPS. Charge attacks include the hold time instead (they
-  execute: ≥0.8 charge bypasses limbs).
-- **Tuning rule (M20)**: an attack whose mid-range TTK deviates more than ±25%
-  from the median mid-range TTK of all *direct-fire* attacks is a tuning
-  candidate; only `damage`/`range` may move — cooldowns and knockback are
-  frozen (feel-tuning constraint). Band edges (blade, scatter) and piercing
-  secondaries (line-shape multi-target weapons) are exempt from the rule but
-  documented.
+## 0. 一页摘要（供快速审批）
 
-## Mid-range TTK spread (direct-fire attacks, M20 tuning pass)
+| 武器 | 结论 | 提案改动（仅伤害/爆炸参数） | TTK 预期影响 | 一句话理由 |
+|---|---|---|---|---|
+| Vein Ripper (sidearm) | **微调** | PRI damage 11 → 10 | 爆发 TTK 3.3s → 3.6s；持续 6.1s → 6.7s | M27 上修 + M24 命中胶囊叠加后，起步枪 mid TTK 低于带下界 42%（P4）；−9% 单步回归 |
+| Breach Scatter (scatter) | **保持** | 无 | — | CQC 带缘身份（M20 记录在案）；PRI 弹药再生为正是特性而非缺陷（P-obs3） |
+| Longbeam (rifle) | **微调** | PRI damage 8 → 9 | mid TTK 6.0s → 5.3s；再生受限持续 8.3s → 7.4s | 单体持续全场最弱主力 + 与 sidearm 定位重叠（P5）；改后每发 9 仍 < sidearm 10 |
+| Voltrail (sniper) | **保持** | 无 | 满蓄处决 1 发 1 杀（≈0.9–1.1s） | **硬约束锚点**：全场最高单发威胁（104 + lethal 直杀）必须保留，当前已满足 |
+| Forge Rocket (rocket) | **保持** | 无 | 直击 4 发 3.6s | M28 刚按用户指令上修；桶带约束（64<66、104<112）锚定在此值上 |
+| Cutter Blade (blade) | **保持** | 无 | PRI 9 挥 2.8s | 高威胁短程硬约束 ✔（理论 DPS 全场第一、触及仅 ~82px）；带缘身份 |
+| Echo Shard (echo) | **待验证 → 条件微调** | 先核 P1 生成数；若"单枚"即现状，PRI damage 16 → 22 | 13.7s → 10.0s | 全场最弱（PRI 超带 +140%，SEC +84%，P3）；若阶段 2 修复双碎片生成则 16 保持即回带内 |
+| Pyre Vent (flame) | **上调** | PRI damage 6 → 8 | 持续 TTK 11.1s → 8.3s（−25%）；爆发理论 3.0s → 2.3s | 再生饥饿（持续/爆发比 0.27 全场最低，P2）；冷却与弹药参数冻结下唯一可行杆是伤害 |
+| 爆炸桶 PROP_TUNING | **保持** | 无 | — | `< rocket` 带约束（64<66、104<112）保持成立；hp 30 不动 |
 
-Median mid-range TTK: **5.7s** → acceptance band **[4.3s, 7.1s]**.
+**全局不动项**：所有攻击冷却（§6 冻结）、所有射程、所有击退值（M20 冻结）、AMMO_REGEN_*（共享常量）、机关伤害/周期（§6 冻结）。
+**风险面**：全部改动为纯 damage 数值，最多 4 处；每处均低于 ±33%，且附 game-logic 断言更新清单（§3.4），无协议/行为改动。
 
-| Attack | Mid TTK | Verdict |
+---
+
+## 1. 当前数值矩阵
+
+### 1.0 共享机制与口径（读矩阵前必读）
+
+**伤害路由（server.ts `damage()`）**
+- 普通（非爆炸）命中：伤害落在**单条肢体**（按命中几何点 `selectLimbAtPoint` 选肢）。每肢 100 hp；打在已断肢体或头顶区（|dx|<4 且 −34<dy<−8）的伤害**随机转移到存活肢体**（无 stump 免伤）。**四肢全部归零 → bleed-out 死亡**。
+- 爆炸命中（`explosive: true`）：伤害 **×0.5 打满四肢**（`for LIMB_IDS: amount*0.5`），同样检查四肢全毁。
+- `lethal: true`（Voltrail 满蓄 c≥0.8）：**无视肢体直接击杀**。
+- 击退：`vx += 远离源方向 × force`；`vy -= force×0.42`（上抛）。击退不随距离衰减。
+- 出生/重生无敌 1.5s/1.4s（不计入 TTK）。
+
+**rangeFalloff（shared 层，只乘伤害）**：射程 60% 以内全额；60%→100% 线性降至 **0.6×**；超上限钳 0.6（弹丸类在硬上限处直接消散/空爆，故超限无命中）。命中越远伤害越低，击退不衰减。
+
+**弹药再生（AMMO_REGEN_PER_SECOND=6，间隔 10 tick）**：**仅补充当前手持武器**，每 10 tick +1 发。判定式：弹药消耗速率 = `ammoCost × 触发频率`；>6/s 的攻击会被再生钳制，稳态射速 = 6 发弹药/s。箱子拾取把该枪补满；维修舱（~25% 概率）恢复四肢。
+
+**TTK 两个模型（本报告全部 TTK 均标明口径）**
+- **单肢模型（动能类）**：`TTK = (400 / (D × f)) × 周期`。D=单发伤害，f=rangeFalloff，400=四肢总池；周期=冷却（蓄力武器=蓄力时间+冷却）。命中按几何落单肢、断肢转移，总池 400 基本无浪费（末肢过量除外，如 blade 46 伤末肢最多浪费 45 点）。
+- **爆炸溅射模型**：每发对四肢各打 `0.5 × D × f`（径向溅射时 f 再乘 0.7 核心→0.2 边缘）。**发数 `n = 100/(0.5·D·f) = 200/(D·f)`**，`TTK = n × 冷却`。
+- **处决口径**（Voltrail 满蓄）：1 发 1 杀，TTK = 蓄力时间（≥0.88s 达 lethal 阈值）。
+
+### 1.1 横向总览（mid = 60% 射程，falloff=1.0；爆发=满命中理论值；持续=弹药再生感知值）
+
+| 排名 | 攻击 | 单发伤害 | 冷却 DPS | 持续 DPS | 爆发 TTK | 持续 TTK | 备注 |
+|---|---|---|---|---|---|---|---|
+| 1 | Blade PRI slash | 46 | 143.8 | 143.8（无弹药） | **2.8s** | 2.8s | 带缘（近战身份） |
+| 2 | Flame PRI 喷射 | 6 | 133.3 | **36.0**（再生受限） | 3.0s | **11.1s** | 满弹窗口仅 4.5s |
+| 3 | Scatter PRI 8 弹丸 | 11×8 | 129.4 | 129.4（再生为正） | **3.1s** | 3.1s | 带缘（CQC 身份） |
+| 4 | Scatter SEC 双弹丸 | 5×2 | 125.0 | **60.0**（再生受限） | 3.2s | 6.7s | — |
+| 5 | Sidearm PRI | 11 | 122.2 | **66.0**（再生受限） | **3.3s** | 6.1s | 低于带下界（P4） |
+| 6 | Sidearm SEC 6 连爆 | 12×6 | 84.7（全中） | 84.7（无限） | 4.7s | 4.7s | 现实 2–4 弹命中：9.5–14s |
+| 7 | Rocket PRI（爆炸口径） | 66 | 73.3（池口径） | 73.3（无限） | **2.7s（池）/ 3.6s（直击）** | 3.6s | 爆炸模型见 §1.7 |
+| 8 | Rocket SEC 3 连簇 | 34×3 | 68.0（池，全中） | 68.0（无限） | 2.9s（全中） | 现实单枚 9.0s | — |
+| 9 | Sniper PRI 最小蓄 | 56（c=0.25） | 67.9 | 67.9（无限） | 5.9s | 5.9s | 满蓄=处决 1 发 1 杀 |
+| 10 | Beam PRI | 8 | 66.7 | **48.0**（再生受限） | 6.0s | **8.3s** | 多目标+零散布补偿 |
+| 11 | Blade SEC 突刺 | 74 | 74.0 | 74.0（无弹药） | 5.4s | 5.4s | 击退 520=坠杀工具 |
+| 12 | Sniper SEC | 44 | 51.8 | 51.8（无限） | 7.7s | 7.7s | 穿刺+位移豁免 |
+| 13 | Lance SEC | 48 | 50.5 | 50.5（无限） | 7.9s | 7.9s | 线形多目标豁免 |
+| 14 | Flame SEC 8 弾爆燃 | 9×8 | 45.0（全中） | 45.0（可持续） | 8.9s | 8.9s | 170px 内 |
+| 15 | Echo SEC 重碎片 | 42 | 38.2 | 38.2（无限） | **10.5s** | 10.5s | 超带 +84% |
+| 16 | Echo PRI 碎片 | 16 | **29.1（实际 1 枚）** | 29.1（无限） | **13.7s** | 13.7s | **超带 +140%（P1/P3）**；蓝图口径 58.2 / 6.9s |
+
+### 1.2 Vein Ripper（sidearm，弹药 90，金色）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI single hitscan | 11（384px 内全额；640px 处 6.6） | 122.2 / 66.0（11.1 发/s > 6 再生 → 再生受限） | **3.3s**（持续 6.1s）；单肢 10 发/0.9s | 640；≤384 全额 → 640 线性 0.6× | hitscan，随机锥 ±1.3°（400px 处 ±9px）——最易命中之一 | 55（轻） | 全自动 0.09s；recoil 8 |
+| SEC burst×6 hitscan | 12/弹（420px 内全额） | 84.7（全中）/ 84.7（1.18 弹药/s，无限） | 全中 4.7s；**现实 2–4 弹命中 9.5–14s** | 700；≤420 全额 → 0.6× | hitscan，固定扇 ±10°（0.07 rad 步进）：300px 处仅内侧 2 弹入胶囊（±11px） | 95/弹 | 一组 6 发齐洒（close-range shredder） |
+
+### 1.3 Breach Scatter（scatter，弹药 32，青白）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI pellet×8 弹丸 | 11/丸 | 129.4（全中）/ **129.4（消耗 1.47 发/s ≪ 6 再生 → 弹药再生为正，无限连喷）** | 全中贴脸 **3.1s**；200px 处约 3–5 丸命中 → 4.9–8.2s | **400 硬上限**（超限消散 surface:false）；≤240 全额 | 弹速 780、固定扇 ±7.5°、弹径 4：200px 处扇宽 ±26px vs 胶囊 22px → 约半数命中；720 下坠（200px 落 ~24px） | 95/丸（贴脸 8 丸 = 760 冲击） | recoil 85（自推） |
+| SEC "Blaze Vent" pellet×2 | 5/弹 | 125.0（全中）/ **60.0（12.5 弹药/s > 6 → 32 发 2.6s 喷空后再生受限）** | 全中 3.2s；持续 6.7s | **260 硬上限**；≤156 全额 | 弹速 560、两弹间距 19.5°、720 下坠（200px 落 ~46px）——纯贴脸工具 | 30/弹 | 0.08s 自动连发（双动泵） |
+
+### 1.4 Longbeam（rifle，弹药 90，绿）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI beam hitscan | 8/tick | 66.7 / **48.0（8.33 发/s > 6 → 90 发=10.8s 连射后再生受限）** | **6.0s**（持续 8.3s；95% 射程 855px 处 9.2s） | **900（激光身份）**；≤540 全额 → 900 处 0.6×；被 solid 墙截断 | hitscan **零散布**、光速——全场最容易命中的远距攻击，但每 tick 仅 8 伤 | 22（几乎无位移） | **beam=无限穿透**：一线所有目标各吃 8 伤/tick；散热缝视觉 |
+| SEC "Lance Pulse" piercing | 48 | 50.5 / 50.5（3.16 弹药/s < 6 → 无限） | **7.9s** | 950；≤570 全额 | hitscan 零散布射线 | **320**（≈1× 极速推离） | pierce 3：一线最多 4 目标各 48；ammoCost 3 |
+
+### 1.5 Voltrail（sniper，弹药 6，品红）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI charge piercing | **40×(1+1.6c)**：c=0.25→56；c=1→**104** | 最小蓄 67.9 / 满蓄 63.0（按 1.1+0.55 周期） | 最小蓄磨血 5.9s；**c≥0.8（蓄 0.88s）→ lethal 处决：1 发 1 杀 ≈0.9–1.1s** | **1400×(1+0.25c)**：满蓄 1750（跨全图 1000px 宽）；≤60% 全额 | hitscan；难度在**蓄力期暴露**（头顶蓄力条+枪口聚能光全员可见），释放本身零散布 | 210×(1+1.6c)：满蓄 546 | **chargeMax 1.1s / chargeMin 0.25**；pierce 3（满蓄一线最多 4 人处决）；弹药 6 名义上少但 0.6 发/s ≪ 再生 6 → 无限 |
+| SEC piercing | 44 | 51.8 / 51.8（1.18 弹药/s → 无限） | **7.7s** | 1050；≤630 全额 | hitscan 零散布，无需蓄力——快速狙击选项 | 260 | pierce 1（最多 2 目标）；蓄力枪的"速射档" |
+
+### 1.6 无（Echo Shard 见 §1.8）
+
+### 1.7 Forge Rocket（rocket，弹药 5，橙）
+
+**爆炸溅射模型 TTK（计算式）**：直接命中 = 每发对四肢各 `0.5×66×f_travel`；纯溅射 = 每发对四肢各 `0.5×66×f_radial`（f_radial：核心 0.7 → 边缘 0.2）。
+
+| 攻击 | 单发肢体伤害 | DPS / TTK（爆炸模型） | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|
+| PRI explosive 直击 | **33/肢 ×4 肢**（540px 内 travel 全额） | n = 100/33 = 3.03 → **4 发 = 3.6s**（池口径 200/73.3 = 2.7s） | **900 硬上限=空爆**（超限仍有溅射）；≤540 全额 | 弹速 520、720 下坠（260px 落 ~90px，300px 落 ~183px）、弹径 7 + **爆径 112**——直击难、溅射极易 | 320×径向衰减 | **对自己无溅射伤害**（owner 豁免）；撞墙/桶即爆；对桶溅射 0.5×66=33 ≥ hp30 → **即爆桶** |
+| PRI 纯溅射（未直击） | 核心 23.1/肢 → 边缘 6.6/肢 | 核心 **5 发=4.5s**；中段（f=0.45）7 发=6.3s；边缘 **16 发=14.4s** | 爆径 112 圈内 | — | — | 空爆同样结算溅射 |
+| SEC cluster×3 | 17/肢×4（每枚直击） | 三枚全直击 51/肢 → **2 组=3.0s**；现实 1 枚命中 17/肢 → 6 组=9.0s（池口径全中 2.9s） | **640 空爆**；爆径 84 | 弹速 420、枚间 ±0.14 rad（300px 处外枚偏离 ±42px vs 胶囊 22px → 常 1–2 枚命中）、下坠 ~183px@300px | 320/枚×径向 | ammoCost 2；对桶 17/枚（两枚爆一桶） |
+
+弹药：PRI 1.11 发/s、SEC 1.33 发/s，均 < 再生 6 → **无限**（弹匣 5 名义值只影响连射上限节奏）。
+
+### 1.8 Echo Shard（echo，弹药 48，蓝）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI bounce | 16 | **29.1（实际）**：`attack()` 生成循环 `count = pellet‖cluster ? count : 1`（server.ts:645）→ **每次扣扳机只生成 1 枚**，尽管蓝图 `count:2`（双碎片齐射）/ 58.2（蓝图口径） | **13.7s（实际）/ 6.9s（蓝图口径）** | **900 硬上限含全部反弹路程**；≤540 全额 | 弹速 620、720 下坠（400px 落 ~150px）、弹径 4；反弹几何要求地形理解 | 70 | **bounces 3**（撞平台法线反射）；无 echo 专属生成逻辑（已 grep 确认，见 P1） |
+| SEC bounce 重碎片 | 42 | 38.2 / 38.2（1.8 弹药/s → 无限） | **10.5s** | **1100 硬上限（含反弹）**；≤660 全额 | 弹速 560、弹径 5 | **300** | **bounces 5**；ammoCost 2；绕掩体银行投篮定位 |
+
+### 1.9 Cutter Blade（blade，弹药 999——无弹药约束，银）
+
+| 攻击 | 单发肢体伤害 | DPS（无弹药限制） | TTK（单肢模型） | 有效触及 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI slash | 46 | **143.8（全场第一）** | **2.8s（9 挥；末肢最多浪费 45 点过量）** | 枪口前 12px 起 70px 弧段 → **总触及 ~82px** | 近战挥砍线段（胶囊扫掠几何）；recoil 65 自推 | **270** | 挥砍弧同时斩桶（damageProp） |
+| SEC dashSlash | 74 | 74.0 | **5.4s（6 突）** | 突进 92px + 130px 弧 → 起手总触及 ~142px | 突进后必接挥砍；dashSpeed 560 | **520（=1.5× 极速 + 上抛 vy −218，坠崖处决工具）** | recoil 110；闪光灯级光效 |
+
+### 1.10 Pyre Vent（flame，弹药 100，火焰橙）
+
+| 攻击 | 单发肢体伤害 | DPS（冷却/持续） | TTK | 有效射程 | 命中难度 | 击退 | 特殊机制 |
+|---|---|---|---|---|---|---|---|
+| PRI 喷射 single | 6 | 133.3 / **36.0（22.2 发/s ≫ 6 再生 → 100 发 4.5s 喷空，之后再生钳制 6 发/s）** | 理论 3.0s（仅满弹 4.5s 窗口内可达）；**持续 11.1s（现实口径）** | **230 硬上限（全场最短）**；≤138 全额 | 弹速 430、弹径 6（粗）、随机锥 ±4.3°、**浮力 −190 上飘**（150px 处反升 ~12px）——极易连上 | 18（几乎无） | **点桶即燃**（0.8s 引信 cook-off，走同 detonateProp 路径）；弹着不削桶血 |
+| SEC 爆燃 pellet×8 | 9/弹 | 45.0（全中）/ 45.0（5 弹药/s < 6 → 可持续） | 全中 8.9s | **170**；≤102 全额 | 弹速 340、扇 28.6°——纯贴脸 panic | 60 | ammoCost 8；火焰弹道上飘 |
+
+### 1.11 爆炸桶 PROP_TUNING（环境伤害源，非武器）
+
+- hp **30**｜爆伤 **64**（溅射径向 0.7→0.2，玩家侧 explosive 模型：核心 **22.4/肢** → 5 次桶爆致死）｜爆径 **104**｜击退 360｜重生 6–10s。
+- 带约束（受断言保护）：damage 64 < rocket 66 ✔、blast 104 < 112 ✔（game-logic L265-266）。
+- 引爆成本：sidearm 3 发（0.27s）／scatter PRI 1 组／Lance 1 发／blade 1 挥／flame 直接触发点燃／rocket 溅射即爆。
+- 链式：**桶爆把邻近桶点燃**（0.45–0.8s 逐桶引信），rocket 溅射则直接削桶血（0.5×）；桶不挡弹不挡人。
+
+### 1.12 机关参考（§6 冻结，不在调整范围）
+
+blastCrusher limbDamage 72／forgePiston 84（0.5s 内置免伤窗，30 tick）；致命窗（lethal phase）直接击杀。输送带/货梯无伤害。
+
+### 1.13 重算中位带（M20 规则 × M28 数值）
+
+M20 档案的中位带表已过期（M27/M28 全表 +8~25% 后未重算）。按同规则重算（直接火力、非豁免、mid 全中口径）：
+
+非豁免集合 mid TTK：{flame PRI 3.0（爆发口径），sidearm PRI 3.3，sidearm SEC 4.7，blade SEC 5.4，beam 6.0，flame SEC 8.9，echo SEC 10.5，echo PRI 13.7（实际）} → **median 5.7s，带 [4.3s, 7.1s]**（与 M20 巧合一致）。
+
+| 攻击 | mid TTK | 判定 |
 |---|---|---|
-| Vein Ripper PRI | 4.0s | in band (fast baseline) |
-| Vein Ripper SEC | 5.7s | in band (median itself) |
-| Breach Scatter PRI | 3.8s | in band (CQC extreme) |
-| Breach Scatter SEC | 4.0s | in band (flame vent) |
-| Forge Rocket PRI | 3.9s | in band |
-| Forge Rocket SEC | 4.0s | in band |
-| Cutter Blade PRI | 3.4s | band edge (melee identity) |
-| Cutter Blade SEC | 6.7s | in band |
-| Echo Shard PRI | 8.5s | **tuned**: 11.0s → 8.5s (dmg 10→13) |
-| Echo Shard SEC | 12.9s | **tuned**: 16.9s → 12.9s (dmg 26→34) |
+| sidearm PRI | 3.3s | **超下界 −42%**（M20 时为 4.0s"快速基线"，M27 上修后进一步越界） |
+| scatter SEC | 3.2s | 超下界 −44%（但持续口径 6.7s 在带内——双口径见 P-obs2） |
+| flame PRI | 3.0s 爆发 / **11.1s 持续** | 爆发口径失真（弹窗 4.5s）；持续口径 **超上界 +95%**（P2） |
+| sidearm SEC | 4.7s（全中） | 带内（现实口径超带，扇形散布所致） |
+| blade SEC | 5.4s | 带内 |
+| beam PRI | 6.0s | 带内（再生受限 8.3s 略超，多目标豁免记录） |
+| flame SEC | 8.9s | **超上界 +56%**（170px 全中口径；现实更低） |
+| echo SEC | 10.5s | **超上界 +84%**（M20 已记录"反弹税"豁免先例，M27 已从 12.9s 改善） |
+| echo PRI | 13.7s（实际） | **超上界 +140%**（P1/P3；蓝图口径 6.9s 在带内） |
 
-Exempt / documented:
+豁免（带缘/身份）：blade PRI 2.8s（近战带缘）、scatter PRI 3.1s（CQC 带缘）、sniper PRI（处决口径独立）、sniper SEC 7.7s 与 Lance 7.9s（线形多目标+位移豁免）、rocket/cluster（爆炸口径单列）。
 
-| Attack | Mid TTK | Why exempt |
+---
+
+## 2. 问题清单（引用矩阵数据）
+
+**P1（代码级发现，最高优先）Echo PRI 蓝图双碎片 vs 服务器单枚生成 —— 2× 数值偏差**
+蓝图（game-logic L141 断言 `echo.primary.count === 2`）与 M20 档案（"PRI 双碎片齐射 13×2"）均为 2 枚，但 `attack()` 生成循环 `count = def.pattern === "pellet" || def.pattern === "cluster" ? def.count : 1`（server.ts:645）对 bounce 模式固定生成 **1 枚**；已 grep 全服务器确认无 echo 专属生成逻辑。后果：实际 DPS 29.1 / TTK 13.7s，而 M20 档案与 balance-table 均按 58.2 / 6.9s 记录——**档案系统性高估 echo 一倍**。阶段 2 必须二选一：①修复生成（恢复双碎片，行为改动非数值）；②承认单枚为现状并按此调数值（§3.1 已备条件提案）。本阶段未改任何代码。
+
+**P2 Pyre Vent 再生饥饿——喷火枪是全场持续火力最差的"持续武器"**
+flame PRI 消耗 22.2 发/s ≫ 再生 6 发/s：满弹 100 发仅支撑 4.5s（理论 TTK 3.0s 只在窗口内成立），此后被钳制到 36 DPS、持续 TTK 11.1s（超带 +95%）。持续/爆发比 **0.27 为全场最低**（sidearm 0.54、rifle 0.72、scatter SEC 0.48）——"持续压制"身份被共享再生素量反向压制。冷却（0.045s）与弹药参数均冻结，唯一合规杆是 damage（§3.1 提案 3）。
+
+**P3 Echo Shard 整枪最弱**
+实际口径 PRI 13.7s（+140%）、SEC 10.5s（+84%）双双大幅超带；M20 实测记录 bot 对局中 echo **从未被使用**（crate-starvation），即无人局外验证。SEC 尚有 5 反弹/1100 射程的银行投篮价值可背书超带，PRI 连超带税的玩法理由都依赖 P1 的裁断。
+
+**P4 起步枪 sidearm PRI 越过带下界**
+M27 把 9→11、M24 胶囊把命中率整体上抬（+~38% 命中面积），两轮增益叠加未重算带：mid TTK 3.3s，低于 4.3s 下界 42%。起步枪的中位 TTK 现在与 blade PRI（2.8s 带缘）同档，强于多数主武器的全中口径。
+
+**P5 Longbeam PRI 与 sidearm PRI 定位重叠且全面吃亏**
+beam：66.7 DPS（持续 48）、TTK 6.0/8.3s、射程 900；sidearm：122.2 DPS（持续 66）、TTK 3.3/6.1s、射程 640。640px 内 sidearm 各口径全面碾压；beam 的补偿（零散布、+40% 射程、无限多目标、kb 22 的"不推离"连射特性）不足以覆盖 −45% 的 DPS 差。rifle 的爆发价值实际全部在 SEC Lance（48 伤/320 击退/穿刺）上。
+
+**P6 M20 平衡档案与工具口径过期**
+① §1.13：M27/M28 后中位带未重算（本报告已重算，带值巧合未变但成员判定全变）；② balance-table 的 `ammoDps` 公式单位错误（`cd + ammoCost × 10` 把 10 tick 当 10 秒，悲观 60×；该值未进输出表所以未污染历史档案，但属工具卫生问题）；③ balance-table 对 echo 按 `count` 字段算 DPS（P1 的帮凶）。阶段 2 改动后应修口径再重生成。
+
+**记录性观察（不提案，仅供后续机制轮参考）**
+- **P-obs1 击退二极分化**：blade SEC 520／rifle SEC 320／rocket 320 vs beam 22／flame 18。击退是坠杀机制（坠落即 loseLife），高击退武器的"间接 TTK"远低于伤害 TTK（blade SEC 520 一推即崖）。击退在 M20 冻结清单内，本阶段不动。
+- **P-obs2 弹药再生为正的武器**：scatter PRI（1.47/s）、rocket 双攻击（1.11/1.33/s）、echo 双攻击（1.8/s）、sniper 双攻击（≤0.6/s）、sidearm SEC、rifle SEC、flame SEC——弹药池名存实亡，"找箱补弹"对这些枪无意义；受再生约束的只有 sidearm PRI、scatter SEC、rifle PRI、flame PRI 四个。这是 M15"持续火力 viable"设计的系统性结果，属特性记录。
+- **P-obs3 四肢伤分布偏腿**：hitscan 的 hitY 恒为 `target.y − 14`（server.ts:639）、melee 挥砍线与平射弹丸的最近点同样落在 localY=−14 → `selectLimbAtPoint` 判 **100% 断腿**；手臂惩罚（cooldown/recoil/spread ×1.35/0.3/0.3）几乎只被抛物弹（rocket/火焰上飘）触发，腿惩罚（爬行 ×0.4）由最常见伤害源独占。属 `selectLimbAtPoint`/hitY 取点问题，非伤害数值可修，记录备查。
+- **P-obs4 Voltrail 处决**是全场唯一直杀通道（0.88s 蓄 + 1400/1750 射程 + 一线 4 人），符合"最高单发威胁"硬约束；其 SEC（44/无蓄力）与 PRI 最小蓄（56）差距小，蓄力机制存在感完全依赖 lethal 阈值——保持现状，观察人类实测。
+
+---
+
+## 3. 提案数字表（阶段 2 执行清单）
+
+**硬约束（全部满足）**：只调 damage 与爆炸类参数；冷却与机关周期不动 ✔；桶 PROP_TUNING 保持 < rocket（64<66、104<112，本提案不动 rocket 故恒成立）✔；sniper 保持全场最高单发威胁（104 + lethal 处决，不动）✔；blade 保持高威胁短程（46/0.32s、触及 82px，不动）✔。射程、击退、AMMO_REGEN、ammoCost 全部不动 → 相应断言（range 表、M15 下限、cooldown 冻结）零波纹。
+
+### 3.1 变更表（4 处 damage）
+
+| # | 武器.攻击 | 参数 | 现值 → 提案 | TTK 预期影响（mid 口径） | 理由 |
+|---|---|---|---|---|---|
+| 1 | sidearm PRI | damage | 11 → **10** | 爆发 3.3s → 3.6s；再生受限持续 6.1s → 6.7s（DPS 66→60） | P4：M27 上修与 M24 命中增益叠加后越下界 42%；−9% 单步微调回归（仍保持"快速基线"定位，M20 先例即接受基线略低于带） |
+| 2 | rifle PRI（beam） | damage | 8 → **9** | mid 6.0s → 5.3s；再生受限持续 8.3s → 7.4s（DPS 48→54）；多目标线伤 8→9/tick | P5：单体持续全场最弱主力、与 sidearm 重叠；+12.5% 后每发 9 仍 < sidearm 10 < 全部秒伤型单发，激光"低伤高命中"身份不变 |
+| 3 | flame PRI | damage | 6 → **8** | 持续 TTK **11.1s → 8.3s**（DPS 36→48，−25%）；爆发理论 3.0s → 2.3s（仅满弹 4.5s 窗口） | P2：再生饥饿的唯一直接补偿杆（cd/ammo/regen 均冻结）；+33% 高于 ±25% 微调带，由 burst/sustained 3× 异常辩护；桶点燃按 weaponId 判定，**不受伤害数值影响** |
+| 4 | echo PRI | damage | 16 → **22**（**仅当 P1 裁断为"单枚即现状"**；若阶段 2 修复双碎片生成则保持 16） | 单枚 TTK 13.7s → 10.0s（DPS 29.1→40） | P1/P3：超带 +140% 不可交付；10.0s = 带上界 +41%，沿用 M20"反弹税"豁免先例的量级；若双碎片修复则蓝图口径 6.9s 自动回带内，无需动数值 |
+
+### 3.2 保持表（逐枪核对硬约束）
+
+| 武器.攻击 | 保持值 | 理由（矩阵引用） |
 |---|---|---|
-| Longbeam PRI (beam) | 8.0s | continuous hitscan — real uptime is higher than burst DPS math (no travel, no ammo swings); range identity 900 |
-| Longbeam SEC | 10.0s | piercing line: the 38 dmg hits every target on the line (pierce 3), multi-target value |
-| Voltrail SEC | 9.7s | piercing, knockback 260 — displacement utility |
-| Voltrail PRI (charged) | 1.18s incl. 1.1s charge | full charge ≥0.8 is an execution; the charge IS the cost |
-| Echo Shard (post-tune) | 8.5s / 12.9s | remaining 19% over band is the ricochet tax: banked shards double-hit around cover, which the direct-fire TTK deliberately does not model. Accepted deviation, recorded here. |
+| sidearm SEC 12 | 爆发 4.7s 带内；现实口径弱是 6 弹扇形的几何代价，属 hitscan burst 身份 | §1.2 |
+| scatter PRI 11 | CQC 带缘身份（M20 记录）；现实命中随距离衰减（200px 处 4.9–8.2s）提供天然平衡 | §1.3 |
+| scatter SEC 5 | 理论口径带内；与 PRI 的角色重叠靠射程/弹数差（400/8 vs 260/2）维持，伤害上调只会加剧重叠 | §1.3 |
+| rifle SEC Lance 48 | 线形多目标+320 击退位移价值，M20 豁免先例 | §1.4 |
+| sniper PRI 40×(1+1.6c) / SEC 44 | **硬约束锚点**：满蓄 104 + lethal 处决=全场最高单发威胁；SEC 是无蓄力快档 | §1.5 |
+| rocket PRI 66 / 爆径 112；SEC 34×3 / 爆径 84 | M28 用户指令刚上修；**桶带锚**（64<66、104<112）与 game-logic L276/L286 断言依赖现值；直接 4 发 3.6s 的真实磨血口径健康 | §1.7 |
+| blade PRI 46 / SEC 74 | **硬约束**：高威胁短程（理论 DPS 第一、触及 82px/142px）；带缘近战身份 | §1.9 |
+| echo SEC 42 | 5 反弹/1100 射程的绕后价值背书超带税（M20 先例）；M27 已从 12.9s 改善至 10.5s | §1.8 |
+| flame SEC 9 | 贴脸 panic 定位、弹药可持续；PRI 已获得本次上修 | §1.10 |
+| PROP_TUNING 64 / 104 / 360 / hp30 | 带约束保持 + M28 定稿值；hp 30 非"伤害/爆炸参数"，不动 | §1.11 |
 
-## Full DPS / TTK table (generated)
+### 3.3 明确不动清单
 
-DPS at near = 30% range, mid = 60% range, far = 95% range.
+全部 cooldown（§6 冻结；game-logic L284 有冻结断言）；全部 range（非伤害/爆炸参数；L125-133 射程断言零波纹）；全部 knockback（M20 冻结惯例；P-obs1 记录在案）；AMMO_REGEN_PER_SECOND/INTERVAL（共享常量，牵一发动全身）；机关 limbDamage/periodTicks（§6 机关冻结）；弹药池上限 ammo 字段。
 
-| Attack | Def | Near DPS | Mid DPS | Far DPS | Mid TTK | Far TTK |
-|---|---|---|---|---|---|---|
-| Vein Ripper PRI | single cd:0.09s dmg:9×1 rng:640 | 100 | 100 | 65 | 4.0s | 6.2s |
-| Vein Ripper SEC | burst cd:0.85s dmg:10×6 rng:700 | 71 | 71 | 46 | 5.7s | 8.7s |
-| Breach Scatter PRI | pellet cd:0.68s dmg:9×8 rng:400 | 106 | 106 | 69 | 3.8s | 5.8s |
-| Breach Scatter SEC | pellet cd:0.08s dmg:4×2 rng:260 | 100 | 100 | 65 | 4.0s | 6.2s |
-| Longbeam PRI | beam cd:0.12s dmg:6×1 rng:900 | 50 | 50 | 33 | 8.0s | 12.3s |
-| Longbeam SEC | piercing cd:0.95s dmg:38×1 rng:950 ammo:3 | 40 | 40 | 26 | 10.0s | 15.4s |
-| Voltrail PRI (charged) | piercing cd:0.55s dmg:32×1 rng:1400 | 58 | 58 | 38 | 1.18s incl. charge | 1.18s incl. charge |
-| Voltrail SEC | piercing cd:0.85s dmg:35×1 rng:1050 | 41 | 41 | 27 | 9.7s | 14.9s |
-| Forge Rocket PRI | single explosive cd:0.9s dmg:46×1 rng:900 | 51 | 51 | 33 | 3.9s | 6.0s |
-| Forge Rocket SEC | cluster cd:1.5s dmg:25×3 rng:640 ammo:2 | 50 | 50 | 33 | 4.0s | 6.2s |
-| Cutter Blade PRI | slash cd:0.32s dmg:38×1 rng:70 | 119 | 119 | 77 | 3.4s | 5.2s |
-| Cutter Blade SEC | dashSlash cd:1s dmg:60×1 rng:130 | 60 | 60 | 39 | 6.7s | 10.3s |
-| Echo Shard PRI | bounce cd:0.55s dmg:13×2 rng:900 bounces:3 | 47 | 47 | 31 | 8.5s | 13.0s |
-| Echo Shard SEC | bounce cd:1.1s dmg:34×1 rng:1100 bounces:5 ammo:2 | 31 | 31 | 20 | 12.9s | 19.9s |
+### 3.4 阶段 2 测试断言影响清单（tests/game-logic.ts，仅列出、本阶段未动）
 
-## Range integrity checks (M19 table, re-verified M20)
-
-- Hard caps all enforced server-side (`travelled >= range` kills the round;
-  rockets air-burst, everything else fizzles with a `surface:false` impact).
-- Laser identity holds: Longbeam 900 / Voltrail 1400 (charged ≈1750) remain
-  the two longest reaches; Echo secondary 1100 slots between them as the
-  ricochet tool, not a longer laser.
-- No attack exceeds the map diagonal (≈1140 horizontal): charged Voltrail can
-  cross the full spire width — that is the intended execution identity.
-
-## Tuning log
-
-| Change | Before → After | Rationale |
+| 断言 | 行 | 受影响的提案 |
 |---|---|---|
-| Echo Shard PRI damage | 10 → 13 | mid TTK 11.0s was 93% over the band median rule (limit 7.1s); damage-only move per tuning rule |
-| Echo Shard SEC damage | 26 → 34 | mid TTK 16.9s; damage-only move brings it to 12.9s, residual over-band accepted as ricochet tax (see exempt table) |
+| `sidearm.primary.damage === 11` | L272 | 提案 1（→10） |
+| `rifle.primary.damage === 8` | L274 | 提案 2（→9） |
+| `echo.primary.damage === 16` | L278 | 提案 4（视 P1 裁断 →22 或保持） |
+| `flame.primary.damage === 6` | L281 | 提案 3（→8） |
+| `echo.primary.count === 2` | L141 | P1 若走"修复生成"路线则断言无需动；若走数值路线建议补一条"单枚生成"行为断言防再漂移 |
+| M15 下限（sidearm≥7 / scatter≥9 / rifle≥6 / sniper≥32 / rocket≥46 / blade≥38） | L85-90 | 全部提案仍满足 ✔ |
+| cooldown 冻结断言（sidearm 0.09 / rocket 0.9 / blade SEC 1.0） | L284 | 无提案触及 ✔ |
+| 桶带断言（64<66、104<112、hp≤40） | L265-268、L286-287 | 无提案触及 ✔ |
+| 射程断言全套 | L125-133、L140 | 无提案触及 ✔ |
 
-## Measured bot-match data (server `/stats`, M20)
+---
 
-The authoritative server tallies per-weapon shots/hits/damage/kills during
-matches (match mode only); `GET /stats` aggregates live rooms. Harness:
-`npx tsx tests/tools/balance-harness.ts [map] [lives] [bots] [skill] [echo]`.
-Accuracy counts per damage event, so volley weapons exceed 100% (each scatter
-shot is 8 pellets on one trigger pull).
+## 附录 A：TTK 计算式与算例
 
-Fortress, 3 brutal bots, 3 lives (96s, resolved):
+- **单肢模型**（动能）：`TTK = (400 / (D×f)) × 周期`。算例 sidearm PRI：400/(11×1.0)×0.09 = **3.27s**；blade PRI：400/46×0.32 = 2.78s（9 挥，末肢过量浪费 ≤45 点）。
+- **爆炸溅射模型**：`n = 100/(0.5×D×f) = 200/(D×f)`，`TTK = n×冷却`。算例 rocket PRI 直击（f_travel=1）：n = 200/66 = 3.03 → **4 发**（第 3 发后四肢各剩 1 点）× 0.9s = **3.6s**；纯溅射核心（f=0.7）：n = 200/46.2 = 4.33 → 5 发 = 4.5s；边缘（f=0.2）：n = 15.2 → 16 发 = 14.4s。桶爆（D=64，核 22.4/肢）：n = 4.46 → 5 桶。
+- **处决口径**：Voltrail c≥0.8 → lethal 直杀，TTK = 蓄力 0.88–1.1s；非致命磨血（c=0.25，56 伤/0.825s 周期）= 5.9s。
+- 距离修正：所有 mid 值取 60% 射程（falloff=1.0）；95% 射程处 f=0.65（如 beam far 9.2s、sidearm far 5.0s）。
 
-| weapon | shots | hits | acc | damage | kills | dmg/shot |
-|---|---|---|---|---|---|---|
-| scatter | 77 | 163 | 212% | 1462 | 2 | 19.0 |
-| blade | 23 | 13 | 57% | 626 | 1 | 27.2 |
-| sidearm | 122 | 59 | 48% | 532 | 0 | 4.4 |
-| rifle | 1 | 0 | 0% | 0 | 0 | 0.0 |
+## 附录 B：既有实测数据摘录（历史基线，未重跑）
 
-Canopy, 3 standard bots, echo-only set (153s, resolved): bots held sidearm
-throughout (705 shots, 3 kills) — **crate-starvation observation**: the sidearm
-never runs dry (90 rounds + regen), and non-dry bots only divert to crates
-within 260px (M19 behavior), so crate-only weapons see no bot play unless a
-socket happens to sit on a bot's path. Known behavior, not Echo-specific:
-band scores for echo are configured and apply the moment a crate is grabbed.
+以下为 docs/BALANCE.md 旧版（M20/M24 轮）记录的 balance-harness bot 对局数据。**注意：全部产生于 M27/M28 伤害上修之前**（sidearm 9、scatter 9、blade 38 时代），dmg/shot 不能与 §1 矩阵直接对比，仅作命中率/行为参考：
 
-Crate-starved guns (rocket/sniper/echo secondaries) therefore get their human
-playtest data from sandbox/multiplayer, not bot FFA — noted for the next
-balance pass.
+- Fortress 3 brutal bots（M20）：scatter dmg/shot 19.0、blade 27.2、sidearm 4.4、rifle 0。
+- M24 胶囊复验（Fortress 27s / Canopy 39s）：scatter dmg/shot 11.5–13.2、blade 20.9、sidearm 2.2–3.1——命中率上升但 bot 预判未适配新移速。
+- **Echo 在全部 bot 局中从未被拾取**（crate-starvation，M20 记录）：echo 的人类实测数据缺口至今未补，P3 的裁断建议以沙盒/人对局为准。
 
-## M24 hit-capsule re-verification (no tuning moves)
+## 附录 C：本报告方法论声明
 
-The M24 hit model replaced the chest circle with a swept vertical capsule
-(+~38% body area) and raised movement speed ~3×. Both changes shift real
-accuracy, so the harness was re-run before deciding on any damage move:
-
-Fortress, 3 brutal bots, 1 life (27s, resolved):
-| weapon | shots | hits | acc% | damage | kills | dmg/shot |
-|---|---|---|---|---|---|---|
-| scatter | 191 | 248 | 130% | 2199 | 2 | 11.5 |
-| blade | 26 | 12 | 46% | 544 | 2 | 20.9 |
-| sidearm | 107 | 36 | 34% | 330 | 0 | 3.1 |
-| rifle | 6 | 5 | 83% | 62 | 0 | 10.3 |
-
-Canopy, 3 brutal bots, 1 life (39s, resolved):
-| weapon | shots | hits | acc% | damage | kills | dmg/shot |
-|---|---|---|---|---|---|---|
-| scatter | 250 | 375 | 150% | 3307 | 7 | 13.2 |
-| sidearm | 86 | 20 | 23% | 187 | 0 | 2.2 |
-| blade | 6 | 1 | 17% | 38 | 0 | 6.3 |
-
-Read: scatter remains the documented CQC band edge; blade holds its melee
-identity; sidearm's bot accuracy dip is a bot-lead artifact (bot aim leads
-assume the old slower targets — bots need retuning, not the weapon). All
-direct-fire weapons still sit inside the M20 band; the M20 table above is
-therefore re-certified unchanged. Next tuning decision waits for HUMAN
-playtest data at the new movement speed (bot proxies are stale for feel).
-
-## M25 explosive barrels (environment damage source)
-
-Barrels add a damage source outside the weapon table, so they get their own
-band entry against the M20 rules:
-
-- **Damage 32** < rocket primary 46 — strictly inside the band.
-- **Blast radius 70** < rocket explosiveRadius 88 — strictly inside.
-- Falloff 0.7×→0.2× (identical math to `detonate`), knockback 280 (< rocket 300).
-- HP 30 ≈ one scatter volley or two sidearm bursts; the shooter trades ammo
-  for the blast, and the blast can hit the shooter too (self-danger caps value).
-- Respawn 6-10s mirrors crate cadence; barrels never block movement or sight
-  (all ballistics/cover promises from M19 unchanged).
-- Attacker attribution flows through the normal kill feed (last damager).
-- Constants asserted in tests/game-logic.ts (band check + placement checks);
-  ai-smoke asserts barrels actually detonate in live bot matches (455 events
-  across 3 FFA matches on the certification run).
+1. 全部数值由三份源文件（shared/game.ts、server/server.ts、tests/game-logic.ts）直接推导，未运行任何程序；建议阶段 2 改动后运行 `npx tsx tests/tools/balance-table.ts` 复核——但须先修 P6 的 echo count 口径（按实际生成数计算）。
+2. 口径延续 M20 档案（kill pool 400/爆炸等效 200、DPS×falloff 三档、±25% 中位带），保证与历史决策可对比。
+3. 阶段 2 落地时：每处 damage 改动同步更新 §3.4 所列断言；echo 双碎片问题（P1）需在数值改动**之前**裁断，因为它决定提案 4 是否执行。
