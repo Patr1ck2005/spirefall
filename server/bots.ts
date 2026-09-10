@@ -19,7 +19,7 @@ import {
   type WeaponId,
 } from "../shared/game.js";
 import { randomInt } from "node:crypto";
-import type { Room } from "./server.js";
+import type { Room } from "./state.js";
 import { stepOffLedge } from "./bot-motion.js";
 
 const randomBetween = (min: number, max: number) => randomInt(min, max + 1);

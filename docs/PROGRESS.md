@@ -556,12 +556,29 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 - **测试钩子**：`window.__spireSelf`（自我渲染坐标，探针精确定位裁剪——此前盲试裁剪浪费大量轮次）。
 - 回归：tsc/build/logic（M28 桶/rocket 数值断言更新）/network/browser/visual 全绿；bench FULL 162 / ADD 164 / 关 170（全栈 7.8 FPS）；barrel-left-probe 目检（桶对称加高、朝左 sidearm 枪身/枪口/LED 全部正确镜像）
 - **性能门禁负载告警**：M28 收尾时 performance 三连跑 28.9/34.5/37.5 FPS 均失败——机器外部 node 进程达 60 个（历史已知假失败阈值 20+ 的 3 倍），同窗 ai-smoke 全绿、light-bench 顶 162-170 上限，判定为环境性假失败；**待机器安静时复测 45 FPS 门禁**
-**状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
+**状态**：已提交 `baf86d0`（用户批准）。
+
+### M28.5 结构重构 + M29-M35 备料（2026-09，DSH/glm-5.3-flash）
+
+用户发起："单文件是不是太长了？是不是要整个项目重新整理？"——行数数据确认（main.ts 1891 / server.ts 1258 / game.ts 946 为三大热点），且 M29-M35 大扩充（大地图/群怪/分队/道具/解析线影/平衡）会在同一批文件上再堆 ~2500 行，重构提前到扩充之前。专用里程碑、纯搬家、零行为变更；并确立后续规则：**每个新子系统必须开新模块，文件只减不增**。
+
+- **shared/game.ts → 契约包**：`constants.ts`（数值常量）/ `types.ts`（实体与协议类型，纯类型零运行时）/ `util.ts`（弹道扫掠几何+肢体模型）/ `weapons.ts`（WEAPONS 表）/ `maps/{canopy,fortress,factory}.ts`（**每图独立文件**——M29 重排时每图只动自己的文件）/ `maps/index.ts`（MAPS 注册表）/ `sim.ts`（机关/移动平台/导航图/makePlayer）；`game.ts` 降级为 re-export barrel，全部既有 `import ... from "shared/game.js"` 不变
+- **server/server.ts → 模拟模块**：`state.ts`（Client/Room 类型 + rooms 表 + emitEvent/send/snapshot 纯状态助手，叶子）/ `sim/damage.ts`（damage/loseLife/isEliminated/detonateProp/damageProp）/ `sim/players.ts`（移动物理/resolveSolids/attack/stepPlayer）/ `sim/projectiles.ts`（bounceProjectile+弹道步进）/ `sim/world.ts`（箱/桶/机关）/ `sim/tick.ts`（updateRoom 编排+终局判定）/ `room.ts`（房间生命周期）；`server.ts` 只留 HTTP/WS/静态托管/消息分发/tick 驱动（1322→156 行）；`bots.ts` 的 Room 类型导入改指 state.ts。依赖方向单向无环：room/world/projectiles/players → damage → state
+- **src/main.ts → 壳层三件**：`session.ts`（会话状态/visualPrefs/RENDER_SCALE/ArenaSceneLike 接口）/ `net.ts`（连接与发送，DOM 依赖回调注入）/ `ui.ts`（HTML 骨架+大厅/结算 DOM+全部监听+消息分发，`initShell(ArenaScene)` 单点接线）；main.ts 保留 ArenaScene 本体（1891→1406）
+- **Scene 暂不再细拆的决策**：draw*/processEvents 方法群与 M29 镜头跟随强耦合（镜头滚动后每个 draw 调用都要加视口偏移）——现在拆成自由函数、M29 又逐个改镜头感知是双倍返工；Scene 细拆并入 M29 第一步
+- **pwsh 编码陷阱（运维铁律）**：本机 `pwsh` 实为 Windows PowerShell 5.1——`Get-Content` 默认按 GBK 解码无 BOM UTF-8、`Set-Content` 无 utf8NoBOM 枚举。文本读写必须显式 `-Encoding UTF8` + `[System.IO.File]::WriteAllText`（UTF8Encoding($false)）；本次手术中招一次（Scene 注释乱码入盘），git checkout 恢复后重做
+- **并行支线备料完成**（三条后台 subagent，只写文档零代码冲突）：
+  - `docs/BALANCE.md`（M35 阶段 1）：8 枪 DPS/TTK/射程/命中难度矩阵 + 4 处伤害提案（sidearm 11→10 / rifle 8→9 / flame 6→8 / echo 16→22 条件）；**P1 代码级发现：Echo PRI bounce 模式不读 count，蓝图双碎片实际单发，档案 DPS 高估一倍——阶段 2 实装前须先裁断"修生成"还是"按单枚调数值"**
+  - `docs/DESIGN_MOBS_ITEMS_GEARS.md`（M31/M32/M33 视觉规格）：3 种工业害兽（Skitter Saw/Ion Gnat Swarm/Ram Hauler）、反光盾衍射 7 束谱色扇束（红 0xff3b47→紫 0x9a5cff，0 级束保入射色，±6°/±12°/±18°）、巨型齿轮平台（辐条=成对 OccluderRect 零 lighting 改动得旋转影；GEAR-B 与活塞冲突已给出新坐标裁决）
+  - `docs/MAP_LAYOUT_1500.md`（M29 布局草案）：1500×840 三图全量平台/出生点/箱位/桶/机关/刷怪点 + 跳跃可达性逐边验算（垂直不随 ×1.5 缩放：apex 120px 与 WORLD 无关，多出高度转化为每图 +2~3 层）+ M33 双齿轮预留位（GEAR-A (465,795) / GEAR-B (1035,795)）
+- 回归：tsc/build/logic/network/browser/visual 全绿；**performance 47.8 FPS / p95 29.5ms**（安静机器）；ai-smoke 后台运行中（结果见提交前记录）
+- **状态**：待用户批准提交（Origin trailer 提交前确认）
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）
-- ~~不引入 AI 机器人~~ **2026-08-23 用户解除该排除项**：机器人作为房主可控的补位/陪练加入（沙盒+对战），三档难度；其余排除项不变（无账号、匹配、队伍、移动端、观战、公网托管）
+- ~~不引入 AI 机器人~~ **2026-08-23 用户解除该排除项**：机器人作为房主可控的补位/陪练加入（沙盒+对战），三档难度；其余排除项不变（无账号、匹配、移动端、观战、公网托管）
+- ~~队伍~~ **2026-09 用户主动需求解除**：M30 将实装 2–4 队分队模式（此前"无队伍"为排除项，用户在大扩充计划中明确要求分队，排除项作废）
 - 攻击冷却和机关周期在手感调参时保持不变
 - 密钥不发聊天；不提交密钥
 - ~~界面英文~~ **2026-09 用户改为**：界面默认中文、可一键切换英文（M24 i18n 落地，武器名保留英文专有名词）

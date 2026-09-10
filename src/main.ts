@@ -1,3 +1,5 @@
+// M28.5 结构拆分：ArenaScene 本体。壳层 DOM/大厅/设置在 ui.ts，网络在 net.ts，
+// 会话状态与视觉偏好在 session.ts；本文件只保留场景（渲染/特效/HUD/输入预测）。
 import Phaser from "phaser";
 import { sfx } from "./audio";
 import {
@@ -14,16 +16,11 @@ import {
   type CombatEvent,
   type LimbId,
   type MapId,
-  type MatchConfig,
   type PlayerState,
   type ServerSnapshot,
-  type WeaponId,
 } from "../shared/game";
 import {
-  ARCHETYPES,
-  MAP_COPY,
   MUZZLE_OFFSET,
-  PLAYER_HEX,
   colorCss,
   drawCrate,
   drawEnvironment,
@@ -32,30 +29,14 @@ import {
   drawPlayer,
   drawProjectile,
   drawProp,
-  mixColor,
 } from "./art";
+import { i18n } from "./i18n";
 import { LightingSystem, type OccluderRect } from "./lighting";
 import { buildAllPlates, type PlateSet } from "./sceneplate";
 import { installPosterPipeline } from "./posterlight";
-import { portraitDataUrl } from "./portrait";
-import "./style.css";
-import { i18n, type I18nKey } from "./i18n";
-
-// M24 render scale: the game canvas renders at 1.3× the world resolution and
-// the camera zooms to match, so every sprite, gun and platform draws 30%
-// larger with no physics, collision or balance change. The visible world
-// stays exactly 1000×560. Drop this to 1.25/1.2 if low-end GPUs dip under
-// the performance floor — it is the single tuning point.
-const RENDER_SCALE = 1.3;
-
-type RoomMessage = {
-  code: string;
-  hostId: string;
-  phase: ServerSnapshot["phase"];
-  mode: ServerSnapshot["mode"];
-  players: Array<{ id: string; name: string; connected: boolean; color: number; archetype: 0 | 1 | 2 | 3; isBot?: boolean }>;
-  config: MatchConfig;
-};
+import { $, escapeHtml, initShell } from "./ui";
+import { RENDER_SCALE, session, visualPrefs } from "./session";
+import { send } from "./net";
 
 type FxParticle = {
   x: number;
@@ -76,427 +57,10 @@ type Tracer = { x1: number; y1: number; x2: number; y2: number; life: number; co
 type Ring = { x: number; y: number; life: number; maxLife: number; radius: number; color: number; width: number; grow?: number; double?: boolean };
 type Hitstop = { remaining: number; scale: number };
 
-const app = document.querySelector<HTMLDivElement>("#app")!;
-const weaponOptions = Object.values(WEAPONS).map((weapon, index) => `
-  <label class="weapon-option" style="--weapon:${colorCss(weapon.color)}">
-    <input type="checkbox" name="weapon" value="${weapon.id}" checked />
-    <span class="weapon-index">0${index + 1}</span>
-    <i></i>
-    <span>${weapon.label}</span>
-  </label>`).join("");
-
-// M24: the shell is built once and retranslated in place via [data-i18n] so
-// the language toggle never needs a page reload mid-session.
-app.innerHTML = `
-  <div class="app-backdrop" aria-hidden="true"><div></div><i></i><i></i><i></i></div>
-  <section class="shell">
-    <header class="command-bar">
-      <div class="brand"><span class="brand-mark"><i></i><b>S</b></span><div><p data-i18n="brandTag">BRUTAL ARENA SYSTEM</p><h1>Spirefall</h1></div></div>
-      <div class="command-meta"><span id="status" class="status" data-i18n="statusOffline">OFFLINE</span><button id="lang-toggle" class="icon-command" title="语言 / Language">EN</button><button id="settings-button" class="icon-command" title="Visual settings" aria-expanded="false">FX</button></div>
-      <div id="visual-settings" class="visual-settings hidden">
-        <p class="eyebrow" data-i18n="settingsTitle">Audio &amp; visual</p>
-        <label class="toggle"><input id="sound-toggle" type="checkbox" checked /><span></span> <i data-i18n="soundToggle" style="font-style:normal">Sound</i></label>
-        <label class="range"><span data-i18n="volume">Volume</span><input id="sound-volume" type="range" min="0" max="100" value="80" /></label>
-        <label class="toggle"><input id="gore-toggle" type="checkbox" checked /><span></span> <i data-i18n="goreToggle" style="font-style:normal">Gore</i></label>
-        <label class="toggle"><input id="shake-toggle" type="checkbox" checked /><span></span> <i data-i18n="shakeToggle" style="font-style:normal">Camera shake</i></label>
-        <label class="toggle"><input id="digits-toggle" type="checkbox" checked /><span></span> <i data-i18n="digitsToggle" style="font-style:normal">Damage numbers</i></label>
-        <label class="toggle"><input id="lighting-toggle" type="checkbox" checked /><span></span> <i data-i18n="lightsToggle" style="font-style:normal">Dynamic lighting</i></label>
-      </div>
-    </header>
-
-    <main>
-      <section id="menu" class="menu-screen">
-        <div class="menu-intro"><p class="kicker" data-i18n="kicker">NETWORK COMBAT / 01-04 PILOTS</p><h2><span data-i18n="menuTitleA">ENTER THE</span><br><span data-i18n="menuTitleB">SPIRE</span></h2><p data-i18n="menuIntro">Every sector is still alive. Every machine is hostile.</p><div class="signal-line"><i></i><span data-i18n="signalReady">SERVER-LINK READY</span></div></div>
-        <div class="access-console">
-          <div class="console-head"><span data-i18n="consoleHead">ACCESS NODE 07</span><small data-i18n="consoleSmall">ENCRYPTED LAN</small></div>
-          <label class="field" for="name"><span data-i18n="callsign">Pilot callsign</span><input id="name" maxlength="16" value="Player" autocomplete="off" /></label>
-          <button id="create" class="primary wide" data-i18n="createRoom">Create room</button>
-          <div class="join-divider"><span data-i18n="joinDivider">JOIN ACTIVE SPIRE</span></div>
-          <div class="join-row"><input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" aria-label="Room code" /><button id="join" data-i18n="join">Join</button></div>
-          <p id="error" class="error" role="alert"></p>
-          <div class="control-strip"><span data-i18n="controlsMove">A/D MOVE</span><span data-i18n="controlsJump">W JUMP</span><span data-i18n="controlsPrimary">J PRIMARY</span><span data-i18n="controlsSecondary">K SECONDARY</span></div>
-        </div>
-      </section>
-
-      <section id="lobby" class="lobby-screen hidden">
-        <div class="lobby-header"><div><p class="eyebrow" data-i18n="activeSpire">Active spire</p><div class="room-code"><strong id="room-label">------</strong><button id="copy-code" data-i18n="copy">Copy</button></div></div><div class="lobby-state"><i></i><span data-i18n="privateSession">PRIVATE LAN SESSION</span></div></div>
-        <div class="lobby-console">
-          <section class="roster-column"><div class="section-title"><span>01</span><div><p data-i18n="section01">DEPLOYMENT</p><h3 data-i18n="roster">Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
-          <section class="map-column"><div class="section-title"><span>02</span><div><p data-i18n="section02">LOCATION</p><h3 data-i18n="sectorFeed">Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
-          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
-        </div>
-        <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p data-i18n="section04">ARMORY</p><h3 data-i18n="loadout">Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
-        <div class="lobby-actions"><div><button id="start" class="primary" data-i18n="startMatch">Start match</button><button id="solo-test" data-i18n="soloTest">Solo test</button></div><button id="leave" class="quiet" data-i18n="leaveSpire">Leave spire</button></div>
-      </section>
-
-      <div id="game-wrap" class="game-wrap hidden">
-        <div id="game"></div>
-        <div class="game-hud">
-          <div class="hud-top"><div><span id="hud-room"></span><small id="hud-sector"></small></div><div id="hud-phase" class="hud-phase"></div><div id="hud-roster" class="hud-roster"></div></div>
-          <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
-          <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
-          <div id="weapon-panel" class="weapon-panel hidden"></div>
-          <button id="in-match-leave" class="quiet hud-leave" data-i18n="exitMatch">Exit match</button>
-        </div>
-        <div id="vignette" class="vignette" aria-hidden="true"></div>
-        <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn" data-i18n="sandboxRespawn">Test respawn</button><button id="sandbox-return" data-i18n="sandboxReturn">Return to lobby</button></div>
-        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow" data-i18n="resultEyebrow">Spire resolved</p><h2 id="winner"></h2><p id="result-subtitle">ONE PILOT REMAINS</p><div><button id="restart" class="primary" data-i18n="returnLobby">Return to lobby</button><button id="result-leave" data-i18n="leaveSpire">Leave spire</button></div></div>
-      </div>
-    </main>
-  </section>`;
-
-/** Re-apply the current language to every statically tagged element. */
 const patternZh: Record<string, string> = {
   single: "单发", burst: "连发", pellet: "散射", piercing: "穿透", cluster: "集束",
   slash: "挥砍", dashSlash: "突刺", beam: "光束", bounce: "弹射",
 };
-
-function applyI18n() {
-  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
-    element.textContent = i18n.t(element.dataset.i18n as I18nKey);
-  });
-  $("lang-toggle").textContent = i18n.lang() === "zh" ? "EN" : "中";
-  // The callsign field swaps only while it still holds a known default.
-  const nameInput = $<HTMLInputElement>("name");
-  if (nameInput.value === "Player" || nameInput.value === "机师") nameInput.value = i18n.lang() === "zh" ? "机师" : "Player";
-}
-
-const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const status = $("status");
-const menu = $("menu");
-const lobby = $("lobby");
-const gameWrap = $("game-wrap");
-const errorText = $("error");
-
-$("lang-toggle").addEventListener("click", () => {
-  i18n.setLang(i18n.lang() === "zh" ? "en" : "zh");
-  applyI18n();
-  // Retranslate everything that is rebuilt from code on demand.
-  if (currentRoom) {
-    renderPlayers(currentRoom);
-    updateMapVisual(currentRoom.config.mapId);
-  }
-  scene?.refreshLocalizedViews();
-});
-applyI18n();
-let socket: WebSocket | undefined;
-let selfId = "";
-let token = "";
-let roomCode = "";
-let currentRoom: RoomMessage | undefined;
-let scene: ArenaScene | undefined;
-let gameInstance: Phaser.Game | undefined;
-let manualConnectionAction = false;
-let resumeAttempted = false;
-let lastRosterKey = "";
-// M26: every slot gets a procedural poster portrait (data URL, no assets).
-const availablePortraits = new Set<number>([0, 1, 2, 3]);
-
-const savedVisuals = JSON.parse(localStorage.getItem("spirefall-visuals") || "null");
-const visualPrefs = { gore: savedVisuals?.gore !== false, shake: savedVisuals?.shake !== false, digits: savedVisuals?.digits !== false, lighting: savedVisuals?.lighting !== false };
-$<HTMLInputElement>("gore-toggle").checked = visualPrefs.gore;
-$<HTMLInputElement>("shake-toggle").checked = visualPrefs.shake;
-$<HTMLInputElement>("digits-toggle").checked = visualPrefs.digits;
-$<HTMLInputElement>("lighting-toggle").checked = visualPrefs.lighting;
-const audioPrefs = sfx.getPrefs();
-$<HTMLInputElement>("sound-toggle").checked = !audioPrefs.muted;
-$<HTMLInputElement>("sound-volume").value = String(Math.round(audioPrefs.volume * 100));
-
-// WebSocket endpoint resolution (M23 single-port hosting):
-// - vite dev (port 5173): the server runs separately on :8787.
-// - Same-port hosting (server serves dist/ on :8787) or a tunnel: the page
-//   and the WebSocket share the origin, so connect to the page's own host.
-const isViteDev = location.port === "5173";
-const endpoint = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "localhost"}${isViteDev ? ":8787" : location.port ? `:${location.port}` : ""}`;
-
-function setStatus(text: string, tone = "") {
-  status.textContent = text;
-  status.className = `status ${tone}`;
-}
-
-function showError(text: string) {
-  errorText.textContent = text;
-}
-
-function connect() {
-  if (socket && socket.readyState <= WebSocket.OPEN) return socket;
-  socket = new WebSocket(endpoint);
-  socket.onopen = () => {
-    setStatus(i18n.t("statusLinked"), "good");
-    if (!resumeAttempted && !manualConnectionAction) {
-      resumeAttempted = true;
-      const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
-      if (saved?.roomCode && saved?.token && saved?.selfId) {
-        socket!.send(JSON.stringify({ type: "join", roomCode: saved.roomCode, name: $<HTMLInputElement>("name").value, token: saved.token, playerId: saved.selfId }));
-      }
-    }
-  };
-  socket.onclose = () => setStatus(i18n.t("statusLost"), "bad");
-  socket.onerror = () => showError(i18n.t("errServerNoAnswer"));
-  socket.onmessage = (event) => handleMessage(JSON.parse(event.data));
-  return socket;
-}
-
-function send(type: string, payload: Record<string, unknown> = {}) {
-  const ws = connect();
-  const run = () => ws.send(JSON.stringify({ type, ...payload }));
-  if (ws.readyState === WebSocket.OPEN) run();
-  else ws.addEventListener("open", run, { once: true });
-}
-
-const humanCountOf = (players: Array<{ isBot?: boolean }>) => players.filter((player) => !player.isBot).length;
-
-function enterLobby(room: RoomMessage) {
-  // Fresh room: drop processed-event ids from any previous room (event ids
-  // restart at 1 per room and would be wrongly treated as duplicates).
-  if (room.code !== currentRoom?.code) scene?.clearProcessedEvents();
-  currentRoom = room;
-  menu.classList.add("hidden");
-  if (room.phase === "lobby") {
-    lobby.classList.remove("hidden");
-    gameWrap.classList.add("hidden");
-    $("result").classList.add("hidden");
-    $("sandbox-actions").classList.add("hidden");
-    const rosterKey = room.players.map((player) => player.id).join(",");
-    if (lastRosterKey && rosterKey !== lastRosterKey) {
-      const before = new Set(lastRosterKey.split(","));
-      const after = new Set(room.players.map((player) => player.id));
-      const joined = [...after].some((id) => !before.has(id));
-      sfx.ui(joined ? "ui:join" : "ui:leave");
-    }
-    lastRosterKey = rosterKey;
-  }
-  $("room-label").textContent = room.code;
-  $<HTMLSelectElement>("map").value = room.config.mapId;
-  $<HTMLSelectElement>("lives").value = String(room.config.lives);
-  $<HTMLInputElement>("crates").checked = room.config.crates;
-  $<HTMLSelectElement>("bots").value = String(room.config.bots);
-  $<HTMLSelectElement>("bot-skill").value = room.config.botSkill;
-  updateMapVisual(room.config.mapId);
-  const isHost = selfId === room.hostId;
-  for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
-  for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
-    input.checked = room.config.weaponSet.includes(input.value as WeaponId);
-    input.disabled = !isHost;
-  }
-  renderPlayers(room);
-  const humans = humanCountOf(room.players);
-  $<HTMLButtonElement>("start").disabled = !isHost || room.players.length < 2;
-  $<HTMLButtonElement>("solo-test").disabled = !isHost || humans !== 1;
-}
-
-function renderPlayers(room: RoomMessage) {
-  const slots = Array.from({ length: 4 }, (_, index) => {
-    const player = room.players[index];
-    const archetype = ARCHETYPES[player?.archetype ?? index];
-    const portraitStyle = availablePortraits.has(player?.archetype ?? index) ? ` style="background-image:url('${portraitDataUrl(player?.archetype ?? index)}')"` : "";
-    if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>${i18n.t("openSlot")}</strong><small>${archetype.name}</small></div><em>${i18n.t("waiting")}</em></div>`;
-    const accent = colorCss(player.color);
-    const statusKey = player.id === room.hostId ? "statusHost" : player.isBot ? "statusBot" : player.connected ? "statusReady" : "statusReconnect";
-    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${i18n.t(statusKey)}</em></div>`;
-  });
-  $("players").innerHTML = slots.join("");
-  $("lobby-note").textContent = room.players.length >= 2
-    ? i18n.t("lobbyLinked", { n: room.players.length })
-    : i18n.t("lobbyTransmit");
-}
-
-function updateMapVisual(mapId: MapId) {
-  // M24: map copy is localized inline — the English sector titles stay as
-  // flavor prefixes so both languages keep the console identity.
-  const zhCopy: Record<MapId, { index: string; title: string; brief: string }> = {
-    canopy: { index: "扇区 01", title: "王冠", brief: "货运电梯漂浮在风暴线上方。" },
-    fortress: { index: "扇区 02", title: "堡垒", brief: "装甲闸门守卫着防御脊线。" },
-    factory: { index: "扇区 03", title: "锻造厂", brief: "装配线将零件送入底部的熔炉。" },
-  };
-  const copy = i18n.lang() === "zh" ? zhCopy[mapId] : MAP_COPY[mapId];
-  $("map-visual").dataset.map = mapId;
-  $("map-index").textContent = copy.index;
-  $("map-title").textContent = copy.title;
-  $("map-brief").textContent = copy.brief;
-}
-
-function handleMessage(message: any) {
-  if (message.type === "error") return showError(i18n.serverError(message.message));
-  if (message.type === "room") {
-    if (message.token) {
-      token = message.token;
-      selfId = message.selfId || selfId;
-      roomCode = message.room.code;
-      localStorage.setItem("spirefall-session", JSON.stringify({ token, selfId, roomCode }));
-    }
-    if (message.room) {
-      enterLobby(message.room);
-      if (message.room.phase !== "lobby") showGame();
-    }
-  }
-  if (message.type === "snapshot") {
-    // Test hook: playwright suites preset window.__spireEvents = [] to observe
-    // the combat event stream; the client ignores it otherwise.
-    const hook = (window as unknown as { __spireEvents?: CombatEvent[] }).__spireEvents;
-    if (Array.isArray(hook)) {
-      hook.push(...message.snapshot.events);
-      if (hook.length > 600) hook.splice(0, hook.length - 600);
-    }
-    // Test hook: headless browsers drop synthesized weapon-slot keypresses
-    // non-deterministically, so suites can drive switches directly through
-    // window.__spireSlot (consumed and cleared here, one slot per snapshot).
-    const slotHook = window as unknown as { __spireSlot?: number };
-    if (typeof slotHook.__spireSlot === "number" && scene) {
-      scene.sendInput(slotHook.__spireSlot);
-      slotHook.__spireSlot = undefined;
-    }
-    showGame();
-    scene?.applySnapshot(message.snapshot);
-  }
-}
-
-function showGame() {
-  lobby.classList.add("hidden");
-  gameWrap.classList.remove("hidden");
-  if (!scene && !gameInstance) {
-    gameInstance = new Phaser.Game({
-      type: Phaser.AUTO,
-      parent: "game",
-      // M24: render at RENDER_SCALE × world size; the camera zoom (set in
-      // create()) maps the visible area back to the full 1000×560 world.
-      width: Math.round(WORLD.width * RENDER_SCALE),
-      height: Math.round(WORLD.height * RENDER_SCALE),
-      backgroundColor: "#080b0d",
-      // M26: the poster light pipeline compiles its uniform array from
-      // maxLights — must match POINT_POOL in lighting.ts. M27: 20 so rocket
-      // / flame / shard trails get their own point lights.
-      render: { antialias: true, pixelArt: false, maxLights: 20 },
-      scene: [ArenaScene],
-      scale: { mode: Phaser.Scale.NONE },
-    });
-  }
-}
-
-function escapeHtml(value: string) {
-  return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]!));
-}
-
-$("create").addEventListener("click", () => {
-  manualConnectionAction = true;
-  showError("");
-  sfx.ui("ui:click");
-  send("create", { name: $<HTMLInputElement>("name").value });
-});
-$("join").addEventListener("click", () => {
-  manualConnectionAction = true;
-  showError("");
-  sfx.ui("ui:click");
-  const saved = JSON.parse(localStorage.getItem("spirefall-session") || "null");
-  const requestedCode = $<HTMLInputElement>("room-code").value.trim();
-  send("join", { roomCode: requestedCode, name: $<HTMLInputElement>("name").value, token: saved?.roomCode === requestedCode ? saved.token : undefined, playerId: saved?.roomCode === requestedCode ? saved.selfId : undefined });
-});
-const clickAnd = (handler: () => void) => () => { sfx.ui("ui:click"); handler(); };
-$("start").addEventListener("click", clickAnd(() => send("start")));
-$("solo-test").addEventListener("click", clickAnd(() => send("start_sandbox")));
-$("restart").addEventListener("click", clickAnd(() => send("restart")));
-$("sandbox-respawn").addEventListener("click", clickAnd(() => send("sandbox_respawn")));
-$("sandbox-return").addEventListener("click", clickAnd(() => send("return_lobby")));
-$("result-leave").addEventListener("click", leaveRoom);
-$("leave").addEventListener("click", leaveRoom);
-$("in-match-leave").addEventListener("click", leaveRoom);
-
-// Exit the room for real: tell the server (immediate slot removal, no 30s
-// reconnect hold), clear the saved session so the auto-resume does not pull
-// us straight back in, and return to the main menu without a page reload.
-function leaveRoom() {
-  manualConnectionAction = true;
-  send("leave_room");
-  localStorage.removeItem("spirefall-session");
-  token = "";
-  selfId = "";
-  roomCode = "";
-  currentRoom = undefined;
-  scene = undefined;
-  lastRosterKey = "";
-  sfx.ambient(false);
-  gameInstance?.destroy(true);
-  gameInstance = undefined;
-  showError("");
-  lobby.classList.add("hidden");
-  gameWrap.classList.add("hidden");
-  $("result").classList.add("hidden");
-  $("sandbox-actions").classList.add("hidden");
-  menu.classList.remove("hidden");
-  setStatus(i18n.t("statusLinked"), "good");
-}
-$("copy-code").addEventListener("click", async () => {
-  await navigator.clipboard?.writeText(roomCode);
-  $("copy-code").textContent = i18n.t("copied");
-  setTimeout(() => $("copy-code").textContent = i18n.t("copy"), 1200);
-});
-$("settings-button").addEventListener("click", () => {
-  const panel = $("visual-settings");
-  const open = panel.classList.toggle("hidden") === false;
-  $("settings-button").setAttribute("aria-expanded", String(open));
-});
-for (const id of ["gore-toggle", "shake-toggle", "digits-toggle", "lighting-toggle"]) {
-  $(id).addEventListener("change", () => {
-    visualPrefs.gore = $<HTMLInputElement>("gore-toggle").checked;
-    visualPrefs.shake = $<HTMLInputElement>("shake-toggle").checked;
-    visualPrefs.digits = $<HTMLInputElement>("digits-toggle").checked;
-    visualPrefs.lighting = $<HTMLInputElement>("lighting-toggle").checked;
-    localStorage.setItem("spirefall-visuals", JSON.stringify(visualPrefs));
-    scene?.setVisualPreferences();
-  });
-}
-$("sound-toggle").addEventListener("change", () => {
-  sfx.setEnabled($<HTMLInputElement>("sound-toggle").checked);
-  sfx.ui("ui:click");
-});
-$("sound-volume").addEventListener("input", () => {
-  sfx.setVolume(Number($<HTMLInputElement>("sound-volume").value) / 100);
-});
-for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) {
-  $(id).addEventListener("change", () => {
-    const mapId = $<HTMLSelectElement>("map").value as MapId;
-    updateMapVisual(mapId);
-    send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked, bots: Number($<HTMLSelectElement>("bots").value), botSkill: $<HTMLSelectElement>("bot-skill").value } });
-  });
-}
-for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
-  input.addEventListener("change", () => {
-    let weaponSet = [...document.querySelectorAll<HTMLInputElement>('input[name="weapon"]:checked')].map((item) => item.value as WeaponId);
-    if (!weaponSet.length) {
-      input.checked = true;
-      weaponSet = [input.value as WeaponId];
-    }
-    send("config", { patch: { weaponSet } });
-  });
-}
-connect();
-// Tab weapon panel: hold to inspect the loadout, release to dismiss.
-const weaponPanel = $("weapon-panel");
-const syncWeaponPanel = (held: boolean) => {
-  const show = held && !gameWrap.classList.contains("hidden") && Boolean(scene?.hasSnapshot());
-  weaponPanel.classList.toggle("hidden", !show);
-};
-window.addEventListener("keydown", (event) => {
-  if (event.key !== "Tab") return;
-  event.preventDefault();
-  syncWeaponPanel(true);
-});
-window.addEventListener("keyup", (event) => {
-  if (event.key !== "Tab") return;
-  event.preventDefault();
-  syncWeaponPanel(false);
-});
-window.addEventListener("blur", () => syncWeaponPanel(false));
-for (const [index, archetype] of ARCHETYPES.entries()) {
-  // Prime the procedural portrait cache so lobby slots render complete.
-  archetype.name;
-  portraitDataUrl(index);
-}
-
-// First user gesture unlocks the AudioContext; later event-driven sounds can play freely.
-const unlockAudio = () => sfx.unlock();
-window.addEventListener("pointerdown", unlockAudio);
-window.addEventListener("keydown", unlockAudio);
 
 // Physical-key → weapon slot map for Digit row and numpad (IME-proof).
 const WeaponSlotCodes: Record<string, number> = {
@@ -576,7 +140,7 @@ class ArenaScene extends Phaser.Scene {
   }
 
   create() {
-    scene = this;
+    session.scene = this;
     // M24 render scale: zoom the camera so the visible world is still the
     // full 1000×560 arena while the canvas itself draws 1.3× larger.
     this.cameras.main.setZoom(RENDER_SCALE).centerOn(WORLD.width / 2, WORLD.height / 2);
@@ -600,7 +164,7 @@ class ArenaScene extends Phaser.Scene {
       if (slot) this.queueWeaponSlot(slot);
     });
     this.input.on("wheel", (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
-      const mine = this.snapshot?.players.find((player) => player.id === selfId);
+      const mine = this.snapshot?.players.find((player) => player.id === session.selfId);
       if (!mine || !this.snapshot) return;
       const list = this.snapshot.config.weaponSet;
       const index = list.indexOf(mine.weapon);
@@ -644,7 +208,7 @@ class ArenaScene extends Phaser.Scene {
 
   update(time: number, delta: number) {
     if (!this.graphics) return;
-    const predicted = this.renderPositions.get(selfId);
+    const predicted = this.renderPositions.get(session.selfId);
     if (predicted && this.keys) {
       // M24b: local input steering on the rendered self — predict at the same
       // equilibrium speed the server physics reaches (accel·f/(1−f), clamped),
@@ -655,7 +219,7 @@ class ArenaScene extends Phaser.Scene {
     // M26 poster plates are fully static — no parallax nudge (poster style).
     // M24b: speed afterimages — the self pilot leaves faint echoes at full
     // sprint so velocity reads at a glance (budget-capped, subtle alpha).
-    const mineNow = this.snapshot?.players.find((player) => player.id === selfId);
+    const mineNow = this.snapshot?.players.find((player) => player.id === session.selfId);
     if (predicted && mineNow && Math.abs(mineNow.vx) > 250 && time - this.lastSpeedGhostAt > 90 && this.dashGhosts.length < 12) {
       this.lastSpeedGhostAt = time;
       this.dashGhosts.push({ x: predicted.x, y: predicted.y, life: 0.16, color: mineNow.color, soft: true });
@@ -685,7 +249,7 @@ class ArenaScene extends Phaser.Scene {
   }
 
   sendInput(slot?: number) {
-    if (!selfId) return;
+    if (!session.selfId) return;
     const keys = this.keys;
     // M24b: a pending slot request rides every input message until confirmed
     // (or 800ms gives up — dead request, e.g. slot outside the match set).
@@ -704,7 +268,7 @@ class ArenaScene extends Phaser.Scene {
     // M24b: settle the pending weapon-slot queue — clear when the switch is
     // confirmed by the authoritative state, or drop stale requests.
     if (this.pendingSlot) {
-      const mine = snapshot.players.find((player) => player.id === selfId);
+      const mine = snapshot.players.find((player) => player.id === session.selfId);
       const wanted = snapshot.config.weaponSet[this.pendingSlot.slot - 1];
       if (mine && wanted && mine.weapon === wanted) this.pendingSlot = undefined;
       else if (performance.now() - this.pendingSlot.queuedAt > 800) this.pendingSlot = undefined;
@@ -740,7 +304,7 @@ class ArenaScene extends Phaser.Scene {
       $("result").classList.remove("bot-victory");
     }
     $("winner").textContent = (snapshot.winner && winnerEntry?.name) || i18n.t("noSurvivor");
-    $<HTMLButtonElement>("restart").classList.toggle("hidden", selfId !== currentRoom?.hostId);
+    $<HTMLButtonElement>("restart").classList.toggle("hidden", session.selfId !== session.currentRoom?.hostId);
   }
 
   /** M24: re-render locale-dependent scene-adjacent DOM (HUD strings, panel). */
@@ -762,7 +326,7 @@ class ArenaScene extends Phaser.Scene {
       sfx.ambient(false);
       if (snapshot.mode !== "sandbox" && snapshot.winner) {
         const winnerEntry = snapshot.players.find((player) => player.id === snapshot.winner);
-        sfx.ui(winnerEntry?.id === selfId ? "victory" : "defeat");
+        sfx.ui(winnerEntry?.id === session.selfId ? "victory" : "defeat");
       }
     }
     if (snapshot.phase === "lobby") sfx.ambient(false);
@@ -770,7 +334,7 @@ class ArenaScene extends Phaser.Scene {
 
   private refreshWeaponPanel() {
     const snapshot = this.snapshot;
-    const mine = snapshot?.players.find((player) => player.id === selfId);
+    const mine = snapshot?.players.find((player) => player.id === session.selfId);
     const panel = $("weapon-panel");
     if (!snapshot || !mine) return;
     panel.innerHTML = `<p class="panel-hint">${i18n.t("panelHint")}</p>` + snapshot.config.weaponSet.map((weaponId, index) => {
@@ -809,10 +373,10 @@ class ArenaScene extends Phaser.Scene {
   private lastPhaseKey = "";
 
   private updateHud(snapshot: ServerSnapshot) {
-    const mine = snapshot.players.find((player) => player.id === selfId);
+    const mine = snapshot.players.find((player) => player.id === session.selfId);
     const map = MAPS[snapshot.config.mapId];
     const phaseKey = snapshot.mode === "sandbox" ? "soloTestHud" : snapshot.phase === "results" ? "spireResolved" : "live";
-    $("hud-room").textContent = roomCode ? `${i18n.t("spirePrefix")}${roomCode}` : "";
+    $("hud-room").textContent = session.roomCode ? `${i18n.t("spirePrefix")}${session.roomCode}` : "";
     $("hud-sector").textContent = map.sector;
     // Rebuild the phase chip when the phase OR language changed.
     const phaseValue = `${phaseKey}:${i18n.lang()}`;
@@ -863,7 +427,7 @@ class ArenaScene extends Phaser.Scene {
   }
 
   private processEvents(events: CombatEvent[]) {
-    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    const mine = this.snapshot?.players.find((player) => player.id === session.selfId);
     const at = (x: number, y: number) => ({ x, y, mx: mine?.x, my: mine?.y });
     for (const event of events) {
       if (this.processedEvents.has(event.id)) continue;
@@ -1094,10 +658,10 @@ class ArenaScene extends Phaser.Scene {
         // M28: the bloom layer brightened (0.3→0.45) — hits read juicier
         // without stealing the explosion class.
         this.lighting?.flash(event.x, event.y, 92, 0xfff3d0, 0.45, 0.15, undefined, undefined, 0.35);
-        this.shake(event.strength, target?.id === selfId);
+        this.shake(event.strength, target?.id === session.selfId);
         // M20: when I am the victim, remember the attacker's bearing so a red
         // arc can pulse around my pilot pointing back at the shooter.
-        if (target?.id === selfId && actor && event.actorId !== selfId) {
+        if (target?.id === session.selfId && actor && event.actorId !== session.selfId) {
           const angle = Math.atan2(actor.y - (mine?.y ?? 0), actor.x - (mine?.x ?? 0));
           this.hitMarkers.push({ angle, life: 0.6 });
           if (this.hitMarkers.length > 6) this.hitMarkers = this.hitMarkers.slice(-6);
@@ -1127,7 +691,7 @@ class ArenaScene extends Phaser.Scene {
         }
         this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 6, color: 0xc22538, width: 3, grow: 60 });
         this.punchHitstop(0.8);
-        this.shake(1.2, target?.id === selfId);
+        this.shake(1.2, target?.id === session.selfId);
       } else if (event.type === "death") {
         sfx.play("death", { ...at(event.x, event.y), priority: "high" });
         this.spawnBurst(event.x, event.y, visualPrefs.gore ? 0x6e0d16 : 0xd7aa56, visualPrefs.gore ? 44 : 26, visualPrefs.gore ? "blood" : "spark", 0);
@@ -1143,14 +707,14 @@ class ArenaScene extends Phaser.Scene {
         // M20 kill feed: every client sees the attribution row; the killer's
         // own client also gets the rising confirm sting.
         this.addKillFeed(event, target, actor);
-        if (event.actorId && event.actorId === selfId) sfx.play("kill", { priority: "high" });
+        if (event.actorId && event.actorId === session.selfId) sfx.play("kill", { priority: "high" });
       } else if (event.type === "respawn") {
         sfx.play("respawn", at(event.x, event.y));
         this.spawnBurst(event.x, event.y, target?.color || 0x56d9d0, 32, "energy", 0);
       } else if (event.type === "hazard") {
         sfx.play("hazard", { ...at(event.x, event.y), strength: event.strength });
         this.spawnBurst(event.x, event.y, 0xf09b3d, 28, "spark", 0);
-        this.shake(event.strength, target?.id === selfId);
+        this.shake(event.strength, target?.id === session.selfId);
       }
     }
   }
@@ -1306,7 +870,7 @@ class ArenaScene extends Phaser.Scene {
       if (digit.life <= 0) digit.text.setVisible(false);
     }
     // M20 vignette: drive the red overlay from my total limb integrity.
-    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    const mine = this.snapshot?.players.find((player) => player.id === session.selfId);
     if (mine) {
       const total = LIMB_IDS.reduce((sum, limbId) => sum + mine.limbs[limbId], 0);
       const severity = total < 150 ? clamp((150 - total) / 150, 0, 1) : 0;
@@ -1659,7 +1223,7 @@ class ArenaScene extends Phaser.Scene {
 
   /** M20: red bearing arcs around my pilot pointing back at recent shooters. */
   private drawHitMarkers() {
-    const mine = this.snapshot?.players.find((player) => player.id === selfId);
+    const mine = this.snapshot?.players.find((player) => player.id === session.selfId);
     if (!mine || !this.hitMarkers.length) return;
     const cx = mine.x;
     const cy = mine.y - PLAYER_TARGET_OFFSET;
@@ -1774,14 +1338,14 @@ class ArenaScene extends Phaser.Scene {
     }
     // Test hook: visual probes locate the self pilot's exact render position
     // (same pattern as __spireLight/__spireSlot).
-    if (player.id === selfId) {
+    if (player.id === session.selfId) {
       (window as unknown as { __spireSelf?: { x: number; y: number } }).__spireSelf = { x: position.x, y: position.y };
     }
     const sample = this.samples.get(player.id);
     const elapsed = sample ? Math.min(120, Math.max(0, performance.now() - sample.at)) / 1000 : 0;
     const rawX = sample ? sample.x + sample.vx * elapsed : player.x;
     const rawY = sample ? sample.y + sample.vy * elapsed : player.y;
-    const blend = player.id === selfId ? 0.52 : 0.34;
+    const blend = player.id === session.selfId ? 0.52 : 0.34;
     position.x = Phaser.Math.Linear(position.x, rawX, blend);
     position.y = Phaser.Math.Linear(position.y, rawY, blend);
     // M24 jump/land feel: watch ground transitions. A hard landing (falling
@@ -1793,11 +1357,11 @@ class ArenaScene extends Phaser.Scene {
     if (landed && fellHard) {
       this.landFx.set(player.id, 0.16);
       this.spawnBurst(position.x, player.y, 0x9aa4a4, 6, "smoke", 0);
-      const selfRender = this.renderPositions.get(selfId);
+      const selfRender = this.renderPositions.get(session.selfId);
       sfx.play("land", { x: position.x, y: player.y, mx: selfRender?.x, my: selfRender?.y, strength: 0.5 });
     }
     if (prev && player.jumpsUsed > prev.jumpsUsed) {
-      const selfRender = this.renderPositions.get(selfId);
+      const selfRender = this.renderPositions.get(session.selfId);
       sfx.play("jump", { x: position.x, y: player.y, mx: selfRender?.x, my: selfRender?.y, strength: 0.3 });
     }
     this.prevState.set(player.id, { onGround: player.onGround, vy: player.vy, jumpsUsed: player.jumpsUsed });
@@ -1824,7 +1388,7 @@ class ArenaScene extends Phaser.Scene {
     // key light drives rim + armor response — the pilot reacts to the room.
     // M27: the charge fraction rides along too (Voltrail muzzle focus ring).
     const swing = this.swingStateOf(player.id);
-    drawPlayer(this.graphics, player, position.x, position.y, time, player.id === selfId, {
+    drawPlayer(this.graphics, player, position.x, position.y, time, player.id === session.selfId, {
       squash,
       swing,
       dashSlash: swing?.secondary && swing.progress < 0.8,
@@ -1844,7 +1408,7 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
       this.graphics.fillStyle(barColor, 0.95);
       this.graphics.fillRect(barX, barY, barWidth * fraction, barHeight);
-      if (player.id === selfId) {
+      if (player.id === session.selfId) {
         this.graphics.lineStyle(1, 0xf2f5ed, 0.55);
         this.graphics.strokeRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
       }
@@ -1889,3 +1453,6 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 }
+
+// 壳层接线（DOM 构建/事件监听/连接建立）——场景类就位后一次性注册。
+initShell(ArenaScene);
