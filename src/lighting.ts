@@ -244,7 +244,7 @@ export class LightingSystem {
    * from several sample points along the segment so the line blocks like a
    * real extended source.
    */
-  private lineTransients: Array<{ x0: number; y0: number; x1: number; y1: number; radius: number; tint: number; alpha: number; life: number; maxLife: number }> = [];
+  private lineTransients: Array<{ x0: number; y0: number; x1: number; y1: number; radius: number; tint: number; alpha: number; life: number; maxLife: number; shadow: number }> = [];
   /** Canopy storm clock: next lightning strike (ms timestamp). */
   private nextLightning = 0;
   private fortressSweep = 0;
@@ -396,20 +396,23 @@ export class LightingSystem {
   /**
    * M27c line light: a hitscan lance (charged rail, beam) is a LIGHT SOURCE
    * along its whole length, not just at the muzzle. Two registrations happen:
-   * 1) a chain of glow beads along the segment (uniform intensity, volume
-   * only — the tracer is the visual core), and 2) ONE line-shadow job that
-   * projects wedges from several sample points along the segment, so the
-   * lance blocks light like the extended source it is.
+   * 1) a chain of glow beads along the segment (volume only — the tracer is
+   * the visual core; bead spacing never undershoots radius×0.85 so the chain
+   * reads as a luminous tube instead of an additive white blob), and 2) ONE
+   * line-shadow job — `lineShadow` is an EXPLICIT strength (it must not
+   * shrink with charge state or the cast shadows vanish) projected from up
+   * to 8 sample origins along the segment.
    */
-  flashLine(x0: number, y0: number, x1: number, y1: number, step: number, radius: number, tint: number, alpha: number, life: number, pointIntensity = 0) {
+  flashLine(x0: number, y0: number, x1: number, y1: number, step: number, radius: number, tint: number, alpha: number, life: number, pointIntensity = 0, lineShadow = 0.9) {
     const length = Math.hypot(x1 - x0, y1 - y0);
-    const n = Math.max(1, Math.ceil(length / step));
+    const spacing = Math.max(step, radius * 0.85);
+    const n = Math.max(1, Math.ceil(length / spacing));
     for (let i = 0; i <= n; i++) {
       const t = i / n;
       const falloff = 1 - 0.12 * t;
       this.flash(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, radius, tint, alpha * falloff, life, undefined, pointIntensity > 0 ? pointIntensity * falloff : undefined, undefined, true);
     }
-    this.lineTransients.push({ x0, y0, x1, y1, radius, tint, alpha, life, maxLife: life });
+    this.lineTransients.push({ x0, y0, x1, y1, radius, tint, alpha, life, maxLife: life, shadow: lineShadow });
     if (this.lineTransients.length > 6) this.lineTransients = this.lineTransients.slice(-6);
   }
 
@@ -680,25 +683,26 @@ export class LightingSystem {
       // M27c line shadows: each flashLine job projects wedges from several
       // sample origins along the segment — the lance blocks light like the
       // EXTENDED source it is (a single origin would read as a torch, not a
-      // beam). Strength follows the same all-glow-casts rule (alpha-driven),
-      // scaled by the line's smoothstep envelope and a gentle far-end fade.
+      // beam). M28: strength uses the EXPLICIT lineShadow (charge-state
+      // independent), scaled only by the smoothstep envelope and a gentle
+      // far-end fade — the double alpha-attenuation multiply that kept
+      // eating the wedges below the visibility floor is gone.
       for (const line of this.lineTransients) {
         const t = smooth01(Math.max(0, line.life / line.maxLife));
-        const strength = Math.min(1.5, line.alpha * 2.2) * this.shadowLevel * t;
-        const baseAlpha = this.shadowBaseAlpha * strength * (this.shadowRt ? SHADOW_CHAIN_GAIN : 1);
+        const baseAlpha = this.shadowBaseAlpha * Math.min(1.5, line.shadow) * this.shadowLevel * t * (this.shadowRt ? SHADOW_CHAIN_GAIN : 1);
         if (baseAlpha < 0.015) continue;
         const len = Math.hypot(line.x1 - line.x0, line.y1 - line.y0);
-        const samples = Math.min(6, Math.max(2, Math.ceil(len / 180)));
+        const samples = Math.min(8, Math.max(3, Math.ceil(len / 150)));
         for (let s = 0; s <= samples; s++) {
           const tt = s / samples;
           const origin = { x: line.x0 + (line.x1 - line.x0) * tt, y: line.y0 + (line.y1 - line.y0) * tt, radius: line.radius } as LightRequest;
-          const sampleAlpha = baseAlpha * (1 - 0.3 * tt);
+          const sampleAlpha = baseAlpha * (1 - 0.25 * tt);
           for (const rect of occluders) {
             const cx = rect.x + rect.width / 2;
             const cy = rect.y + rect.height / 2;
             const distance = Math.hypot(cx - origin.x, cy - origin.y);
-            if (distance > line.radius + Math.max(rect.width, rect.height)) continue;
-            const alpha = sampleAlpha * smooth01(1 - distance / line.radius);
+            if (distance > line.radius * 2.2 + Math.max(rect.width, rect.height)) continue;
+            const alpha = sampleAlpha * smooth01(1 - distance / (line.radius * 2.2));
             if (alpha > 0.015) this.projectOccluderShadow(origin, rect, alpha);
           }
         }

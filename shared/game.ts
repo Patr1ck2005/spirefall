@@ -43,21 +43,21 @@ export const MAX_JUMPS = 3;
 
 // M25 destructible props — explosive barrels. Damage/blast sit inside the M20
 // balance band (under rocket primary): a barrel is a hazard you shoot, not a
-// better rocket. M27: barrels became the map's landmine-tier threat — damage
-// and radius scale up with the rocket (the band assertion still holds), while
-// hp stays fixed so the detonation threshold is unchanged. Cooldowns and
-// machine cycles untouched.
+// better rocket. M27: barrels became the map's landmine-tier threat; M28
+// raised both barrel AND rocket (the band assertion still holds: barrel <
+// rocket), so barrels actually threaten and rockets feel earned. Cooldowns
+// and machine cycles untouched.
 export const PROP_TUNING = {
   /** Barrel hit radius (px) — also the visual cylinder half-width. */
-  radius: 12,
+  radius: 13,
   /** Damage points before detonation (one scatter volley or two rifle bursts). */
   hp: 30,
   /** Splash damage radius (px). */
-  blastRadius: 88,
+  blastRadius: 104,
   /** Core splash damage at the centre, tapering outward (same falloff as rockets). */
-  damage: 46,
+  damage: 64,
   /** Knockback at the blast centre. */
-  knockback: 330,
+  knockback: 360,
   /** Respawn window after detonation (seconds), matching the crate cadence. */
   respawnMin: 6,
   respawnMax: 10,
@@ -689,8 +689,8 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   rocket: {
     id: "rocket", label: "Forge Rocket", ammo: 5, color: 0xe9793d,
-    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 58, knockback: 300, recoil: 110, speed: 520, radius: 7, range: 900, explosiveRadius: 96 }),
-    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 30, knockback: 300, recoil: 130, speed: 420, spread: 0.14, radius: 8, range: 640, explosiveRadius: 70, pattern: "cluster", count: 3, ammoCost: 2 }),
+    primary: atk({ kind: "explosive", cooldown: 0.9, damage: 66, knockback: 320, recoil: 110, speed: 520, radius: 7, range: 900, explosiveRadius: 112 }),
+    secondary: atk({ kind: "explosive", cooldown: 1.5, damage: 34, knockback: 320, recoil: 130, speed: 420, spread: 0.14, radius: 8, range: 640, explosiveRadius: 84, pattern: "cluster", count: 3, ammoCost: 2 }),
   },
   blade: {
     id: "blade", label: "Cutter Blade", ammo: 999, color: 0xbfcbd0,

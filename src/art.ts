@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { MAPS, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
+import { MAPS, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, PROP_TUNING, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
 import { POSTER } from "./palette";
 import type { KeyLightSample } from "./lighting";
 
@@ -172,54 +172,58 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
 export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: number; y: number; hp: number; burning?: number }, time: number, light?: KeyLightSample) {
   const x = prop.x;
   const groundY = prop.y;
-  const damageFraction = Math.max(0, Math.min(1, prop.hp / 30));
+  const damageFraction = Math.max(0, Math.min(1, prop.hp / PROP_TUNING.hp));
   // M26 light response: warm the lit band toward the key light.
   const bandLit = light && light.intensity > 0.05 ? mixColor(0x9a3a24, light.color, Math.min(0.4, light.intensity * 0.4)) : 0x9a3a24;
+  // M28: the drum grew to 26×34 (the old 24px stub read as half a barrel).
   // Body: tapered drum with three shading bands (left shadow, core, right light).
   // M27b: no painted contact shadow — the lighting rig casts the real one.
-  const topY = groundY - 24;
+  const topY = groundY - 34;
   graphics.fillStyle(0x5c1f16, 1);
-  graphics.fillRect(x - 9, topY, 18, 24);
+  graphics.fillRect(x - 13, topY, 26, 34);
   graphics.fillStyle(0x7d2c1d, 1);
-  graphics.fillRect(x - 6, topY, 9, 24);
+  graphics.fillRect(x - 9, topY, 13, 34);
   graphics.fillStyle(bandLit, 1);
-  graphics.fillRect(x + 2, topY, 4, 24);
+  graphics.fillRect(x + 3, topY, 6, 34);
   // Rim rings (top lip + mid seam + foot).
   graphics.fillStyle(0x3f1610, 1);
-  graphics.fillRect(x - 9, topY, 18, 2);
-  graphics.fillRect(x - 9, topY + 11, 18, 2);
-  graphics.fillRect(x - 10, groundY - 3, 20, 3);
-  // Hazard band: diagonal warning stripes on a dark plate.
+  graphics.fillRect(x - 13, topY, 26, 3);
+  graphics.fillRect(x - 13, topY + 15, 26, 3);
+  graphics.fillRect(x - 14, groundY - 4, 28, 4);
+  // Hazard band: diagonal warning stripes on a dark plate, drawn SYMMETRIC
+  // around the drum centre (the old loop accumulated stripes rightward and
+  // painted half of them outside the barrel).
   graphics.fillStyle(0x191512, 1);
-  graphics.fillRect(x - 9, topY + 4, 18, 5);
+  graphics.fillRect(x - 13, topY + 6, 26, 7);
   graphics.fillStyle(0xe0a43c, 0.9);
-  for (let stripe = -1; stripe < 3; stripe++) {
+  for (let stripe = -3; stripe <= 2; stripe++) {
+    const sx = x + stripe * 7;
     graphics.fillPoints([
-      { x: x + stripe * 6 + 1, y: topY + 9 },
-      { x: x + stripe * 6 + 4, y: topY + 4 },
-      { x: x + stripe * 6 + 6, y: topY + 4 },
-      { x: x + stripe * 6 + 3, y: topY + 9 },
+      { x: sx, y: topY + 13 },
+      { x: sx + 5, y: topY + 6 },
+      { x: sx + 8, y: topY + 6 },
+      { x: sx + 3, y: topY + 13 },
     ], true);
   }
   // Valve cap on top.
   graphics.fillStyle(0x8a8f92, 1);
-  graphics.fillRect(x - 2.5, topY - 2.5, 5, 2.5);
+  graphics.fillRect(x - 3.5, topY - 3.5, 7, 3.5);
   // M27 Pyre Vent: a lit drum is fully wreathed — flame licks from the valve
   // and wrap the seam, flickering hard so the light it casts visibly dances.
   if (prop.burning !== undefined && prop.burning > 0) {
     const flick = 0.75 + Math.sin(time * 0.05 + x * 2) * 0.25;
     graphics.fillStyle(0xf06b2f, 0.85 * flick);
-    graphics.fillCircle(x, topY - 3, 5.5 * flick);
+    graphics.fillCircle(x, topY - 4, 7.5 * flick);
     graphics.fillStyle(0xffc06a, 0.95 * flick);
-    graphics.fillTriangle(x - 3.5, topY, x, topY - 12 * flick, x + 3.5, topY);
+    graphics.fillTriangle(x - 4.5, topY, x, topY - 16 * flick, x + 4.5, topY);
     graphics.fillStyle(0xfff3d0, 0.8 * flick);
-    graphics.fillCircle(x, topY - 4, 2);
+    graphics.fillCircle(x, topY - 5, 2.5);
     for (const side of [-1, 1]) {
       graphics.fillStyle(0xf06b2f, 0.5 * flick);
       graphics.fillTriangle(
-        x + side * 9, topY + 4 + (side > 0 ? 4 : 0),
-        x + side * 15, topY + 14 + side * 2,
-        x + side * 6, topY + 16,
+        x + side * 12, topY + 6 + (side > 0 ? 6 : 0),
+        x + side * 20, topY + 20 + side * 3,
+        x + side * 8, topY + 23,
       );
     }
   }
@@ -228,16 +232,16 @@ export function drawProp(graphics: Phaser.GameObjects.Graphics, prop: { x: numbe
     const intensity = (0.6 - damageFraction) / 0.6;
     const flicker = 0.7 + Math.sin(time * (damageFraction < 0.3 ? 0.03 : 0.012) + x) * 0.3;
     const glow = intensity * flicker;
-    graphics.lineStyle(1.2, 0xffb254, glow);
-    graphics.lineBetween(x - 4, topY + 6, x - 1, topY + 12);
-    graphics.lineBetween(x - 1, topY + 12, x - 5, topY + 19);
-    graphics.lineBetween(x + 3, topY + 8, x + 5, topY + 16);
+    graphics.lineStyle(1.4, 0xffb254, glow);
+    graphics.lineBetween(x - 6, topY + 9, x - 1, topY + 17);
+    graphics.lineBetween(x - 1, topY + 17, x - 7, topY + 27);
+    graphics.lineBetween(x + 4, topY + 11, x + 7, topY + 22);
     graphics.fillStyle(0xf0873c, glow * 0.7);
-    graphics.fillCircle(x - 1, topY + 12, 1.6);
+    graphics.fillCircle(x - 1, topY + 17, 2);
     // A wisp of fire escapes at high damage.
     if (damageFraction < 0.3 && flicker > 0.75) {
       graphics.fillStyle(0xffc06a, 0.55 * glow);
-      graphics.fillTriangle(x - 2, topY + 6, x, topY - 4, x + 2, topY + 6);
+      graphics.fillTriangle(x - 3, topY + 8, x, topY - 5, x + 3, topY + 8);
     }
   }
 }
@@ -810,50 +814,60 @@ function drawWeapon(
   const originX = x - facing * Math.min(8, recoil * 5) * scale;
   const px = (value: number) => originX + facing * value * scale;
   const vs = scale * WEAPON_VISUAL_SCALE; // M24: guns draw larger than hands
-  // M27c FIX: fillRect always extends SCREEN-RIGHT from its x anchor, so a
-  // left-facing pilot drew the gun body on the wrong side of the grip (the
-  // "weapon looks wrong facing left" bug). grx(a, w) takes the gun-local
-  // span [a, a+w] (muzzle = +x) and returns the mirrored screen anchor.
-  const grx = (a: number, w: number) => px((facing > 0 ? a : -(a + w)) * vs);
+  // M28 ROOT FIX for the left-facing weapon misalignment: fillRect and
+  // fillRoundedRect always extend SCREEN-RIGHT from their anchor, so any
+  // per-part manual mirroring eventually misses a piece. Instead the whole
+  // gun is drawn in RIGHT-FACING space and the canvas is mirrored around the
+  // grip anchor for left-facing pilots — every part, line and particle
+  // transforms together, misalignment becomes impossible by construction.
+  // (Phaser Graphics scaleCanvas is the same API drawPlayer already uses.)
+  if (facing < 0) {
+    graphics.save();
+    graphics.translateCanvas(originX, 0);
+    graphics.scaleCanvas(-1, 1);
+    graphics.translateCanvas(-originX, 0);
+  }
+  // Gun-local coordinates below are ALWAYS right-facing (muzzle = +x).
+  const gx = (value: number) => originX + value * scale;
   // M27c: every gun carries a small emissive signature (status LED / energy
   // cell) — pure material language, nothing enters the lighting rig.
-  const led = (gx: number, gy: number, r: number, alpha: number, tint: number) => {
+  const led = (gxPos: number, gy: number, r: number, alpha: number, tint: number) => {
     graphics.fillStyle(tint, alpha * 0.4);
-    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs * 2);
+    graphics.fillCircle(gx(gxPos * vs), y + gy * vs, r * vs * 2);
     graphics.fillStyle(tint, alpha);
-    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs);
+    graphics.fillCircle(gx(gxPos * vs), y + gy * vs, r * vs);
     graphics.fillStyle(0xffffff, alpha * 0.7);
-    graphics.fillCircle(px(gx * vs), y + gy * vs, r * vs * 0.45);
+    graphics.fillCircle(gx(gxPos * vs), y + gy * vs, r * vs * 0.45);
   };
   const ledPulse = 0.6 + Math.sin((fx?.time ?? 0) * 0.008) * 0.3;
   graphics.lineStyle(3 * vs, 0x0b0e10, 1);
   if (weaponId === "sidearm") {
-    graphics.fillStyle(0x252d2f, 1); graphics.fillRoundedRect(grx(-5, 19), y - 3 * vs, 19 * vs, 7 * vs, 2 * vs);
-    graphics.fillStyle(0x111719, 1); graphics.fillRect(grx(-2, 5), y + 2 * vs, 5 * vs, 10 * vs);
-    graphics.fillStyle(color, 0.9); graphics.fillRect(grx(10, 6), y - 2 * vs, 6 * vs, 2 * vs);
+    graphics.fillStyle(0x252d2f, 1); graphics.fillRoundedRect(gx(-5 * vs), y - 3 * vs, 19 * vs, 7 * vs, 2 * vs);
+    graphics.fillStyle(0x111719, 1); graphics.fillRect(gx(-2 * vs), y + 2 * vs, 5 * vs, 10 * vs);
+    graphics.fillStyle(color, 0.9); graphics.fillRect(gx(10 * vs), y - 2 * vs, 6 * vs, 2 * vs);
     // M27c: loaded-chamber LED at the slide rear.
     led(-3, -1.6, 0.9, 0.5 + recoil * 0.5, 0xffd27a);
     // M24: brass ejects on recent fire — a tiny falling glint above the slide.
     if (recoil > 0.5) {
       graphics.fillStyle(0xe8c56a, 0.9);
-      graphics.fillCircle(px(-6 * vs), y - 5 * vs - (1 - recoil) * 8 * vs, 1.4 * vs);
+      graphics.fillCircle(gx(-6 * vs), y - 5 * vs - (1 - recoil) * 8 * vs, 1.4 * vs);
     }
   } else if (weaponId === "scatter") {
-    graphics.fillStyle(0x1c2425, 1); graphics.fillRect(grx(-8, 22), y - 5 * vs, 22 * vs, 10 * vs);
-    graphics.lineStyle(5 * vs, 0x111719, 1); graphics.lineBetween(px(12 * vs), y, px(31 * vs), y);
-    graphics.lineStyle(1.5 * vs, color, 0.95); graphics.lineBetween(px(17 * vs), y - 3 * vs, px(31 * vs), y - 3 * vs);
+    graphics.fillStyle(0x1c2425, 1); graphics.fillRect(gx(-8 * vs), y - 5 * vs, 22 * vs, 10 * vs);
+    graphics.lineStyle(5 * vs, 0x111719, 1); graphics.lineBetween(gx(12 * vs), y, gx(31 * vs), y);
+    graphics.lineStyle(1.5 * vs, color, 0.95); graphics.lineBetween(gx(17 * vs), y - 3 * vs, gx(31 * vs), y - 3 * vs);
     // M27c: shell-count LED strip on the receiver.
     led(-5, 0, 0.9, ledPulse, 0x9fc6d1);
     // M24: pump handle slides back then forward after each shot.
     if (recoil > 0) {
       const pumpBack = Math.sin(Math.min(1, (1 - recoil) * 2) * Math.PI) * 5 * vs;
       graphics.fillStyle(0x0d1214, 1);
-      graphics.fillRect(grx(14 - pumpBack, 6), y + 2.5 * vs, 6 * vs, 3.5 * vs);
+      graphics.fillRect(gx((14 - pumpBack) * vs), y + 2.5 * vs, 6 * vs, 3.5 * vs);
     }
   } else if (weaponId === "rifle") {
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-10, 38), y - 3 * vs, 38 * vs, 6 * vs);
-    graphics.fillStyle(color, 0.8); graphics.fillRect(grx(2, 5), y + 3 * vs, 5 * vs, 11 * vs);
-    graphics.fillRect(grx(17, 10), y - 6 * vs, 10 * vs, 2 * vs);
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(gx(-10 * vs), y - 3 * vs, 38 * vs, 6 * vs);
+    graphics.fillStyle(color, 0.8); graphics.fillRect(gx(2 * vs), y + 3 * vs, 5 * vs, 11 * vs);
+    graphics.fillRect(gx(17 * vs), y - 6 * vs, 10 * vs, 2 * vs);
     // M27c: beam-cell indicator at the stock.
     led(-7, 0, 0.9, 0.45 + ledPulse * 0.4, 0x75c795);
     // M24 signature: cooling vents glow after sustained fire, then fade.
@@ -861,13 +875,13 @@ function drawWeapon(
     if (heat > 0.02) {
       for (let vent = 0; vent < 3; vent++) {
         graphics.fillStyle(color, heat * (0.55 - vent * 0.12));
-        graphics.fillRect(grx(6 + vent * 7, 4), y - 1.4 * vs, 4 * vs, 2.8 * vs);
+        graphics.fillRect(gx((6 + vent * 7) * vs), y - 1.4 * vs, 4 * vs, 2.8 * vs);
       }
     }
   } else if (weaponId === "sniper") {
-    graphics.fillStyle(0x1b2224, 1); graphics.fillRect(grx(-12, 47), y - 3 * vs, 47 * vs, 6 * vs);
-    graphics.fillStyle(color, 0.95); graphics.fillRect(grx(8, 12), y - 7 * vs, 12 * vs, 2 * vs);
-    graphics.fillCircle(px(29 * vs), y, 3 * vs);
+    graphics.fillStyle(0x1b2224, 1); graphics.fillRect(gx(-12 * vs), y - 3 * vs, 47 * vs, 6 * vs);
+    graphics.fillStyle(color, 0.95); graphics.fillRect(gx(8 * vs), y - 7 * vs, 12 * vs, 2 * vs);
+    graphics.fillCircle(gx(29 * vs), y, 3 * vs);
     // M27c: capacitor cells on the rail flank — breathing even at rest.
     led(-8, -1.5, 0.9, 0.4 + ledPulse * 0.35, 0xd797c7);
     led(-4.5, -1.5, 0.9, 0.3 + ledPulse * 0.35, 0xd797c7);
@@ -878,74 +892,75 @@ function drawWeapon(
         const glow = clampAngle(charge * 1.4 - coil * 0.18, 0, 1);
         if (glow <= 0.02) continue;
         graphics.lineStyle(2 * vs, charge >= 1 ? 0xffe6f2 : color, glow * 0.85);
-        graphics.lineBetween(px((2 + coil * 9) * vs), y - 5.5 * vs, px((2 + coil * 9) * vs), y + 5.5 * vs);
+        graphics.lineBetween(gx((2 + coil * 9) * vs), y - 5.5 * vs, gx((2 + coil * 9) * vs), y + 5.5 * vs);
       }
     }
   } else if (weaponId === "rocket") {
-    graphics.fillStyle(0x273033, 1); graphics.fillRect(grx(-8, 28), y - 8 * vs, 28 * vs, 16 * vs);
-    graphics.fillStyle(0x121819, 1); graphics.fillCircle(px(21 * vs), y, 8 * vs);
-    graphics.lineStyle(2 * vs, color, 0.9); graphics.strokeCircle(px(21 * vs), y, 6 * vs);
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-12, 7), y + 5 * vs, 7 * vs, 9 * vs);
+    graphics.fillStyle(0x273033, 1); graphics.fillRect(gx(-8 * vs), y - 8 * vs, 28 * vs, 16 * vs);
+    graphics.fillStyle(0x121819, 1); graphics.fillCircle(gx(21 * vs), y, 8 * vs);
+    graphics.lineStyle(2 * vs, color, 0.9); graphics.strokeCircle(gx(21 * vs), y, 6 * vs);
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(gx(-12 * vs), y + 5 * vs, 7 * vs, 9 * vs);
   } else if (weaponId === "echo") {
     // M24: the shard gun gets its own silhouette — crystal emitter array with
     // a slow shimmer, replacing the generic default shape it used to share.
     const time = fx?.time ?? 0;
     const shimmer = 0.55 + Math.sin(time * 0.006) * 0.25;
-    graphics.fillStyle(0x1a2229, 1); graphics.fillRect(grx(-9, 20), y - 4.5 * vs, 20 * vs, 9 * vs);
-    graphics.fillStyle(0x0f151c, 1); graphics.fillRect(grx(-4, 5), y + 2 * vs, 5 * vs, 9 * vs);
+    graphics.fillStyle(0x1a2229, 1); graphics.fillRect(gx(-9 * vs), y - 4.5 * vs, 20 * vs, 9 * vs);
+    graphics.fillStyle(0x0f151c, 1); graphics.fillRect(gx(-4 * vs), y + 2 * vs, 5 * vs, 9 * vs);
     led(-7, 0, 0.9, 0.35 + shimmer * 0.45, 0x7fb8ff);
     graphics.fillStyle(color, shimmer);
-    graphics.fillTriangle(px(9 * vs), y - 5 * vs, px(9 * vs), y + 5 * vs, px(19 * vs), y);
+    graphics.fillTriangle(gx(9 * vs), y - 5 * vs, gx(9 * vs), y + 5 * vs, gx(19 * vs), y);
     graphics.lineStyle(1.2 * vs, 0xeaf6ff, shimmer);
-    graphics.lineBetween(px(9 * vs), y - 4 * vs, px(17 * vs), y);
+    graphics.lineBetween(gx(9 * vs), y - 4 * vs, gx(17 * vs), y);
     graphics.fillStyle(color, shimmer * 0.5);
-    graphics.fillRect(grx(-7, 13), y - 1.2 * vs, 13 * vs, 2.4 * vs);
+    graphics.fillRect(gx(-7 * vs), y - 1.2 * vs, 13 * vs, 2.4 * vs);
   } else if (weaponId === "flame") {
     // M27 Pyre Vent: a fat industrial torch — tank drum under the barrel,
     // wide trumpet nozzle, pilot ember breathing at the mouth.
     const time = fx?.time ?? 0;
     const pilot = 0.55 + Math.sin(time * 0.03) * 0.3;
-    graphics.fillStyle(0x2a2019, 1); graphics.fillCircle(px(-4 * vs), y + 6 * vs, 6 * vs);
-    graphics.fillStyle(0xe8632a, 0.9); graphics.fillCircle(px(-4 * vs), y + 6 * vs, 2.4 * vs);
-    graphics.fillStyle(0x262e30, 1); graphics.fillRect(grx(-9, 22), y - 4 * vs, 22 * vs, 8 * vs);
-    graphics.fillStyle(0x121819, 1); graphics.fillRect(grx(4, 6), y + 4 * vs, 6 * vs, 7 * vs);
+    graphics.fillStyle(0x2a2019, 1); graphics.fillCircle(gx(-4 * vs), y + 6 * vs, 6 * vs);
+    graphics.fillStyle(0xe8632a, 0.9); graphics.fillCircle(gx(-4 * vs), y + 6 * vs, 2.4 * vs);
+    graphics.fillStyle(0x262e30, 1); graphics.fillRect(gx(-9 * vs), y - 4 * vs, 22 * vs, 8 * vs);
+    graphics.fillStyle(0x121819, 1); graphics.fillRect(gx(4 * vs), y + 4 * vs, 6 * vs, 7 * vs);
     led(-7.5, -1.5, 0.9, 0.4 + ledPulse * 0.35, 0xff7a3c);
     graphics.fillStyle(color, 0.9);
     graphics.fillPoints([
-      { x: px(13 * vs), y: y - 3.5 * vs },
-      { x: px(13 * vs), y: y + 3.5 * vs },
-      { x: px(21 * vs), y: y + 6 * vs },
-      { x: px(21 * vs), y: y - 6 * vs },
+      { x: gx(13 * vs), y: y - 3.5 * vs },
+      { x: gx(13 * vs), y: y + 3.5 * vs },
+      { x: gx(21 * vs), y: y + 6 * vs },
+      { x: gx(21 * vs), y: y - 6 * vs },
     ], true);
     graphics.lineStyle(1.4 * vs, 0x0b0e10, 1);
     graphics.strokePoints([
-      { x: px(13 * vs), y: y - 3.5 * vs },
-      { x: px(13 * vs), y: y + 3.5 * vs },
-      { x: px(21 * vs), y: y + 6 * vs },
-      { x: px(21 * vs), y: y - 6 * vs },
-      { x: px(13 * vs), y: y - 3.5 * vs },
+      { x: gx(13 * vs), y: y - 3.5 * vs },
+      { x: gx(13 * vs), y: y + 3.5 * vs },
+      { x: gx(21 * vs), y: y + 6 * vs },
+      { x: gx(21 * vs), y: y - 6 * vs },
+      { x: gx(13 * vs), y: y - 3.5 * vs },
     ], true);
     graphics.fillStyle(0xffc06a, pilot);
-    graphics.fillCircle(px(22.5 * vs), y, 1.8 * vs);
+    graphics.fillCircle(gx(22.5 * vs), y, 1.8 * vs);
   } else {
     // Blade: the grip only — the blade itself is drawn by the swing animation
-    // when active, or at rest angle when idle.
-    graphics.fillStyle(0x202829, 1); graphics.fillRect(grx(-6, 15), y - 3 * vs, 15 * vs, 6 * vs);
+    // when active, or at rest angle when idle. In mirrored space the rest
+    // angle mirrors automatically, so facing needs no branching.
+    graphics.fillStyle(0x202829, 1); graphics.fillRect(gx(-6 * vs), y - 3 * vs, 15 * vs, 6 * vs);
     led(-3, 0, 0.8, 0.4 + ledPulse * 0.3, 0xbfcbd0);
     const swing = fx?.swing;
     const restAngle = -0.5;
     const from = swing ? -1.55 : restAngle;
     const to = swing ? -1.55 + 2.8 * (1 - Math.pow(1 - swing.progress, 2)) : restAngle;
-    const angle = facing > 0 ? to : Math.PI - to;
-    const tipX = px(5 * vs) + Math.cos(angle) * 42 * vs;
-    const tipY = y + 1 * vs + Math.sin(angle) * 42 * vs;
+    const tipX = gx(5 * vs) + Math.cos(to) * 42 * vs;
+    const tipY = y + 1 * vs + Math.sin(to) * 42 * vs;
     graphics.lineStyle(5 * vs, 0x0b0e10, 1);
-    graphics.lineBetween(px(5 * vs), y + 1 * vs, tipX, tipY);
+    graphics.lineBetween(gx(5 * vs), y + 1 * vs, tipX, tipY);
     graphics.lineStyle(3.4 * vs, 0xbfcbd0, 0.98);
-    graphics.lineBetween(px(5 * vs), y + 1 * vs, tipX, tipY);
+    graphics.lineBetween(gx(5 * vs), y + 1 * vs, tipX, tipY);
     graphics.lineStyle(1.2 * vs, 0xf5f0dc, 0.85);
-    graphics.lineBetween(px(6 * vs), y - 0.5 * vs, px(5 * vs) + Math.cos(angle) * 40 * vs, y + 1 * vs + Math.sin(angle) * 40 * vs - 2.5 * vs);
+    graphics.lineBetween(gx(6 * vs), y - 0.5 * vs, gx(5 * vs) + Math.cos(to) * 40 * vs, y + 1 * vs + Math.sin(to) * 40 * vs - 2.5 * vs);
   }
+  if (facing < 0) graphics.restore();
 }
 
 function clampAngle(value: number, min: number, max: number) {

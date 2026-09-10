@@ -543,6 +543,19 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 - 回归：tsc/build/logic/network/browser/visual 全绿；bench 顶 170 上限；performance 47.6→60.5 FPS（外部负载波动区间）；rail-probe 目检满蓄白热弹头+全屏贯穿+线光走廊+面罩辉光
 
 **回归**：tsc + build + logic（新断言：M27 伤害表/冷却冻结/spread 线性/桶参数/Pyre Vent 身份/武器数=8）+ network（slot7→echo、slot8→flame 切枪回归——**排障发现 setConfig 第 399 行残留 `.slice(0, 7)` 硬上限，flame 在 trim 前就被丢弃**）+ browser（armory 8 枪/面板 16 range bars/Pyre Vent 沙盒开火冒烟）+ visual + ai（FFA 三图全解、桶爆 266 次、blade→sidearm 切枪、悬崖守卫——火焰传播上线前后各跑一轮全绿）+ **performance 45.4 FPS/p95 35.3ms（机器 43 node 进程高负载下过线；light-bench FULL 157 FPS/ADD 143.3/关 170——半影+渐变+弹道光全栈成本 ~13-30 FPS，门禁 45 的 3 倍余量）**；light-check fortress/factory 比值 1.79（目标 ≥0.85 达成，fortress 与 canopy 同级亮度）；docs/screenshots 全量重生成
+
+### M28 桶模型重制 + 线影修复 + 整枪镜像 + 光效丰富化（2026-09，DSH/glm-5.3-flash）
+
+用户实测四反馈：桶模型错位（警示条纹画出桶外）、桶伤害/爆炸太弱、桶太矮、左右武器建模错位仍存在（另线光源没投影）。
+
+- **桶模型重制**（art.ts）：鼓身 18×24 → **26×34**（原 24px 读作半截桶）；警示条纹改**对称画法**（x±中心左右各 3 条，旧循环向右累计画出界）；阀门/燃烧火舌/损伤裂纹全部等比放大；occluder 同步 26×34。视觉放大不影响命中几何（segmentHitsProp 语义独立）。
+- **桶火力上调**（shared/game.ts，band 断言保持）：barrel damage 46→**64**、blastRadius 88→**104**、knockback 330→360；rocket 同步 primary 58→**66** / 爆径 96→**112**、cluster 30→34 / 70→84（barrel < rocket 恒成立）。爆炸视觉：双层冲击环（主环 grow 95→150 + 追加慢速深橙环）、flash 170→210、火球粒子 40→52 组。
+- **线影真修复**（lighting.ts）：线影强度改为 **flashLine 显式参数 lineShadow**（Rail 1.1 / beam 0.55 / piercing 0.45，不随 charge 缩水——此前 alpha×2.2 在未满蓄时把楔形压到可见阈值之下）；去掉衰减双重相乘；投影采样 6→8、感知半径 ×2.2；珠间距强制 ≥ radius×0.85（防加色过曝成白块）。
+- **整枪镜像根治**（art.ts）：删除 grx() 手工镜像（逐零件镜像必然漏件），drawWeapon 改为**朝右单空间绘制 + 朝左时 canvas 绕握把锚点 scaleCanvas(-1,1) 镜像**——所有零件/线条/粒子作为一个整体变换，错位在构造上不可能。blade 挥砍角在镜像空间自动正确。
+- **光效丰富化**：大弹种（rocket/flame/shard）飞行 4% 概率掉火花；命中爆闪 bloom 0.3→0.45；Voltrail 蓄能 >0.5 时枪口随机泄漏白色电弧（thin tracer，30%/帧）。
+- **测试钩子**：`window.__spireSelf`（自我渲染坐标，探针精确定位裁剪——此前盲试裁剪浪费大量轮次）。
+- 回归：tsc/build/logic（M28 桶/rocket 数值断言更新）/network/browser/visual 全绿；bench FULL 162 / ADD 164 / 关 170（全栈 7.8 FPS）；barrel-left-probe 目检（桶对称加高、朝左 sidearm 枪身/枪口/LED 全部正确镜像）
+- **性能门禁负载告警**：M28 收尾时 performance 三连跑 28.9/34.5/37.5 FPS 均失败——机器外部 node 进程达 60 个（历史已知假失败阈值 20+ 的 3 倍），同窗 ai-smoke 全绿、light-bench 顶 162-170 上限，判定为环境性假失败；**待机器安静时复测 45 FPS 门禁**
 **状态**：等待用户实测后批准提交（commit 需用户明确批准——§6 约束）
 
 ## 6. 用户约束（继承自全部历史会话，继续有效）

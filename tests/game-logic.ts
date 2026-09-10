@@ -273,7 +273,7 @@ assert(WEAPONS.sidearm.primary.damage === 11 && WEAPONS.sidearm.secondary.damage
 assert(WEAPONS.scatter.primary.damage === 11 && WEAPONS.scatter.secondary.damage === 5, "Scatter damage drifted from the M27 table");
 assert(WEAPONS.rifle.primary.damage === 8 && WEAPONS.rifle.secondary.damage === 48, "Longbeam damage drifted from the M27 table");
 assert(WEAPONS.sniper.primary.damage === 40 && WEAPONS.sniper.secondary.damage === 44, "Voltrail damage drifted from the M27 table");
-assert(WEAPONS.rocket.primary.damage === 58 && WEAPONS.rocket.secondary.damage === 30, "Forge Rocket damage drifted from the M27 table");
+assert(WEAPONS.rocket.primary.damage === 66 && WEAPONS.rocket.secondary.damage === 34, "Forge Rocket damage drifted from the M28 table");
 assert(WEAPONS.blade.primary.damage === 46 && WEAPONS.blade.secondary.damage === 74, "Cutter Blade damage drifted from the M27 table");
 assert(WEAPONS.echo.primary.damage === 16 && WEAPONS.echo.secondary.damage === 42, "Echo Shard damage drifted from the M27 table");
 // M27 Pyre Vent: cone-spray flamethrower inside the weapon count contract.
@@ -283,7 +283,7 @@ assert(WEAPONS.flame.primary.speed === 430 && WEAPONS.flame.primary.cooldown <= 
 // Cooldowns stayed frozen (only damage/knockback/blast moved this round).
 assert(WEAPONS.sidearm.primary.cooldown === 0.09 && WEAPONS.rocket.primary.cooldown === 0.9 && WEAPONS.blade.secondary.cooldown === 1.0, "M27 touched cooldowns — the freeze was violated");
 // Barrels became landmine-grade but stay under the rocket's envelope.
-assert(PROP_TUNING.damage === 46 && PROP_TUNING.blastRadius === 88 && PROP_TUNING.knockback === 330, "Barrel tuning drifted from the M27 table");
+assert(PROP_TUNING.damage === 64 && PROP_TUNING.blastRadius === 104 && PROP_TUNING.knockback === 360, "Barrel tuning drifted from the M28 table");
 assert(PROP_TUNING.hp === 30, "Barrel detonation threshold drifted");
 // Swept segment vs barrel circle: same geometry the projectiles use.
 const barrel = { x: 600, y: 400 };
