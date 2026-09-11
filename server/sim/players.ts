@@ -3,6 +3,7 @@
 // 依赖方向：players → damage → state。
 import {
   AMMO_REGEN_INTERVAL_TICKS,
+  ITEM_TUNING,
   MAPS,
   MAX_JUMPS,
   MOVE_TUNING,
@@ -29,6 +30,7 @@ import {
 } from "../../shared/game.js";
 import { emitEvent, statsEntry, type Room } from "../state.js";
 import { damage, damageMob, damageProp, isEliminated, loseLife } from "./damage.js";
+import { applyMeleeFlash, reflectBeams, shieldBlocks, useItem } from "./items.js";
 import { pickSpawn, sameTeam } from "./teams.js";
 
 export function intersectsPlayerRect(player: PlayerState, rect: { x: number; y: number; width: number; height: number }) {
@@ -115,6 +117,9 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
       if (!segmentHitsPlayer(other, originX, originY, tipX, originY)) continue;
       const impact = segmentImpactPoint(other, originX, originY, tipX, originY) ?? { x: other.x, y: other.y - PLAYER_TARGET_OFFSET };
       damage(room, other, def.damage, def.knockback, player.x, impact.x, impact.y, { actorId: player.id, weaponId: player.weapon, secondary });
+      // M32: a dashSlash connect bursts a lightning-bright flash at the impact
+      // point — the wielder keeps a clean view, everyone else eats the blind.
+      if (def.pattern === "dashSlash") applyMeleeFlash(room, MAPS[room.config.mapId], player, impact.x, impact.y);
     }
     // M25: melee cleaves barrels too — the swing arc doubles as a demolition
     // tool when a barrel sits inside the range.
@@ -201,6 +206,15 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
           damageMob(room, mob, def.damage * chargeScale * falloff, player.x, def.knockback * chargeScale);
           continue;
         }
+        // M32: the diffraction shield eats laser-family shots (beam/piercing)
+        // from the front and splits them into the 7-beam spectral fan — the
+        // ray ends at the shield, so nothing behind it is hit either.
+        if (shieldBlocks(other!, player.x, def.pattern === "beam" || def.pattern === "piercing")) {
+          const impactX = other!.x + other!.facing * 8;
+          const impactY = other!.y - PLAYER_TARGET_OFFSET;
+          reflectBeams(room, MAPS[room.config.mapId], other!, impactX, impactY, Math.atan2(directionY, directionX), def.damage * chargeScale, player);
+          break;
+        }
         damage(room, other!, def.damage * chargeScale * falloff, def.knockback * chargeScale, player.x, other!.x - player.facing * 7, other!.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
       }
     }
@@ -242,6 +256,23 @@ export function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: 
   player.secondaryCooldown = Math.max(0, player.secondaryCooldown - dt);
   player.invulnerable = Math.max(0, player.invulnerable - dt);
   player.hitFlash = Math.max(0, player.hitFlash - dt);
+  // M32: blindness counts down with an eased intensity readout; the shield
+  // burns its duration and consumes itself when it expires.
+  if ((player.blind ?? 0) > 0) {
+    player.blind = Math.max(0, (player.blind ?? 0) - dt);
+    player.blindIntensity = player.blindDuration ? clamp((player.blind / player.blindDuration) * (player.blindIntensity ?? 1), 0, 1) : 0;
+    if ((player.blind ?? 0) <= 0) {
+      player.blindIntensity = 0;
+      player.blindDuration = 0;
+    }
+  }
+  if ((player.shield ?? 0) > 0) {
+    player.shield = Math.max(0, (player.shield ?? 0) - dt);
+    if ((player.shield ?? 0) <= 0) {
+      player.shieldCharges = 0;
+      if (player.item === "shield") player.item = undefined;
+    }
+  }
 
   if (isEliminated(room, player)) {
     room.jumpHeld.set(player.id, false);
@@ -263,9 +294,38 @@ export function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: 
       player.ammo = player.ammoByWeapon.sidearm = WEAPONS.sidearm.ammo;
       player.charge = 0;
       player.invulnerable = 1.4;
+      // M32: a respawn clears blindness and any active shield (items survive —
+      // a carried grenade stays carried; an active shield does not).
+      player.blind = 0;
+      player.blindIntensity = 0;
+      player.blindDuration = 0;
+      player.shield = 0;
+      player.shieldCharges = 0;
+      player.jetpacking = false;
       emitEvent(room, "respawn", player.x, player.y - PLAYER_TARGET_OFFSET, 1, { targetId: player.id });
     }
     return;
+  }
+
+  // M32 pocket item use: edge-detect the G key (held input, one trigger per
+  // press — the same contract jump uses), then hand it to the items domain.
+  if (player.item) {
+    const held = input.useItem === true;
+    const pressed = held && !room.itemHeld.get(player.id);
+    room.itemHeld.set(player.id, held);
+    if (pressed) useItem(room, map, player);
+  } else {
+    room.itemHeld.set(player.id, false);
+  }
+
+  // M32 jetpack: thrust while Shift is held and fuel remains; an empty tank
+  // consumes the item. Server-authoritative fuel.
+  player.jetpacking = false;
+  if (player.item === "jetpack" && input.jetpack === true && (player.jetpackFuel ?? 0) > 0) {
+    player.jetpackFuel = Math.max(0, (player.jetpackFuel ?? 0) - dt);
+    player.vy = Math.max(-MOVE_TUNING.maxSpeed * 1.35, player.vy - ITEM_TUNING.jetpack.thrust * dt);
+    player.jetpacking = true;
+    if ((player.jetpackFuel ?? 0) <= 0) player.item = undefined;
   }
 
   if (input.weaponSlot !== undefined) {

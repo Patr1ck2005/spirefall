@@ -8,6 +8,7 @@ import {
   MOVE_TUNING,
   PLAYER_TARGET_OFFSET,
   PROP_TUNING,
+  SHIELD_BEAMS,
   TEAM_COLORS,
   WEAPONS,
   WORLD,
@@ -33,6 +34,8 @@ import {
   drawPlayer,
   drawProjectile,
   drawProp,
+  drawShield,
+  drawThrowable,
 } from "./art";
 import { i18n } from "./i18n";
 import { LightingSystem, type OccluderRect } from "./lighting";
@@ -172,7 +175,7 @@ class ArenaScene extends Phaser.Scene {
     // M25/M26 cinematic lighting (respects the FX toggle; skipped on Canvas).
     this.ensureLighting();
     this.input.keyboard!.addCapture("TAB");
-    this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
+    this.keys = this.input.keyboard!.addKeys("A,D,W,S,J,K,G,SHIFT") as unknown as Record<string, Phaser.Input.Keyboard.Key>;
     // M24b: weapon-slot presses go through a pending retry queue. A single
     // fire-and-forget input message used to lose the slot ~half the time
     // (any interleaved movement message overwrote it server-side); the
@@ -293,7 +296,7 @@ class ArenaScene extends Phaser.Scene {
     // M24b: a pending slot request rides every input message until confirmed
     // (or 800ms gives up — dead request, e.g. slot outside the match set).
     const carried = this.pendingSlot && performance.now() - this.pendingSlot.queuedAt < 800 ? this.pendingSlot.slot : slot;
-    send("input", { input: { seq: ++this.seq, left: keys.A.isDown, right: keys.D.isDown, jump: keys.W.isDown, drop: keys.S.isDown, primary: keys.J.isDown, secondary: keys.K.isDown, weaponSlot: carried } });
+    send("input", { input: { seq: ++this.seq, left: keys.A.isDown, right: keys.D.isDown, jump: keys.W.isDown, drop: keys.S.isDown, primary: keys.J.isDown, secondary: keys.K.isDown, useItem: keys.G?.isDown === true, jetpack: keys.SHIFT?.isDown === true, weaponSlot: carried } });
   }
 
   applySnapshot(snapshot: ServerSnapshot) {
@@ -354,6 +357,12 @@ class ArenaScene extends Phaser.Scene {
       $("result").classList.remove("bot-victory");
     }
     $("winner").textContent = (snapshot.winner && winnerEntry?.name) || i18n.t("noSurvivor");
+    // M32: the personal whiteout — my own blindIntensity drives the DOM
+    // overlay (everyone's blindness is private, snapshot-delivered).
+    const blindOverlay = $("blind");
+    const myBlind = snapshot.players.find((player) => player.id === session.selfId)?.blindIntensity ?? 0;
+    blindOverlay.style.opacity = myBlind.toFixed(3);
+    blindOverlay.classList.toggle("hidden", myBlind <= 0.01);
     // M30: squad ranking block under the banner (hidden in FFA).
     const ranking = $("result-ranking");
     if (squadMode) {
@@ -477,6 +486,7 @@ class ArenaScene extends Phaser.Scene {
 
   private lastRosterHtml = "";
   private lastWeaponHtml = "";
+  private lastItemHtml = "";
   private lastLimbsHtml = "";
   private lastPhaseKey = "";
 
@@ -506,6 +516,15 @@ class ArenaScene extends Phaser.Scene {
     }
     if (!mine) return;
     const weapon = WEAPONS[mine.weapon];
+    // M32 pocket-item chip: label + G hint; the jetpack shows its fuel bar.
+    const itemLabels: Record<string, string> = { grenade: "GRENADE", flashbang: "FLASHBANG", medkit: "MEDKIT", shield: "DIFFRACTOR", jetpack: "JETPACK" };
+    const itemChip = mine.item
+      ? `<span class="item-chip" style="--item:${mine.item === "medkit" ? "#4fd07a" : mine.item === "shield" ? "#9a5cff" : mine.item === "jetpack" ? "#e8632a" : mine.item === "flashbang" ? "#dfe6ea" : "#d8a83e"}"><i>${itemLabels[mine.item]}</i>${mine.item === "jetpack" ? `<b>${Math.ceil(mine.jetpackFuel ?? 0)}s</b>` : "<b>G</b>"}</span>`
+      : "";
+    if (itemChip !== this.lastItemHtml) {
+      this.lastItemHtml = itemChip;
+      $("hud-item").innerHTML = itemChip;
+    }
     const chargeReadout = weapon.primary.chargeMax !== undefined ? Math.max(0.02, mine.charge ?? 0) : Math.min(1, mine.primaryCooldown / Math.max(0.01, weapon.primary.cooldown));
     const weaponHtml = `<div class="weapon-readout" style="--weapon:${colorCss(weapon.color)}"><span>${weapon.label}</span><strong>${mine.ammo}</strong><small>${i18n.t("ammo")}</small><div><i style="--cool:${chargeReadout.toFixed(2)}">J</i><i style="--cool:${Math.min(1, mine.secondaryCooldown / Math.max(0.01, weapon.secondary.cooldown)).toFixed(2)}">K</i></div></div>`;
     if (weaponHtml !== this.lastWeaponHtml) {
@@ -859,6 +878,36 @@ class ArenaScene extends Phaser.Scene {
           const surface = surfaceBelow(map, event.x, event.y + 6);
           if (surface !== undefined) this.stampDecal({ x: event.x, y: surface + 1, radius: 10 + event.strength * 6, alpha: 0.5, rotation: Math.random() * Math.PI, scorch: true });
         }
+      } else if (event.type === "blind") {
+        // M32 flash burst: lightning-bright pop; the per-player whiteout rides
+        // the snapshot's blindIntensity (the DOM overlay), not this event.
+        sfx.play("blind", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
+        this.lighting?.flash(event.x, event.y, 150, 0xffffff, 0.75, 0.3, undefined, 1.2, 0.9);
+        this.spawnBurst(event.x, event.y, 0xfff3d0, 12, "flash", 0);
+        this.rings.push({ x: event.x, y: event.y, life: 0.3, maxLife: 0.3, radius: 8, color: 0xffffff, width: 3, grow: 160 });
+      } else if (event.type === "shieldReflect") {
+        // M32 diffraction fan: 0-level mirror beam keeps the attacker's weapon
+        // color; ±1/±2/±3 orders carry the spectral ladder. Each beam is a
+        // real flashLine with its explicit line-shadow.
+        sfx.play("shield", { ...at(event.x, event.y), priority: "high" });
+        // Mirror reflection flips the ray's normal component: 2θn + π − θi.
+        const mirror = 2 * (event.direction === 1 ? 0 : Math.PI) + Math.PI - (event.angle ?? 0);
+        for (const beam of SHIELD_BEAMS) {
+          const angle = mirror + (beam.offsetDeg * Math.PI) / 180;
+          const endX = event.x + Math.cos(angle) * beam.length;
+          const endY = event.y + Math.sin(angle) * beam.length;
+          const tint = beam.offsetDeg === 0 && event.weaponId ? WEAPONS[event.weaponId].color : beam.color;
+          this.tracers.push({ x1: event.x, y1: event.y, x2: endX, y2: endY, life: 0.22, color: tint, width: beam.offsetDeg === 0 ? 3.5 : 2.2, core: beam.offsetDeg === 0 ? 1.6 : 1.1 });
+          if (beam.offsetDeg !== 0) {
+            this.tracers.push({ x1: event.x, y1: event.y - 2, x2: endX, y2: endY - 2, life: 0.16, color: beam.core, width: 1, thin: true });
+          }
+          this.lighting?.flashLine(event.x, event.y, endX, endY, 30, beam.radius, tint, beam.alpha, 0.24, 0, beam.lineShadow);
+        }
+        this.spawnBurst(event.x, event.y, 0xffffff, 8, "flash", 0);
+      } else if (event.type === "itemUse") {
+        // Throw pin / medkit hiss / shield hum — one cue per item family.
+        const cue = event.itemId === "medkit" ? "repair" : event.itemId === "shield" ? "shield" : event.itemId === "grenade" || event.itemId === "flashbang" ? "impact" : "ui:click";
+        sfx.play(cue as never, { ...at(event.x, event.y), strength: event.strength });
       }
     }
   }
@@ -1054,8 +1103,9 @@ class ArenaScene extends Phaser.Scene {
     for (const hazard of snapshot.hazards) drawHazard(this.graphics, hazard, map.accent, time);
     for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
     for (const prop of snapshot.props) if (prop.alive) drawProp(this.graphics, prop, time, this.lighting?.sampleLight(prop.x, prop.y - 12));
-    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind, this.lighting?.sampleLight(crate.x, crate.y));
+    for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind, crate.item, this.lighting?.sampleLight(crate.x, crate.y));
     for (const drop of snapshot.drops) drawDrop(this.graphics, drop, time);
+    for (const throwable of snapshot.throwables) drawThrowable(this.graphics, throwable, time);
     // M31: hostile pests render under pilots (they are ground clutter) with
     // their own cast shadows from the rig.
     for (const mob of snapshot.mobs) drawMob(this.graphics, mob, snapshot.config.mapId, time);
@@ -1657,6 +1707,18 @@ class ArenaScene extends Phaser.Scene {
       dashSlash: swing?.secondary && swing.progress < 0.8,
       charge: player.charge,
     }, this.lighting?.sampleLight(position.x, position.y - 30));
+    // M32: the diffraction shield face rides the holder's facing; a thrusting
+    // jetpack carries a real tail-flame light (it shines, it casts).
+    if ((player.shield ?? 0) > 0) drawShield(this.graphics, player, time);
+    if (player.jetpacking) {
+      const flameX = position.x - player.facing * 2;
+      const flameY = position.y + 5;
+      this.graphics.fillStyle(0x0b0e10, 0.9);
+      this.graphics.fillTriangle(flameX - 5, flameY, flameX + 5, flameY, flameX, flameY + 12 + Math.random() * 6);
+      this.graphics.fillStyle(0xffb254, 0.8);
+      this.graphics.fillTriangle(flameX - 3, flameY + 1, flameX + 3, flameY + 1, flameX, flameY + 9 + Math.random() * 5);
+      this.lighting?.flash(flameX, flameY + 7, 42, 0xff9a4a, 0.42, 0.12, undefined, 0, 0.4);
+    }
     // M24: overhead integrity bar — total limb pool, color shifts to amber/red
     // as limbs grind down. Hidden at full health to keep the scene clean.
     const totalIntegrity = LIMB_IDS.reduce((sum, limbId) => sum + player.limbs[limbId], 0);

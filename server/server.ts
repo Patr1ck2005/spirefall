@@ -132,6 +132,8 @@ wss.on("connection", (ws) => {
         drop: raw.drop === true,
         primary: raw.primary === true,
         secondary: raw.secondary === true,
+        useItem: raw.useItem === true,
+        jetpack: raw.jetpack === true,
         weaponSlot: slot,
       };
     }

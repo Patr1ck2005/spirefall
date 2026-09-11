@@ -115,6 +115,8 @@ type BotController = {
   groundTicks: number;
   /** Most recent attacker seen in events: { id, tick }. */
   lastAttacker: { id: string; tick: number } | undefined;
+  /** M32: cooldown (ticks) between grenade throws. */
+  grenadeCooldown: number;
 };
 
 export type BotRuntime = {
@@ -146,7 +148,7 @@ export const BOT_IDS = ["bot-1", "bot-2", "bot-3"] as const;
 export const botNameFor = (slot: number) => BOT_NAMES[(slot - 1) % BOT_NAMES.length];
 
 export function createBotInput(): ClientInput {
-  return { seq: 0, left: false, right: false, jump: false, drop: false, primary: false, secondary: false, weaponSlot: undefined };
+  return { seq: 0, left: false, right: false, jump: false, drop: false, primary: false, secondary: false, weaponSlot: undefined, useItem: false, jetpack: false };
 }
 
 export function ensureControllers(room: Room) {
@@ -188,6 +190,7 @@ export function ensureControllers(room: Room) {
       airPlan: false,
       groundTicks: 0,
       lastAttacker: undefined,
+      grenadeCooldown: 0,
     });
   }
 }
@@ -573,7 +576,10 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
   input.drop = false;
   input.primary = false;
   input.secondary = false;
+  input.useItem = false;
+  input.jetpack = false;
   input.weaponSlot = undefined;
+  if (controller.grenadeCooldown > 0) controller.grenadeCooldown--;
 
   const self = percept.self;
   const deltaX = controller.plan.waypointX - self.x;
@@ -616,6 +622,20 @@ function executePlan(room: Room, controller: BotController, percept: Percept) {
   if (controller.plan.dropThrough && self.onGround) {
     input.drop = true;
     input.jump = false;
+  }
+
+  // M32 pocket-item logic: medkit when ground down hard, shield under fire
+  // with a visible threat, grenade at a visible mid-range target (thrown on
+  // the current facing — the fuse does the rest). One pulse per press.
+  const mine = room.players.get(controller.playerId);
+  if (mine?.item) {
+    const totalLimbs = LIMB_IDS.reduce((sum, limbId) => sum + mine.limbs[limbId], 0);
+    if (mine.item === "medkit" && totalLimbs < 200) input.useItem = true;
+    else if (mine.item === "shield" && totalLimbs < 280 && percept.target && percept.losToTarget) input.useItem = true;
+    else if (mine.item === "grenade" && percept.target && percept.losToTarget && percept.targetDistance > 140 && percept.targetDistance < 520 && controller.grenadeCooldown <= 0) {
+      input.useItem = true;
+      controller.grenadeCooldown = 240;
+    }
   }
 
   // M21 mid-air rescue: a bot crossing a fall gap with horizontal intent and

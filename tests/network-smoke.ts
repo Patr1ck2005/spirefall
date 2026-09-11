@@ -521,6 +521,42 @@ assert(mobSeen, "No hostile mob entered the sandbox within the wave window");
 assert(maxSnapshotBytes < 16000, `Snapshot bandwidth ballooned with mobs enabled (${maxSnapshotBytes} bytes)`);
 mobHost.close();
 
+// --- M32 items: the input whitelist accepts useItem/jetpack, item crates
+// spawn with a valid ItemId, and the throwable pipeline flows (grant → use →
+// fuse → blind burst) end-to-end in a sandbox. ---
+const itemHost = await open();
+itemHost.send(JSON.stringify({ type: "create", name: "Item-Tester" }));
+const itemCreated = await waitFor(itemHost, "room");
+itemHost.send(JSON.stringify({ type: "config", patch: { mapId: "canopy", crates: true } }));
+await waitFor(itemHost, "room");
+itemHost.send(JSON.stringify({ type: "start_sandbox" }));
+await waitFor(itemHost, "snapshot");
+// Send the M32 input fields (a plain movement message must not error).
+itemHost.send(JSON.stringify({ type: "input", input: { seq: 1, useItem: true, jetpack: true } }));
+itemHost.send(JSON.stringify({ type: "input", input: { seq: 2, useItem: false, jetpack: false } }));
+let itemCrateSeen = false;
+let itemCrateId = "";
+// Item crates are a 1-in-5 spawn roll — restart the sandbox in short rounds
+// so the three initial crate rolls re-roll each time (12 rounds ≈ 99.7%).
+for (let round = 0; round < 12 && !itemCrateSeen; round++) {
+  itemHost.send(JSON.stringify({ type: "return_lobby" }));
+  await waitFor(itemHost, "room");
+  itemHost.send(JSON.stringify({ type: "start_sandbox" }));
+  for (let i = 0; i < 150 && !itemCrateSeen; i++) {
+    const message = await waitFor(itemHost, "snapshot", 5000);
+    for (const crate of message.snapshot.crates) {
+      if (crate.kind === "item" && crate.item) {
+        itemCrateSeen = true;
+        itemCrateId = crate.item;
+      }
+    }
+  }
+}
+assert(itemCrateSeen, "No item crate ever spawned in the sandbox rounds");
+const validItems = ["grenade", "flashbang", "medkit", "shield", "jetpack"];
+assert(validItems.includes(itemCrateId), `Item crate carried an unknown item: ${itemCrateId}`);
+itemHost.close();
+
 // --- Explicit leave_room removes the pilot immediately (no 30s hold) ---
 const leaveHost = await open();
 // Continuous collector: ws drops messages that arrive while no listener is

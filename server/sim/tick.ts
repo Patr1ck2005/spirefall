@@ -5,6 +5,7 @@ import { LIMB_IDS, MAPS, MATCH_TIME_LIMIT_TICKS, calculateMoverState, type MapDe
 import { broadcastSnapshot, type Room } from "../state.js";
 import { getBotInput, updateBots } from "../bots.js";
 import { isEliminated } from "./damage.js";
+import { stepThrowables } from "./items.js";
 import { updateMobs } from "./mobs.js";
 import { stepPlayer } from "./players.js";
 import { stepProjectiles } from "./projectiles.js";
@@ -38,6 +39,9 @@ export function updateRoom(room: Room, dt: number) {
   // M31 hostile mobs step after props so their contact lands before the
   // projectile sweep; they never count toward the win conditions below.
   updateMobs(room, map, dt);
+  // M32 thrown pocket items (grenade/flashbang fuses) before projectiles so a
+  // detonation lands in the same tick its fuse expires.
+  stepThrowables(room, map, dt);
   stepProjectiles(room, map, dt);
 
   if (room.mode === "match") {

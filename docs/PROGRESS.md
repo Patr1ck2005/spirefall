@@ -627,6 +627,22 @@ FFA 正式化（teams=0 显式分支）+ 2–4 队分队；依赖方向新增 `t
 - **测试**：game-logic 群怪块（telegraph 60 tick/hp 源自数值表/死亡掉 8s 包/事件齐备/cap 10 拒绝排队）；network-smoke 沙盒群怪流（mobs 开关持久化 → 9s 窗口内 mobSpawn 事件 + 实体在场 + 快照 ≤16KB 带宽核对）；browser-smoke 大厅 #mobs 断言（默认关 + guest 只读）；40s 行为探针（2 兽在场、最远锚点出生、朝机师行进——首次 702 计数为探针把 1s 事件保留窗内重复快照误累计，去重后 2 次波次正确）
 - **性能压测说明**：performance 门禁保持 FFA 四人满负荷场景（mobs 关）——群怪渲染成本 = 每兽一次多边形绘制 + ≤3 枚 tier 1 光源（负载下按 tier 先 shed），满 cap 10 只需 ~60s 波次预热且 AFK 机师会被磨死导致结算屏污染采样窗口；群怪成本由快照带宽断言 + FFA 门禁侧面覆盖
 
+### M32 道具系统、盲目状态与近战闪光（2026-09，DSH/glm-5.3-flash）
+
+独立 G 槽道具（手雷/闪光弹/回血包/衍射盾/喷气背包）+ 统一盲视规则 + dashSlash 自带闪光；服务器权威：
+
+- **shared 契约**：`ItemId`（grenade/flashbang/medkit/shield/jetpack）、`PlayerState` 新字段（item/blind/blindDuration/blindIntensity/shield/shieldCharges/jetpackFuel/jetpacking）、`ClientInput.useItem/jetpack`（G/Shift 持续键，服务端按 jumpHeld 同款边缘检测——room.itemHeld）、`CrateKind`+"item"（CrateState.item?）、`ThrowableState`（ServerSnapshot.throwables）、`CombatEventType`+itemUse/blind/shieldReflect、`CombatEvent.itemId?/angle?`、`ITEM_TUNING`、**`SHIELD_BEAMS` 单一来源**（7 束：0 级 + ±6°/±12°/±18° 谱色梯子 紫 0x9a5cff→绿 0x63e05f→红 0xff3b47，每束 length/radius/alpha/lineShadow/tier 按规格表，双端共用）
+- **server/sim/items.ts（新模块）**：`useItem` 分发（手雷/闪光弹 → 抛物线投掷物 vx=facing×速度 vy=−lift、medkit 即时全肢体、shield 激活 duration 6s + charges 3、jetpack 由 Shift 驱动）；`stepThrowables`（重力弧 + 单向面弹跳阻尼 0.35 + solid 横向反弹 + 引信爆）；手雷爆炸 = 伤害 46 < 火箭 66、击退 520 全场最高、桶半伤、群怪溅射、投掷者自免；闪光弹 = 零伤害盲视爆发（投掷者免疫）
+- **盲视数学（纯函数测试钉死）**：`blindSeconds(distance, radius, facingToward)`——线性距离衰减至半径归零；面向系数梯队 **正对 1.0 / 侧对 0.75 / 背对 0.5**；LOS 由 raycastSolids 遮挡判定（掩体后不致盲）；blind/blindDuration/blindIntensity 随快照下发，客户端按自身 blindIntensity 驱动 DOM 白幕（#blind），盲视纯视觉不影响模拟（bot 保持公开状态感知，文档记录）
+- **衍射盾**：`shieldBlocks` 只挡激光族（beam/piercing = flashLine 武器族）且仅正面（射手在面朝方向）；格挡消耗一枚 charge（3 次或 6s 双重上限，耗尽即道具消失）；`reflectBeams` **7 束均分守恒**（每束 = 原伤害 ÷ 7）服务器权威 hitscan 线段结算——0 级束沿镜面反射方向 **θ0 = 2θn + π − θi**（实装中发现并修正了 2θn − θi 的镜像公式错误——法向分量翻转才是正确几何），可打回攻击者/命中群怪/点燃引爆桶；反射束不二次反射（单层，已记录）；非激光武器照常伤害（无减伤）
+- **近战闪光**：dashSlash 命中瞬间在命中点 applyMeleeFlash（半径 260、最长 2.0s），持刀者免疫（"自己的闪光维持原样"），其余玩家按统一盲视规则
+- **喷气背包**：拾取获燃料罐 2.2s，按住 Shift 持续推力（推力 2600 > 重力 1600，净上升 1000px/s²——初值 1500 会被同 tick 重力抵消，测试抓出后修正），服务器权威燃料，耗尽即道具消失；`jetpacking` 随快照下发供客户端画尾焰
+- **道具箱**：刷箱 ~1/5 为 item 箱（权重 手雷4/闪光3/血包3/盾2/喷气2），拾取仅填空 G 槽（已有道具的机师不吃箱，箱留给下一个人）；五种道具各有专属信号色与图形 glyph
+- **bot 道具逻辑**：残血（<200/400）吃回血包、受压且目标可见开盾、可视目标 140–520px 丢雷（240 tick 冷却）；bot 感知盲视不降精度（文档记录）
+- **客户端**：`drawThrowable`（橄榄手雷/灰色闪光弹 + 引信频闪）、`drawShield`（斜置平行四边形盾面 + capCore 亮边 + 光栅刻线 + charge 缺口）、喷气尾焰 = 真实光源（flash 0.4/0.4 投影）；shieldReflect 事件 → 客户端按共享扇束表逐束渲染（0 级保留入射武器色，± 束双描线 core 副色）+ `flashLine` 逐束线影；lineTransients 上限 6→10（M34 解析线影落地后回收）；blind 事件 = 白色爆闪 + 光源；audio.ts 新增 blind（白色脆响）/shield（水晶 ping）两枚 cue；HUD 道具芯片（#hud-item，喷气显示燃料秒数）
+- **测试**：game-logic 道具块（盲视数学断言/手雷投掷与引信/闪光弹免疫与致盲/盾正面-背后-非激光-耗尽四态/反射均分守恒 + 打回攻击者/喷气推进与燃料耗尽）；network-smoke 道具流（useItem/jetpack 输入白名单 + 沙盒重启轮询 item 箱合法性）；browser-smoke 壳层断言（#blind + #hud-item 存在）
+- **实现假设（可否决）**：盲视不影响 bot 行为；反射束不二次反射；道具箱无独立开关（随补给箱系统，crates 关 = 道具箱关）；喷气背包占 G 槽（拾取时若槽满则不吃箱）
+
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）

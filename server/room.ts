@@ -64,6 +64,9 @@ export function createRoom(client: Client, name: string) {
     nextMobId: 1,
     nextDropId: 1,
     nextMobWaveTick: 0,
+    throwables: [],
+    nextThrowableId: 1,
+    itemHeld: new Map(),
   };
   client.room = room;
   room.players.set(client.id, makePlayer(client.id, name.slice(0, 16) || "Player", 0, room.config));
@@ -135,6 +138,7 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.players.delete(client.id);
     room.tokens.delete(client.id);
     room.jumpHeld.delete(client.id);
+    room.itemHeld.delete(client.id);
     // A room with no connected humans (bots only) is dead weight — dissolve it.
     if (humanCount(room) === 0) rooms.delete(room.code);
     if (room.phase === "lobby") rebalanceTeams(room);
@@ -147,6 +151,7 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.players.delete(client.id);
     room.tokens.delete(client.id);
     room.jumpHeld.delete(client.id);
+    room.itemHeld.delete(client.id);
     room.reconnectTimers.delete(client.id);
     if (humanCount(room) === 0) rooms.delete(room.code);
     else {
@@ -199,6 +204,14 @@ function resetPlayer(room: Room, player: PlayerState, index: number) {
   player.respawnTimer = 0;
   player.hitFlash = 0;
   player.invulnerable = 1.5;
+  // M32: fresh pocket state every match.
+  player.item = undefined;
+  player.blind = 0;
+  player.blindIntensity = 0;
+  player.shield = 0;
+  player.shieldCharges = 0;
+  player.jetpackFuel = undefined;
+  player.jetpacking = false;
 }
 
 function syncBotRoster(room: Room) {
@@ -265,6 +278,8 @@ export function start(room: Room, mode: MatchMode) {
   room.nextMobId = 1;
   room.nextDropId = 1;
   room.nextMobWaveTick = room.config.mobs ? Math.round(WORLD.tickRate * 5) : 0;
+  room.throwables = [];
+  room.nextThrowableId = 1;
   broadcastRoom(room);
 }
 
@@ -282,12 +297,24 @@ export function returnToLobby(room: Room) {
   room.mobQueue = [];
   room.drops = [];
   room.nextMobWaveTick = 0;
+  room.throwables = [];
+  for (const player of room.players.values()) {
+    player.charge = 0;
+    player.item = undefined;
+    player.blind = 0;
+    player.blindIntensity = 0;
+    player.shield = 0;
+    player.shieldCharges = 0;
+    player.jetpackFuel = undefined;
+    player.jetpacking = false;
+  }
   for (const player of room.players.values()) player.charge = 0;
   for (const client of room.clients.values()) {
     client.input = blankInput();
     room.jumpHeld.set(client.id, false);
   }
   clearBotInputs(room);
+  for (const client of room.clients.values()) room.itemHeld.set(client.id, false);
   broadcastRoom(room);
 }
 

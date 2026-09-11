@@ -303,6 +303,18 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
     noise(0.5, "lowpass", 700, 120, 0.7, g * 0.55, out);
     tone("sine", 120, 40, 0.4, g * 0.5, out, 0.02);
   },
+  // M32: the flash pop (hard white snap) and the diffraction shield's
+  // crystalline ping with a violet hum tail.
+  blind: (out, g) => {
+    noise(0.18, "highpass", 2200, 400, 1.4, g * 0.8, out);
+    tone("sine", 1600, 320, 0.3, g * 0.4, out);
+    tone("sine", 80, 40, 0.35, g * 0.5, out);
+  },
+  shield: (out, g) => {
+    tone("triangle", 1980, 2640, 0.16, g * 0.3, out);
+    tone("sine", 660, 640, 0.4, g * 0.14, out, 0.03);
+    noise(0.08, "bandpass", 3000, 2200, 2, g * 0.2, out);
+  },
 };
 
 export const sfx = {

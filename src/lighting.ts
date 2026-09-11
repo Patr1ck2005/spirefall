@@ -419,7 +419,10 @@ export class LightingSystem {
       this.flash(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, radius, tint, alpha * falloff, life, undefined, pointIntensity > 0 ? pointIntensity * falloff : undefined, undefined, true);
     }
     this.lineTransients.push({ x0, y0, x1, y1, radius, tint, alpha, life, maxLife: life, shadow: lineShadow });
-    if (this.lineTransients.length > 6) this.lineTransients = this.lineTransients.slice(-6);
+    // M32: raised 6 -> 10 while the shield's diffraction fan shares the line
+    // (7 beams + the pilot's own rail/beam lights); the analytic line-shadow
+    // pass (M34) recovers the headroom.
+    if (this.lineTransients.length > 10) this.lineTransients = this.lineTransients.slice(-10);
   }
 
   /**

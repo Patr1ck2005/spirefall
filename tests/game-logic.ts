@@ -350,6 +350,9 @@ const makeSquadRoom = (players: PlayerState[], teams: number): Room => ({
   nextMobId: 1,
   nextDropId: 1,
   nextMobWaveTick: 0,
+  throwables: [],
+  nextThrowableId: 1,
+  itemHeld: new Map(),
 }) as unknown as Room;
 
 const squadPilot = (id: string, index: number) => makePlayer(id, id, index, { ...DEFAULT_CONFIG, mapId: "canopy" });
@@ -476,6 +479,111 @@ import { queueMobWave, updateMobs } from "../server/sim/mobs.js";
   room.nextMobWaveTick = room.tick;
   updateMobs(room, canopy, 1 / 60);
   assert(room.mobQueue.length === 0, "Wave spawner must respect the concurrency cap");
+}
+
+// ---- M32 pocket items: blind math, throwables, shield, jetpack --------------
+
+import { ITEM_TUNING, SHIELD_BEAMS } from "../shared/game.js";
+import { blindSeconds, reflectBeams, shieldBlocks, stepThrowables, useItem } from "../server/sim/items.js";
+import { stepPlayer } from "../server/sim/players.js";
+
+{
+  // Blind math: linear distance falloff, facing-away still stings, hard zero
+  // at the radius, never negative.
+  const max = ITEM_TUNING.flashbang.maxBlind;
+  const radius = ITEM_TUNING.flashbang.radius;
+  assert(blindSeconds(0, radius, 1, max, 0.4) === max, "Point-blank facing flash must deliver the full blind");
+  assert(blindSeconds(radius, radius, 1, max, 0.4) === 0, "The flash radius edge must blind for zero seconds");
+  assert(blindSeconds(radius * 2, radius, 1, max, 0.4) === 0, "Beyond the radius nothing blinds");
+  const toward = blindSeconds(radius * 0.5, radius, 1, max, 0.4);
+  const away = blindSeconds(radius * 0.5, radius, -1, max, 0.4);
+  assert(away > 0 && away < toward, "Facing away must sting less than facing the flash");
+  assert(Math.abs(away - toward * 0.5) < 1e-9, "The away-facing factor must be exactly 0.5");
+}
+
+{
+  // Grenade use: one throwable with the tuning fuse, slot cleared, event fired.
+  const room = makeSquadRoom([squadPilot("pilot", 0)], 0);
+  const pilot = room.players.get("pilot")!;
+  pilot.item = "grenade";
+  pilot.facing = 1;
+  useItem(room, MAPS.canopy, pilot);
+  assert(!pilot.item, "A thrown grenade must leave the slot");
+  assert(room.throwables.length === 1 && room.throwables[0].itemId === "grenade", "Grenade use must spawn one throwable");
+  assert(Math.abs(room.throwables[0].fuse - ITEM_TUNING.grenade.fuse) < 1e-9, "Grenade fuse must come from the tuning table");
+  assert(room.events.some((event) => event.type === "itemUse" && event.itemId === "grenade"), "Grenade use must emit itemUse");
+
+  // Flashbang detonation: the thrower is immune, facing pilots inside the
+  // radius with clear LOS are blinded, and the blind respects the math.
+  const victim = squadPilot("victim", 1);
+  victim.x = 700;
+  victim.y = 88;
+  victim.facing = -1; // faces the burst (which lands west of it)
+  room.players.set("victim", victim);
+  pilot.x = 560;
+  pilot.y = 88;
+  pilot.item = "flashbang";
+  useItem(room, MAPS.canopy, pilot);
+  const bang = room.throwables.find((throwable) => throwable.itemId === "flashbang");
+  assert(bang, "Flashbang throwable spawned");
+  bang!.fuse = 0.001;
+  stepThrowables(room, MAPS.canopy, 1 / 60);
+  assert(!room.throwables.some((throwable) => throwable.itemId === "flashbang"), "Expired fuse must consume the throwable");
+  assert((victim.blind ?? 0) > 0, "A facing pilot in radius must be blinded");
+  assert((pilot.blind ?? 0) === 0, "The thrower must never be blinded by their own flashbang");
+  assert((victim.blindDuration ?? 0) > 0 && (victim.blindIntensity ?? 0) > 0, "Blind duration + intensity must ride the snapshot");
+}
+
+{
+  // Diffraction shield: front-laser-only gate, charge spending, even split.
+  const room = makeSquadRoom([squadPilot("holder", 0), squadPilot("shooter", 1)], 0);
+  const holder = room.players.get("holder")!;
+  const shooter = room.players.get("shooter")!;
+  holder.x = 700;
+  holder.y = 88;
+  holder.facing = 1;
+  shooter.x = 800;
+  shooter.y = 88;
+  shooter.facing = -1;
+  holder.shield = ITEM_TUNING.shield.duration;
+  holder.shieldCharges = ITEM_TUNING.shield.charges;
+  assert(shieldBlocks(holder, shooter.x, true), "A front laser must be blocked by an active shield");
+  assert(!shieldBlocks(holder, shooter.x - 400, true), "A shot from behind (west of an east-facing shield) must not be blocked");
+  assert(!shieldBlocks(holder, shooter.x, false), "Non-laser weapons must not be blocked");
+  holder.shieldCharges = 0;
+  assert(!shieldBlocks(holder, shooter.x, true), "A spent shield must not block");
+  holder.shieldCharges = 1;
+  shooter.invulnerable = 0;
+
+  const before = { ...shooter.limbs };
+  const incoming = WEAPONS.rifle.secondary.damage;
+  reflectBeams(room, MAPS.canopy, holder, holder.x + 8, holder.y - 14, Math.PI, incoming, shooter);
+  assert(holder.shieldCharges === 0 && !holder.item, "The last block must consume the shield and the item");
+  const total = LIMB_IDS.reduce((sum, limbId) => sum + (100 - shooter.limbs[limbId]), 0);
+  assert(total > 0, "The mirror beam must strike the attacker back");
+  assert(total <= incoming + 1e-6, `The fan must conserve damage (spent ${total} of ${incoming})`);
+  assert(LIMB_IDS.every((limbId) => holder.limbs[limbId] === 100), "The holder must never be hit by their own fan");
+  assert(room.events.some((event) => event.type === "shieldReflect" && event.count === SHIELD_BEAMS.length), "The block must emit the shieldReflect event with the beam count");
+  void before;
+}
+
+{
+  // Jetpack: thrust while Shift is held, server-authoritative fuel, empty
+  // tank consumes the item.
+  const room = makeSquadRoom([squadPilot("pilot", 0)], 0);
+  const pilot = room.players.get("pilot")!;
+  pilot.item = "jetpack";
+  pilot.jetpackFuel = ITEM_TUNING.jetpack.fuel;
+  pilot.invulnerable = 0;
+  const input = { seq: 1, left: false, right: false, jump: false, drop: false, primary: false, secondary: false, useItem: false, jetpack: true };
+  stepPlayer(room, MAPS.canopy, pilot, input, 1 / 60);
+  assert(pilot.jetpacking === true, "Holding Shift must thrust");
+  assert(pilot.vy < 0, "Thrust must drive the pilot upward");
+  assert(pilot.jetpackFuel! < ITEM_TUNING.jetpack.fuel, "Thrust must burn fuel");
+  pilot.jetpackFuel = 0.05;
+  for (let tick = 0; tick < 30; tick++) stepPlayer(room, MAPS.canopy, pilot, input, 1 / 60);
+  assert(!pilot.item, "An empty tank must consume the jetpack");
+  assert(pilot.jetpacking === false, "No fuel means no thrust");
 }
 
 console.log("game logic tests passed");

@@ -18,6 +18,7 @@ import type {
   PropState,
   RoomView,
   ServerSnapshot,
+  ThrowableState,
 } from "../shared/game.js";
 import { WORLD } from "../shared/game.js";
 
@@ -63,6 +64,11 @@ export type Room = {
   nextDropId: number;
   /** M31 next tick a spawn wave may fire (0 = disabled). */
   nextMobWaveTick: number;
+  /** M32 thrown pocket items mid-flight. */
+  throwables: ThrowableState[];
+  nextThrowableId: number;
+  /** M32 G use-key edge memory (per player, like jumpHeld). */
+  itemHeld: Map<string, boolean>;
 };
 
 export type WeaponStats = Record<string, { shots: number; hits: number; damage: number; kills: number }>;
@@ -71,7 +77,7 @@ export const weaponStatsBucket = (): WeaponStats => ({});
 export const statsEntry = (stats: WeaponStats, weaponId: string) => (stats[weaponId] ??= { shots: 0, hits: 0, damage: 0, kills: 0 });
 
 export const rooms = new Map<string, Room>();
-export const blankInput = (): ClientInput => ({ seq: 0, left: false, right: false, jump: false, drop: false, primary: false, secondary: false });
+export const blankInput = (): ClientInput => ({ seq: 0, left: false, right: false, jump: false, drop: false, primary: false, secondary: false, useItem: false, jetpack: false });
 const json = (value: unknown) => JSON.stringify(value);
 export const send = (client: Client, type: string, payload: unknown) => {
   if (client.ws.readyState === WebSocket.OPEN) client.ws.send(json({ type, ...(payload as object) }));
@@ -125,6 +131,7 @@ export function snapshot(room: Room): ServerSnapshot {
     winner: room.winner,
     mobs: room.mobs.map((mob) => ({ ...mob })),
     drops: room.drops.map((drop) => ({ ...drop })),
+    throwables: room.throwables.map((throwable) => ({ ...throwable })),
   };
 }
 

@@ -3,6 +3,7 @@
 // 依赖方向：world → damage → state（另用 players.intersectsPlayerRect）。
 import {
   LIMB_IDS,
+  ITEM_TUNING,
   MAPS,
   PLAYER_FOOT_OFFSET,
   PLAYER_HALF_WIDTH,
@@ -20,6 +21,7 @@ import {
 } from "../../shared/game.js";
 import { emitEvent, randomBetween, type Room } from "../state.js";
 import { applyLimbDamage, damage, damageMob, detonateProp, isEliminated, killMob, loseLife } from "./damage.js";
+import { rollItem } from "./items.js";
 import { intersectsPlayerRect } from "./players.js";
 
 export function scheduleCrateSpawn(room: Room, crate: CrateState, delayTicks: number) {
@@ -40,11 +42,17 @@ export function spawnCrate(room: Room, crate: CrateState) {
   // ~1 in 4 spawns is a repair cell: restores limbs instead of swapping guns.
   crate.kind = randomBetween(0, 3) === 0 ? "repair" : "weapon";
   crate.weapon = room.config.weaponSet[randomBetween(0, room.config.weaponSet.length - 1)];
+  crate.item = undefined;
+  // M32: roughly 1 in 5 spawns is an item crate for the G-slot.
+  if (randomBetween(0, 4) === 0) {
+    crate.kind = "item";
+    crate.item = rollItem();
+  }
   crate.active = true;
   crate.respawnTimer = 0;
   crate.nextSpawnTick = 0;
   crate.generation += 1;
-  emitEvent(room, "crateSpawn", crate.x, crate.y, 1, { weaponId: crate.weapon, crateKind: crate.kind });
+  emitEvent(room, "crateSpawn", crate.x, crate.y, 1, { weaponId: crate.weapon, crateKind: crate.kind, itemId: crate.item });
 }
 
 export function updateHazards(room: Room, previous: HazardState[], dt: number) {
@@ -105,17 +113,25 @@ export function updateCrates(room: Room) {
     }
     for (const player of room.players.values()) {
       if (player.respawnTimer <= 0 && Math.hypot(player.x - crate.x, player.y - crate.y) < 34) {
-        if (crate.kind === "repair") {
+        if (crate.kind === "item") {
+          // M32: item crates fill an EMPTY G-slot only — a carried item blocks
+          // the pickup so crates stay on the field for the next pilot.
+          if (player.item) continue;
+          player.item = crate.item;
+          if (crate.item === "jetpack") player.jetpackFuel = ITEM_TUNING.jetpack.fuel;
+          emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, crateKind: "item", itemId: crate.item });
+        } else if (crate.kind === "repair") {
           player.limbs = freshLimbs();
+          emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, weaponId: crate.weapon, crateKind: crate.kind });
         } else {
           player.weapon = crate.weapon;
           player.ammoByWeapon[player.weapon] = WEAPONS[player.weapon].ammo;
           player.ammo = player.ammoByWeapon[player.weapon];
+          emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, weaponId: crate.weapon, crateKind: crate.kind });
         }
         crate.active = false;
         crate.nextSpawnTick = room.tick + randomBetween(360, 720);
         crate.respawnTimer = (crate.nextSpawnTick - room.tick) / WORLD.tickRate;
-        emitEvent(room, "cratePickup", crate.x, crate.y, 1, { actorId: player.id, weaponId: crate.weapon, crateKind: crate.kind });
         break;
       }
     }

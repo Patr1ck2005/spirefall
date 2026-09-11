@@ -47,14 +47,22 @@ export type TeamCount = 0 | 2 | 3 | 4;
  * with a rear-up telegraph.
  */
 export type MobKind = "skitter" | "gnats" | "ram";
-/** M31 mob behaviour phase (drives client art + telegraph reads). */
+/** M31 hostile mob behaviour phase (drives client art + telegraph reads). */
 export type MobPhase = "stalk" | "warn" | "dash" | "stun";
+
+/**
+ * M32 pocket items. One slot per pilot (`PlayerState.item`), consumed by the
+ * G use-key: grenades and flashbangs are thrown, medkits restore every limb,
+ * the shield is the diffraction device (blocks lasers, splits them into a
+ * spectral fan) and the jetpack burns fuel while Shift is held.
+ */
+export type ItemId = "grenade" | "flashbang" | "medkit" | "shield" | "jetpack";
 export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
 export type HazardKind = "cargoLift" | "blastCrusher" | "conveyor" | "forgePiston";
 export type HazardPhase = "idle" | "warning" | "active";
-export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact" | "propSpawn" | "propDestroy" | "mobSpawn" | "mobDeath";
+export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact" | "propSpawn" | "propDestroy" | "mobSpawn" | "mobDeath" | "itemUse" | "blind" | "shieldReflect" | "jetpack";
 
 export type MatchConfig = {
   mapId: MapId;
@@ -114,6 +122,10 @@ export type ClientInput = {
   primary: boolean;
   secondary: boolean;
   weaponSlot?: number;
+  /** M32: G use-key (held; the server edge-detects like jump). */
+  useItem?: boolean;
+  /** M32: Shift jetpack thrust (held). */
+  jetpack?: boolean;
 };
 
 export type PlayerState = {
@@ -147,6 +159,26 @@ export type PlayerState = {
    * feed coloring and the squad scoreboard instead.
    */
   teamId?: number;
+  /**
+   * M32 pocket item in the single G-slot. The shield lives here while active
+   * (duration + charges on the fields below); the jetpack burns jetpackFuel
+   * and vanishes when the tank runs dry.
+   */
+  item?: ItemId;
+  /** M32: seconds of whiteout left; 0/absent = clear vision. */
+  blind?: number;
+  /** M32: initial blind duration, for the eased intensity readout. */
+  blindDuration?: number;
+  /** M32: 0-1 whiteout strength at burst time (client overlay). */
+  blindIntensity?: number;
+  /** M32: seconds left on the active diffraction shield. */
+  shield?: number;
+  /** M32: laser blocks remaining before the shield burns out. */
+  shieldCharges?: number;
+  /** M32: jetpack fuel seconds (present only while carrying the jetpack). */
+  jetpackFuel?: number;
+  /** M32: true while the pilot is thrusting (client draws the tail flame). */
+  jetpacking?: boolean;
   limbs: LimbIntegrity;
 };
 
@@ -176,7 +208,8 @@ export type ProjectileState = {
   bouncesRemaining: number;
 };
 
-export type CrateKind = "weapon" | "repair";
+/** M32: item crates carry a pocket item instead of a weapon. */
+export type CrateKind = "weapon" | "repair" | "item";
 
 export type CrateState = {
   id: number;
@@ -184,11 +217,29 @@ export type CrateState = {
   y: number;
   kind: CrateKind;
   weapon: WeaponId;
+  /** M32: which pocket item an item crate grants. */
+  item?: ItemId;
   active: boolean;
   respawnTimer: number;
   socketId: string;
   generation: number;
   nextSpawnTick: number;
+};
+
+/**
+ * M32 thrown pocket items (grenade / flashbang): parabolic arc with platform
+ * bounces, then a fuse detonation handled by the items domain.
+ */
+export type ThrowableState = {
+  id: number;
+  itemId: "grenade" | "flashbang";
+  ownerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  /** Seconds until detonation. */
+  fuse: number;
 };
 
 export type CrateSocket = {
@@ -257,6 +308,14 @@ export type CombatEvent = {
   mobKind?: MobKind;
   /** M31: which mob the event concerns (mobSpawn / mobDeath / mob hits). */
   mobId?: number;
+  /** M32: which pocket item the event concerns (itemUse/blind/shieldReflect). */
+  itemId?: ItemId;
+  /**
+   * M32 shieldReflect: incoming ray angle (radians) at the block point — the
+   * client reconstructs the 7-beam diffraction fan from this + the holder's
+   * facing (SHIELD_BEAMS is the shared fan table).
+   */
+  angle?: number;
   strength: number;
 };
 
@@ -277,6 +336,8 @@ export type ServerSnapshot = {
   mobs: MobState[];
   /** M31 limited-time repair packs dropped by dying mobs. */
   drops: MobDrop[];
+  /** M32 thrown pocket items mid-flight. */
+  throwables: ThrowableState[];
 };
 
 export type RoomView = {

@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { MAPS, MOB_TUNING, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, PROP_TUNING, WEAPONS, type HazardState, type LimbId, type MapId, type MobState, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
+import { MAPS, MOB_TUNING, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, PLAYER_TARGET_OFFSET, PROP_TUNING, WEAPONS, type HazardState, type LimbId, type MapId, type MobState, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
 import { POSTER } from "./palette";
 import type { KeyLightSample } from "./lighting";
 
@@ -130,14 +130,24 @@ export function drawHazard(graphics: Phaser.GameObjects.Graphics, hazard: Hazard
   }
 }
 
-export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1, kind: "weapon" | "repair" = "weapon", light?: KeyLightSample) {
+/** M32 item-crate signal tint per pocket item (readable at a glance). */
+export const ITEM_TINTS: Record<string, number> = {
+  grenade: 0xd8a83e,
+  flashbang: 0xdfe6ea,
+  medkit: 0x4fd07a,
+  shield: 0x9a5cff,
+  jetpack: 0xe8632a,
+};
+
+export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: number, weaponId: WeaponId, time: number, generation = 1, kind: "weapon" | "repair" | "item" = "weapon", item?: string, light?: KeyLightSample) {
   const weapon = WEAPONS[weaponId];
-  const special = kind === "repair" || !["sidearm", "scatter", "rifle"].includes(weaponId);
+  const special = kind !== "weapon";
   const pulse = 0.72 + Math.sin(time * (special ? 0.008 : 0.004) + generation) * (special ? 0.22 : 0.1);
   const bob = Math.sin(time * 0.004 + x) * 3;
-  const tint = kind === "repair" ? 0x4fd07a : weapon.color;
+  const tint = kind === "repair" ? 0x4fd07a : kind === "item" ? (item && ITEM_TINTS[item] ? ITEM_TINTS[item] : 0xdfe6ea) : weapon.color;
   // M26 light response: the box face warms toward the key light.
-  const face = light && light.intensity > 0.05 ? mixColor(kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e, light.color, Math.min(0.3, light.intensity * 0.35)) : kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e;
+  const baseFace = kind === "repair" ? 0x10201a : special ? 0x1d2425 : 0x242b2e;
+  const face = light && light.intensity > 0.05 ? mixColor(baseFace, light.color, Math.min(0.3, light.intensity * 0.35)) : baseFace;
   // M27b: painted contact shadows are gone everywhere — the real cast
   // shadows from the lighting rig are the only shadows in the game.
   graphics.fillStyle(face, 1);
@@ -149,6 +159,34 @@ export function drawCrate(graphics: Phaser.GameObjects.Graphics, x: number, y: n
     graphics.fillStyle(tint, pulse);
     graphics.fillRect(x - 11, y - 3.5 + bob, 22, 7);
     graphics.fillRect(x - 3.5, y - 11 + bob, 7, 22);
+  } else if (kind === "item") {
+    // M32 pocket-item glyphs: grenade dot, flashbang bar, medkit cross,
+    // shield chevron, jetpack flame wedge.
+    graphics.fillStyle(tint, pulse);
+    if (item === "grenade") {
+      graphics.fillCircle(x, y + bob, 7);
+      graphics.fillStyle(0xf4e1ae, 0.8);
+      graphics.fillRect(x - 1.5, y - 12 + bob, 3, 5);
+    } else if (item === "flashbang") {
+      graphics.fillRect(x - 10, y - 4 + bob, 20, 8);
+      graphics.fillStyle(0xffffff, pulse);
+      graphics.fillRect(x - 2, y - 4 + bob, 4, 8);
+    } else if (item === "medkit") {
+      graphics.fillRect(x - 10, y - 3.5 + bob, 20, 7);
+      graphics.fillRect(x - 3.5, y - 10 + bob, 7, 20);
+    } else if (item === "shield") {
+      graphics.fillPoints([
+        { x, y: y - 12 + bob },
+        { x: x + 9, y: y - 5 + bob },
+        { x: x + 6, y: y + 10 + bob },
+        { x: x - 6, y: y + 10 + bob },
+        { x: x - 9, y: y - 5 + bob },
+      ], true);
+    } else {
+      graphics.fillTriangle(x - 7, y + 9 + bob, x + 7, y + 9 + bob, x, y - 10 + bob);
+      graphics.fillStyle(0xffe7b0, pulse * 0.9);
+      graphics.fillTriangle(x - 3, y + 9 + bob, x + 3, y + 9 + bob, x, y - 2 + bob);
+    }
   } else {
     graphics.fillStyle(weapon.color, pulse);
     graphics.fillRect(x - 12, y - 4 + bob, 24, 8);
@@ -1168,4 +1206,55 @@ export function drawDrop(graphics: Phaser.GameObjects.Graphics, drop: { x: numbe
   graphics.fillStyle(tint, urgent ? 0.3 : 0.95);
   graphics.fillRect(drop.x - 5, drop.y - 8 + bob, 10, 4);
   graphics.fillRect(drop.x - 2, drop.y - 11 + bob, 4, 10);
+}
+
+/** M32 thrown canister mid-flight: olive grenade / grey flashbang + fuse blink. */
+export function drawThrowable(graphics: Phaser.GameObjects.Graphics, throwable: { x: number; y: number; itemId: string; fuse: number }, time: number) {
+  const grenade = throwable.itemId === "grenade";
+  const blink = Math.floor(time / (80 + throwable.fuse * 220)) % 2 === 0;
+  graphics.fillStyle(0x0b0e10, 1);
+  graphics.fillEllipse(throwable.x, throwable.y, 13, 9);
+  graphics.fillStyle(grenade ? 0x4a4a2c : 0x767e82, 1);
+  graphics.fillEllipse(throwable.x, throwable.y, 11, 7);
+  graphics.fillStyle(0x9aa4a4, 1);
+  graphics.fillRect(throwable.x - 2, throwable.y - 7, 4, 3);
+  graphics.fillStyle(blink ? (grenade ? 0xff6d5e : 0xffffff) : 0x545b5e, 0.95);
+  graphics.fillCircle(throwable.x, throwable.y - 7, 2);
+}
+
+/**
+ * M32 diffraction shield face: a tilted parallelogram in front of the holder
+ * (bright capCore edge + grating lines), driven purely by the snapshot's
+ * shield timer. Tint follows the spectral identity, charges read as notches.
+ */
+export function drawShield(graphics: Phaser.GameObjects.Graphics, holder: { x: number; y: number; facing: 1 | -1; shieldCharges?: number }, time: number) {
+  const facing = holder.facing;
+  const cx = holder.x + facing * 16;
+  const cy = holder.y - PLAYER_TARGET_OFFSET - 2;
+  const skew = 5;
+  const face = [
+    { x: cx - 6 * facing, y: cy - 26 },
+    { x: cx + 10 * facing, y: cy - 26 },
+    { x: cx + 10 * facing + skew * facing, y: cy + 22 },
+    { x: cx - 6 * facing + skew * facing, y: cy + 22 },
+  ];
+  graphics.fillStyle(0x12161d, 0.88);
+  graphics.fillPoints(face, true);
+  graphics.fillStyle(0x1d2431, 0.92);
+  graphics.fillPoints(face.map((point) => ({ x: point.x - facing * 1.5, y: point.y })), true);
+  // Bright cap edge (the M20 cover-wall language) + grating lines.
+  graphics.lineStyle(2, 0xffffff, 0.92);
+  graphics.lineBetween(face[0].x, face[0].y, face[1].x, face[1].y);
+  graphics.lineStyle(1, 0x9a5cff, 0.4);
+  for (let line = 1; line <= 4; line++) {
+    const gy = face[0].y + (line * 48) / 5;
+    graphics.lineBetween(face[0].x + facing * (line * skew) / 5, gy, face[1].x + facing * (line * skew) / 5, gy);
+  }
+  // Charge notches: one tick per remaining block.
+  const charges = holder.shieldCharges ?? 0;
+  for (let notch = 0; notch < charges; notch++) {
+    graphics.fillStyle(0xfff2dc, 0.95);
+    graphics.fillRect(cx - facing * 3 + facing * notch * 4 - 1, cy - 31, 2.5, 3);
+  }
+  void time;
 }

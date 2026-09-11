@@ -42,6 +42,9 @@ if (!(await guest.locator("#teams").isDisabled())) throw new Error("Guest can ed
 // M31: the mob wave toggle defaults off and is host-only like every switch.
 if (await host.locator("#mobs").isChecked()) throw new Error("Hostile mob waves should default off");
 if (!(await guest.locator("#mobs").isDisabled())) throw new Error("Guest can toggle the host-only mob wave switch");
+// M32: the blind whiteout overlay and the pocket-item HUD chip exist.
+if ((await host.locator("#blind").count()) !== 1) throw new Error("Blind whiteout overlay missing from the game shell");
+if ((await host.locator("#hud-item").count()) !== 1) throw new Error("Pocket-item HUD chip missing from the game shell");
 await host.locator("#teams").selectOption("2");
 await host.locator(".team-tag").first().waitFor({ timeout: 5000 });
 const guestTags = await guest.locator(".team-tag").allTextContents();

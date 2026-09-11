@@ -70,12 +70,13 @@ app.innerHTML = `
         <div class="game-hud">
           <div class="hud-top"><div><span id="hud-room"></span><small id="hud-sector"></small></div><div id="hud-phase" class="hud-phase"></div><div id="hud-roster" class="hud-roster"></div></div>
           <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
-          <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
+          <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-item" class="hud-item"></div><div id="hud-limbs" class="hud-limbs"></div></div>
           <div id="weapon-panel" class="weapon-panel hidden"></div>
           <div id="team-panel" class="team-panel hidden"></div>
           <button id="in-match-leave" class="quiet hud-leave" data-i18n="exitMatch">Exit match</button>
         </div>
         <div id="vignette" class="vignette" aria-hidden="true"></div>
+        <div id="blind" class="blind-overlay" aria-hidden="true"></div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn" data-i18n="sandboxRespawn">Test respawn</button><button id="sandbox-return" data-i18n="sandboxReturn">Return to lobby</button></div>
         <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow" data-i18n="resultEyebrow">Spire resolved</p><h2 id="winner"></h2><p id="result-subtitle">ONE PILOT REMAINS</p><div id="result-ranking" class="hidden"></div><div><button id="restart" class="primary" data-i18n="returnLobby">Return to lobby</button><button id="result-leave" data-i18n="leaveSpire">Leave spire</button></div></div>
       </div>

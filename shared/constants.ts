@@ -144,6 +144,42 @@ export const MOB_TUNING = {
   weights: { skitter: 5, gnats: 3, ram: 2 } as Record<string, number>,
 } as const;
 
+// M32 pocket items. The G-slot carries one item; grenades and flashbangs fly
+// on real arcs, the medkit is instant, the shield is the diffraction device,
+// and the jetpack burns server-authoritative fuel while Shift is held.
+export const ITEM_TUNING = {
+  /** Explosion under the rocket band (66) with the biggest knockback in the game. */
+  grenade: { damage: 46, blastRadius: 96, knockback: 520, fuse: 1.15, throwSpeed: 430, throwLift: 240 },
+  /** Blind burst: LOS + distance + facing falloff; the thrower is immune. */
+  flashbang: { radius: 300, maxBlind: 2.4, minBlind: 0.4, fuse: 1.0, throwSpeed: 470, throwLift: 220 },
+  /** Diffraction shield: duration + block charges, lasers only. */
+  shield: { duration: 6, charges: 3 },
+  /** Jetpack fuel seconds and upward acceleration while Shift is held (must
+   *  out-muscle gravity 1600 — the net climb is thrust − gravity). */
+  jetpack: { fuel: 2.2, thrust: 2600 },
+  /** M32 melee flash: dashSlash connect blinds everyone but the wielder. */
+  meleeFlash: { radius: 260, maxBlind: 2.0 },
+  /** Item-crate weights (grenades and utility common, jetpacks rarer). */
+  weights: { grenade: 4, flashbang: 3, medkit: 3, shield: 2, jetpack: 2 } as Record<string, number>,
+} as const;
+
+/**
+ * M32 shield diffraction fan — the single source both the server resolution
+ * and the client rendering walk. Order: 0-level mirror beam (keeps the
+ * incoming weapon color client-side) plus ±1/±2/±3 diffraction orders at
+ * ±6°/±12°/±18° (total fan 36°). The `core` tint is the inner-edge secondary
+ * stroke (one step toward violet on the spectral ladder).
+ */
+export const SHIELD_BEAMS = [
+  { offsetDeg: 0, color: 0xfff2dc, core: 0xffffff, length: 320, radius: 46, alpha: 0.5, lineShadow: 0.7, tier: 0 as const },
+  { offsetDeg: 6, color: 0x9a5cff, core: 0x4f8cff, length: 280, radius: 40, alpha: 0.32, lineShadow: 0.5, tier: 1 as const },
+  { offsetDeg: -6, color: 0x9a5cff, core: 0x4f8cff, length: 280, radius: 40, alpha: 0.32, lineShadow: 0.5, tier: 1 as const },
+  { offsetDeg: 12, color: 0x63e05f, core: 0x4fd9e8, length: 240, radius: 36, alpha: 0.26, lineShadow: 0.4, tier: 1 as const },
+  { offsetDeg: -12, color: 0x63e05f, core: 0x4fd9e8, length: 240, radius: 36, alpha: 0.26, lineShadow: 0.4, tier: 1 as const },
+  { offsetDeg: 18, color: 0xff3b47, core: 0xff7a2e, length: 200, radius: 32, alpha: 0.2, lineShadow: 0.3, tier: 2 as const },
+  { offsetDeg: -18, color: 0xff3b47, core: 0xff7a2e, length: 200, radius: 32, alpha: 0.2, lineShadow: 0.3, tier: 2 as const },
+] as const;
+
 export const PLAYER_COLORS = [0x56d9d0, 0xf0715d, 0xf0c75e, 0xad80e8] as const;
 
 // M30 squad identity colors. Chosen apart from the four pilot tints so a team
