@@ -60,6 +60,8 @@ const DICT = {
   settingSector: { zh: "扇区", en: "Sector" },
   settingLives: { zh: "生命", en: "Lives" },
   settingCrates: { zh: "补给箱", en: "Supply drops" },
+  // M31 hostile mob toggle
+  settingMobs: { zh: "敌对群怪", en: "Hostile mobs" },
   settingBots: { zh: "AI 机师", en: "AI pilots" },
   // M30 squad mode selector
   settingMode: { zh: "模式", en: "Mode" },

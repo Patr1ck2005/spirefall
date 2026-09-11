@@ -1,13 +1,16 @@
 // M28.5 结构拆分：shared 层的纯辅助函数——几何（弹道扫掠/射线/落点）、
 // 肢体模型（损伤惩罚/命中选肢）、通用标量工具。只依赖 constants 与 types。
 
-import { PLAYER_CAPSULE, PROP_TUNING } from "./constants.js";
-import type { LimbId, LimbIntegrity, MapDef, Platform, PlayerState, PropState } from "./types.js";
+import { MOB_TUNING, PLAYER_CAPSULE, PROP_TUNING } from "./constants.js";
+import type { LimbId, LimbIntegrity, MapDef, MobKind, Platform, PlayerState, PropState } from "./types.js";
 
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 export const LIMB_IDS: LimbId[] = ["leftArm", "rightArm", "leftLeg", "rightLeg"];
 export const freshLimbs = (): LimbIntegrity => ({ leftArm: 100, rightArm: 100, leftLeg: 100, rightLeg: 100 });
+
+/** M31: mob body radius for hit resolution (shared by every combat domain). */
+export const mobRadius = (kind: MobKind): number => MOB_TUNING.radius[kind] ?? 12;
 
 // M27 wound model: limb integrity feeds four concrete control penalties. Arm
 // damage slows the trigger, deepens recoil AND widens spread (new — accuracy

@@ -6,6 +6,8 @@ import {
   WEAPONS,
   WORLD,
   clamp,
+  mobRadius,
+  pointSegmentClosest,
   rangeFalloff,
   segmentHitsProp,
   segmentImpactPoint,
@@ -14,7 +16,7 @@ import {
   type ProjectileState,
 } from "../../shared/game.js";
 import { emitEvent, type Room } from "../state.js";
-import { damage, damageProp, isEliminated } from "./damage.js";
+import { damage, damageMob, damageProp, isEliminated } from "./damage.js";
 import { sameTeam } from "./teams.js";
 
 // Echo Shard ricochet: reflect the shard off the struck platform face using
@@ -73,6 +75,13 @@ export function stepProjectiles(room: Room, map: MapDef, dt: number) {
       if (!prop.alive) continue;
       if (Math.hypot(prop.x - x, prop.y - y) >= projectile.explosiveRadius + PROP_TUNING.radius) continue;
       damageProp(room, prop, projectile.damage * 0.5, projectile.ownerId);
+    }
+    // M31: blasts grind hostile mobs with the same radial falloff.
+    for (const mob of [...room.mobs]) {
+      const distance = Math.hypot(mob.x - x, mob.y - 8 - y);
+      if (distance >= projectile.explosiveRadius) continue;
+      const falloff = clamp(0.7 - 0.5 * (distance / projectile.explosiveRadius), 0.2, 0.7);
+      damageMob(room, mob, projectile.damage * falloff, x, projectile.knockback * falloff);
     }
   };
 
@@ -178,6 +187,20 @@ export function stepProjectiles(room: Room, map: MapDef, dt: number) {
         }
         break;
       }
+    }
+    // M31: swept round vs hostile mob bodies — same tunneling-proof segment
+    // test the pilots use; piercers punch through, everything else is spent.
+    if (!dead) for (const mob of [...room.mobs]) {
+      const closest = pointSegmentClosest(mob.x, mob.y - 8, prevX, prevY, projectile.x, projectile.y);
+      if (closest.distance > mobRadius(mob.kind) + projectile.radius) continue;
+      const travelFalloff = rangeFalloff(projectile.travelled, attackDef.range);
+      damageMob(room, mob, projectile.damage * travelFalloff, prevX, projectile.knockback);
+      if (projectile.explosiveRadius) {
+        detonate(projectile, projectile.x, projectile.y);
+      }
+      if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
+      else if (!projectile.explosiveRadius) dead = true;
+      break;
     }
     if (dead) projectile.ttl = 0;
   }

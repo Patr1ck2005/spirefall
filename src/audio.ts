@@ -291,6 +291,18 @@ const world: Record<string, (out: AudioNode, g: number) => void> = {
     noise(1.1, "lowpass", 140, 36, 0.5, g * 0.4, out, 0.18);
     tone("sine", 52, 24, 0.8, g * 0.35, out, 0.05);
   },
+  // M31 hostile mobs: a servo-whine telegraph (ground grate opening) and a
+  // metal-scrap crash for the hardware death.
+  mobSpawn: (out, g) => {
+    tone("sawtooth", 140, 340, 0.5, g * 0.22, out);
+    tone("square", 70, 110, 0.5, g * 0.12, out);
+    noise(0.45, "bandpass", 900, 1600, 1.2, g * 0.2, out);
+  },
+  mobDeath: (out, g) => {
+    clang(320, 0.4, g * 0.7, out);
+    noise(0.5, "lowpass", 700, 120, 0.7, g * 0.55, out);
+    tone("sine", 120, 40, 0.4, g * 0.5, out, 0.02);
+  },
 };
 
 export const sfx = {

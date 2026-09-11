@@ -40,12 +40,21 @@ export type MatchMode = "match" | "sandbox";
  * roster into auto-balanced squads with friendly fire off. Sandbox ignores it.
  */
 export type TeamCount = 0 | 2 | 3 | 4;
+/**
+ * M31 hostile industrial pests (server-simulated, hostile to every pilot).
+ * Skitter Saw: ground crawler with a telegraphed blade dash; Ion Gnat Swarm:
+ * hovering drone swarm drifting toward pilots; Ram Hauler: wheeled charger
+ * with a rear-up telegraph.
+ */
+export type MobKind = "skitter" | "gnats" | "ram";
+/** M31 mob behaviour phase (drives client art + telegraph reads). */
+export type MobPhase = "stalk" | "warn" | "dash" | "stun";
 export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
 export type HazardKind = "cargoLift" | "blastCrusher" | "conveyor" | "forgePiston";
 export type HazardPhase = "idle" | "warning" | "active";
-export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact" | "propSpawn" | "propDestroy";
+export type CombatEventType = "attack" | "hit" | "explosion" | "dismember" | "death" | "respawn" | "hazard" | "crateSpawn" | "cratePickup" | "impact" | "propSpawn" | "propDestroy" | "mobSpawn" | "mobDeath";
 
 export type MatchConfig = {
   mapId: MapId;
@@ -56,6 +65,44 @@ export type MatchConfig = {
   botSkill: BotSkill;
   /** M30: squad count for team matches; 0/absent = free-for-all. */
   teams?: TeamCount;
+  /** M31: hostile mob waves (sandbox included); off by default. */
+  mobs?: boolean;
+};
+
+/**
+ * M31 hostile mob state. One entry per mob; the gnat swarm renders as several
+ * bodies client-side but simulates as one. `state` carries the behaviour
+ * phase; `warn` (0-1) is the telegraph fill for warn phases.
+ */
+export type MobState = {
+  id: number;
+  kind: MobKind;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  facing: 1 | -1;
+  state: MobPhase;
+  /** Seconds left in the current dash/stun/warn window (0 while stalking). */
+  phaseTimer: number;
+  warn?: number;
+  targetId?: string;
+  /** Seconds of white-flash left after taking a hit (client feedback). */
+  hitFlash?: number;
+  /** M31: grounded flag for the crawler/charger legs (absent for the swarm). */
+  onGround?: boolean;
+};
+
+/** M31 limited-time repair pack dropped by a dying mob (whole-limb restore). */
+export type MobDrop = {
+  id: number;
+  x: number;
+  y: number;
+  /** Seconds until the pack expires (starts at MOB_TUNING.dropTtl). */
+  ttl: number;
+  /** Bumped when dropped so clients fire one-shot spawn effects. */
+  generation: number;
 };
 
 export type ClientInput = {
@@ -206,6 +253,10 @@ export type CombatEvent = {
   surface?: boolean;
   /** M25: which prop the event concerns (propSpawn / propDestroy). */
   propId?: number;
+  /** M31: mob kind for mobSpawn telegraphs and mobDeath deaths. */
+  mobKind?: MobKind;
+  /** M31: which mob the event concerns (mobSpawn / mobDeath / mob hits). */
+  mobId?: number;
   strength: number;
 };
 
@@ -222,6 +273,10 @@ export type ServerSnapshot = {
   events: CombatEvent[];
   config: MatchConfig;
   winner?: string;
+  /** M31 hostile mobs (empty unless config.mobs is on). */
+  mobs: MobState[];
+  /** M31 limited-time repair packs dropped by dying mobs. */
+  drops: MobDrop[];
 };
 
 export type RoomView = {

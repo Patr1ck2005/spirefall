@@ -613,6 +613,20 @@ FFA 正式化（teams=0 显式分支）+ 2–4 队分队；依赖方向新增 `t
 - **测试**：game-logic 新增分队块（FFA 剥离/2 队 2v2 交替填充/3 队 2+1+1/加入自动平衡/半场出生越线断言/3 队支柱垫脚位/友伤零伤害零击退零事件/敌人照常受伤/standings 排序与全灭判定）；network-smoke 新增 set_teams 流（持久化/T1+T2 对分/越界回落 FFA/快照携带 teamId）——**踩到并绕过该文件已知的 waitFor 缓冲竞态**（join 广播滞留 socket 缓冲直到下个监听器附加、先于 set_teams 回包被 waitFor 捕获；改用 leave 测试已有的连续收集器 + 轮询模式）；browser-smoke 新增大厅断言（#teams 4 选项/guest 不可编辑/selectOption 2 → 双端 T1/T2 标签/回 0 → 标签消失）
 - **实现假设（可否决）**：边缘箭头显示**所有**视口外玩家（队伍色即敌我信息），仅分队模式生效；3–4 队无半场语义、退化为角垫脚位铺开；分队队友伤害无开关（按已确认假设常关）
 
+### M31 敌对群怪（2026-09，DSH/glm-5.3-flash）
+
+三兽家族（Skitter Saw 锯行切割体 / Ion Gnat Swarm 电离蚊群 / Ram Hauler 冲撞轮碾），对全部机师（含 bot）敌对，不参与胜负判定；视觉规格按 docs/DESIGN_MOBS_ITEMS_GEARS.md §1 执行（硬约束：机体借用所在地图 POSTER 三阶 + `0x0b0e10` 双 pass 描边；信号色物种恒定——锯眼 `0xffb254`/盘缘 glowWarm/蚊群酸绿 `0xb8e83c`（全案唯一新色）/冲撞信标红 `0xe0455a`）：
+
+- **shared 契约**：`MobKind`/`MobPhase`/`MobState`（id/kind/x/y/vx/vy/hp/facing/state/phaseTimer/warn?/targetId?/hitFlash?/onGround?）、`MobDrop`（id/x/y/ttl/generation）、`ServerSnapshot.mobs`+`drops`、`MatchConfig.mobs?`（默认关）、`CombatEventType`+`mobSpawn`/`mobDeath`、`CombatEvent.mobKind?`/`mobId?`、`MOB_TUNING`（cap 10/waveInterval 11s/telegraph 1s/hp{30,26,44}/伤害{16,7,22}/击退抗性 0.35/dropTtl 8s/权重 5:3:2）
+- **server/sim/mobs.ts（新模块）**：波次调度（mobSpawns 锚点选**离最近机师最远**处 → 1s 光柱 telegraph → 升起入场）；步进——skitter：同层接近 → 0.6s 蓄势（warn 填充）→ 0.45s 直线冲刺 → 滑停；gnats：无重力双频漂移 + 每体轨道相位 + 悬停距离带（>90 靠近 / 60–90 环绕 / <60 后撤），接触啃咬；ram：缓行 → 0.5s 后倾蓄势 → 0.6s 400px/s 冲撞（撞墙即硬直）→ 轮空转；地面兽共用重力 + 单向落面 + solid 推出（撞墙回报 dash 打断），台缘止步（蓄势必须有前方地板——不朝坑蓄势）；接触伤害 `damage()` 无归属进入（击退信息读"THE SPIRE"、不进武器统计、友伤闸门不适用）
+- **伤害域归拢**：`damageMob`/`killMob` 落 damage.ts（伤害结算域完整承载机师/桶/**群怪**；避免 damage↔mobs 循环依赖）；受击 = hp 扣减 + hitFlash 0.13s + 击退 ×0.35 抗性 + ≥12 伤害打断蓄势；死亡 = 移除 + mobDeath 事件 + **8s 限时修复包**（拾取 = 全肢体恢复，cratePickup 事件复用 repair 语义）；坠坑/机关碾压死亡不掉包（掉在够不到的地方）
+- **武器命中群怪**：近战扫掠（segment 距离 ≤ r+4）；hitscan **mob 与机师按 along 距离统一排序**——最近躯体吃走非穿透弹、beam 全穿、piercing 共享 pierce+1 预算（桶仍按既有语义先挡）；弹道扫掠圆体命中 + pierce 递减；爆炸溅射（弹丸 detonate + 桶 detonateProp）同径向衰减波及群怪；压闸/活塞致命区秒杀群怪（不掉包）
+- **bot 零改动**：索敌只看机师（"顺射击中即可、不主动追"——弹道自然命中群怪）
+- **客户端**：art.ts `drawMob` 三兽（楔形车体+旋转切盘四齿/四体轨道蜂群+双帧旋翼+暗底描边/双轮辐条+撞角+警示裙板+1Hz 信标）+ `drawDrop` 修复罐；hitFlash 白闪；信号光源走 `add()` tier 1（眼珠/聚合晕/盘缘热辉蓄势升温），ram 蓄势红色警示锥（kind:"cone" + shadow 0.5，全案唯一 set-piece 投影）；dash 起步爆闪与 ram 撞墙爆闪由状态迁移触发（syncMobPhases）；mobSpawn 事件 = 预警光柱 + 画面外琥珀边缘箭标 + servo 警报音（audio.ts 新增 mobSpawn/mobDeath 两枚 cue）；mobDeath = 核心爆闪 + 金属火花/烟 + 焦痕 decal（无血，不进 gore 系统）
+- **大厅**：`#mobs` 开关（房主专用、默认关，config patch 白名单承接）；i18n settingMobs（敌对群怪/Hostile mobs）
+- **测试**：game-logic 群怪块（telegraph 60 tick/hp 源自数值表/死亡掉 8s 包/事件齐备/cap 10 拒绝排队）；network-smoke 沙盒群怪流（mobs 开关持久化 → 9s 窗口内 mobSpawn 事件 + 实体在场 + 快照 ≤16KB 带宽核对）；browser-smoke 大厅 #mobs 断言（默认关 + guest 只读）；40s 行为探针（2 兽在场、最远锚点出生、朝机师行进——首次 702 计数为探针把 1s 事件保留窗内重复快照误累计，去重后 2 次波次正确）
+- **性能压测说明**：performance 门禁保持 FFA 四人满负荷场景（mobs 关）——群怪渲染成本 = 每兽一次多边形绘制 + ≤3 枚 tier 1 光源（负载下按 tier 先 shed），满 cap 10 只需 ~60s 波次预热且 AFK 机师会被磨死导致结算屏污染采样窗口；群怪成本由快照带宽断言 + FFA 门禁侧面覆盖
+
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）

@@ -15,6 +15,8 @@ import {
   calculateLimbModifiers,
   clamp,
   freshLimbs,
+  mobRadius,
+  pointSegmentClosest,
   rangeFalloff,
   raycastSolids,
   segmentHitsPlayer,
@@ -26,7 +28,7 @@ import {
   type PlayerState,
 } from "../../shared/game.js";
 import { emitEvent, statsEntry, type Room } from "../state.js";
-import { damage, damageProp, isEliminated, loseLife } from "./damage.js";
+import { damage, damageMob, damageProp, isEliminated, loseLife } from "./damage.js";
 import { pickSpawn, sameTeam } from "./teams.js";
 
 export function intersectsPlayerRect(player: PlayerState, rect: { x: number; y: number; width: number; height: number }) {
@@ -122,6 +124,13 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
       if (!segmentHitsProp(prop, originX, originY, tipX, originY, 4)) continue;
       damageProp(room, prop, def.damage, player.id);
     }
+    // M31: the swing arc cleaves hostile mobs as well.
+    for (const mob of room.mobs) {
+      const tipX = originX + player.facing * def.range;
+      const closest = pointSegmentClosest(mob.x, mob.y - 8, originX, originY, tipX, originY);
+      if (closest.distance > mobRadius(mob.kind) + 4) continue;
+      damageMob(room, mob, def.damage, player.x, def.knockback);
+    }
     return;
   }
 
@@ -166,12 +175,33 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
         })
         .filter(({ other, along }) => other.id !== player.id && along > 0 && along <= wallDistance && segmentHitsPlayer(other, originX, originY, rayEndX, rayEndY, 3) && !sameTeam(room, player, other))
         .sort((a, b) => a.along - b.along);
-      const limit = def.pattern === "piercing" || def.pattern === "beam" ? (def.pattern === "beam" ? targets.length : def.pierce + 1) : 1;
+      // M31: hostile mobs join the ray resolution — merged with pilots and
+      // sorted by distance, so the nearest body soaks a non-piercing shot
+      // while beams pass through everything and piercers share one budget.
+      // Barrels keep their shipped soak (a barrel closer than a body blocks it).
+      const mobEntries = room.mobs
+        .map((mob) => {
+          const closest = pointSegmentClosest(mob.x, mob.y - 8, originX, originY, rayEndX, rayEndY);
+          // The ray is exactly `range` long (unit direction), so t scales to
+          // the along-ray distance directly.
+          return { mob, distance: closest.distance, along: closest.t * range };
+        })
+        .filter(({ mob, distance, along }) => distance <= mobRadius(mob.kind) + 2 && along > 0 && along <= wallDistance && along < (barrelHit?.along ?? Infinity));
+      const entries: Array<{ mob?: (typeof mobEntries)[number]["mob"]; other?: (typeof targets)[number]["other"]; along: number }> = [
+        ...mobEntries.map(({ mob, along }) => ({ mob, along })),
+        ...targets.map(({ other, along }) => ({ other, along })),
+      ].sort((a, b) => a.along - b.along);
+      const beamAll = def.pattern === "beam";
+      const limit = beamAll ? entries.length : def.pattern === "piercing" ? def.pierce + 1 : 1;
       // Charged Voltrail rails (>=0.8) are executions: pierce the whole line.
       const lethal = !secondary && def.chargeMax !== undefined && chargeFraction >= 0.8;
-      for (const { other, along } of targets.slice(0, limit)) {
+      for (const { mob, other, along } of entries.slice(0, limit)) {
         const falloff = rangeFalloff(along, range);
-        damage(room, other, def.damage * chargeScale * falloff, def.knockback * chargeScale, player.x, other.x - player.facing * 7, other.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
+        if (mob) {
+          damageMob(room, mob, def.damage * chargeScale * falloff, player.x, def.knockback * chargeScale);
+          continue;
+        }
+        damage(room, other!, def.damage * chargeScale * falloff, def.knockback * chargeScale, player.x, other!.x - player.facing * 7, other!.y - PLAYER_TARGET_OFFSET, { actorId: player.id, weaponId: player.weapon, secondary, lethal });
       }
     }
     return;

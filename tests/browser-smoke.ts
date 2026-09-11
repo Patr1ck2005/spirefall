@@ -39,6 +39,9 @@ await host.locator(".player-slot").nth(1).waitFor({ timeout: 30000 });
 const teamOptions = await host.locator("#teams option").count();
 if (teamOptions !== 4) throw new Error(`Squad mode selector does not offer FFA + 2/3/4 squads (found ${teamOptions})`);
 if (!(await guest.locator("#teams").isDisabled())) throw new Error("Guest can edit the host-only squad mode selector");
+// M31: the mob wave toggle defaults off and is host-only like every switch.
+if (await host.locator("#mobs").isChecked()) throw new Error("Hostile mob waves should default off");
+if (!(await guest.locator("#mobs").isDisabled())) throw new Error("Guest can toggle the host-only mob wave switch");
 await host.locator("#teams").selectOption("2");
 await host.locator(".team-tag").first().waitFor({ timeout: 5000 });
 const guestTags = await guest.locator(".team-tag").allTextContents();

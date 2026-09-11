@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { MAPS, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, PROP_TUNING, WEAPONS, type HazardState, type LimbId, type MapId, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
+import { MAPS, MOB_TUNING, MOVE_TUNING, PLAYER_COLORS, PLAYER_SCALE, PROP_TUNING, WEAPONS, type HazardState, type LimbId, type MapId, type MobState, type MoverState, type PlayerState, type WeaponId } from "../shared/game";
 import { POSTER } from "./palette";
 import type { KeyLightSample } from "./lighting";
 
@@ -969,4 +969,203 @@ function clampAngle(value: number, min: number, max: number) {
 
 export function colorCss(color: number) {
   return hex(color);
+}
+
+// M31 signal colors for the hostile pests (docs/DESIGN_MOBS_ITEMS_GEARS.md §1
+// and §4.1). Species-constant across maps: the body borrows the host map's
+// panel shades, but the signal color IS the species id.
+export const MOB_SIGNALS = {
+  skitterEye: 0xffb254,
+  sawRim: 0xff9a4a,
+  gnats: 0xb8e83c,
+  ramBeacon: 0xe0455a,
+} as const;
+
+const MOB_OUTLINE = 0x0b0e10;
+
+/**
+ * M31 hostile industrial pests, drawn from the host map's panel three-shade —
+ * the pests are grown from the megastructure itself (hard-edge poster fills,
+ * dark outline double-pass, no bitmaps, no sampleLight warming).
+ */
+export function drawMob(graphics: Phaser.GameObjects.Graphics, mob: MobState, mapId: MapId, time: number) {
+  const poster = POSTER[mapId];
+  const flash = (mob.hitFlash ?? 0) > 0;
+  const facing = mob.facing;
+  if (mob.kind === "skitter") {
+    const footY = mob.y;
+    const cx = mob.x;
+    // Locked-step legs: phase integrates from x displacement, no skating.
+    const gait = Math.sin(mob.x * 0.4);
+    graphics.fillStyle(MOB_OUTLINE, 1);
+    for (let leg = 0; leg < 4; leg++) {
+      const lx = cx - 9 + leg * 6 + (leg % 2 === 0 ? gait : -gait) * 1.5;
+      graphics.fillRect(lx - 1.5, footY - 4.5, 3, 4.5);
+    }
+    // Low wedge hull with a 45° front slant (outline pass, then base fill).
+    const hull = [
+      { x: cx - 14, y: footY - 4 },
+      { x: cx + 14, y: footY - 4 },
+      { x: cx + 14, y: footY - 9 },
+      { x: cx + 6 * facing, y: footY - 14 },
+      { x: cx - 14, y: footY - 14 },
+    ];
+    graphics.fillStyle(MOB_OUTLINE, 1);
+    graphics.fillPoints(hull, true);
+    graphics.fillStyle(poster.panelBase, 1);
+    graphics.fillPoints(hull.map((point) => ({ x: point.x, y: point.y - 0.8 })), true);
+    graphics.fillStyle(poster.panelLit, 1);
+    graphics.fillRect(cx - 10, footY - 16.5, 20, 2.5);
+    graphics.fillStyle(poster.panelShade, 1);
+    graphics.fillRect(cx - 12, footY - 7, 24, 3);
+    // Hazard band: three short diagonal stripes on the hull side.
+    graphics.fillStyle(0xe0a43c, 0.5);
+    for (let stripe = -1; stripe <= 1; stripe++) {
+      graphics.fillPoints([
+        { x: cx + stripe * 8 - 2 * facing, y: footY - 12 },
+        { x: cx + stripe * 8 + 1.5 * facing, y: footY - 12 },
+        { x: cx + stripe * 8 + 3.5 * facing, y: footY - 8.5 },
+        { x: cx + stripe * 8 + 0 * facing, y: footY - 8.5 },
+      ], true);
+    }
+    // Saw disc rides the front edge: shade disc + four rim teeth spinning
+    // with displacement; the rim heat ramps with the dash telegraph.
+    const sawX = cx + facing * 17;
+    const sawY = footY - 8;
+    const spin = time * (mob.state === "dash" ? 0.06 : 0.024) * facing + mob.x * 0.05;
+    graphics.fillStyle(MOB_OUTLINE, 1);
+    graphics.fillCircle(sawX, sawY, 11);
+    graphics.fillStyle(poster.panelShade, 1);
+    graphics.fillCircle(sawX, sawY, 10);
+    graphics.fillStyle(poster.panelShade, 1);
+    for (let tooth = 0; tooth < 4; tooth++) {
+      const angle = spin + (tooth * Math.PI) / 2;
+      const tip = { x: sawX + Math.cos(angle) * 13, y: sawY + Math.sin(angle) * 13 };
+      const left = { x: sawX + Math.cos(angle - 0.28) * 9, y: sawY + Math.sin(angle - 0.28) * 9 };
+      const right = { x: sawX + Math.cos(angle + 0.28) * 9, y: sawY + Math.sin(angle + 0.28) * 9 };
+      graphics.fillPoints([left, tip, right], true);
+    }
+    graphics.lineStyle(2, MOB_SIGNALS.sawRim, 0.2 + (mob.warn ?? 0) * 0.35);
+    graphics.strokeCircle(sawX, sawY, 10);
+    // Sensor eye slit above the hub.
+    graphics.fillStyle(MOB_SIGNALS.skitterEye, 0.95);
+    graphics.fillRect(cx + facing * 8 - 1.5, footY - 19, 3, 1.5);
+    graphics.fillStyle(0xffffff, 0.9);
+    graphics.fillRect(cx + facing * 8 - 0.5, footY - 19, 1.5, 1.5);
+    if (flash) {
+      graphics.fillStyle(0xffffff, 0.5);
+      graphics.fillPoints(hull.map((point) => ({ x: point.x, y: point.y })), true);
+    }
+    return;
+  }
+  if (mob.kind === "gnats") {
+    // One simulated swarm; the client scatters 4 bodies on orbit + bob so the
+    // aggregate reads as a drone cloud. Dark outline per body (M20 echo
+    // lesson: keep the silhouette against bright skies).
+    const bodies = 4;
+    for (let index = 0; index < bodies; index++) {
+      const orbit = time * 0.0035 * (index % 2 === 0 ? 1 : -1) + index * 1.9 + mob.id;
+      const radius = 9 + (index % 3) * 4;
+      const bob = Math.sin(time * 0.008 + index * 1.4) * 4;
+      const bx = mob.x + Math.cos(orbit) * radius;
+      const by = mob.y - 14 + Math.sin(orbit) * radius * 0.5 + bob;
+      const stretch = mob.state === "stun" ? 4 : 6.5;
+      const diamond = [
+        { x: bx + stretch * facing, y: by },
+        { x: bx, y: by - 3 },
+        { x: bx - stretch * facing, y: by },
+        { x: bx, y: by + 3 },
+      ];
+      graphics.fillStyle(MOB_OUTLINE, 1);
+      graphics.fillPoints(diamond.map((point) => ({ x: point.x, y: point.y - 0.5 })), true);
+      graphics.fillStyle(poster.panelBase, 1);
+      graphics.fillPoints(diamond.map((point) => ({ x: point.x, y: point.y })), true);
+      graphics.lineStyle(1, poster.panelLit, 0.85);
+      graphics.lineBetween(bx - 4 * facing, by - 1, bx + 4 * facing, by - 1);
+      // Rotor: two-frame width alternation reads as spin blur.
+      const rotorWide = Math.floor(time / 60 + index) % 2 === 0;
+      graphics.lineStyle(1, MOB_OUTLINE, 0.8);
+      graphics.lineBetween(bx - (rotorWide ? 7 : 5), by - 4.5, bx + (rotorWide ? 7 : 5), by - 4.5);
+      graphics.fillStyle(MOB_SIGNALS.gnats, 0.9);
+      graphics.fillCircle(bx + facing * 2, by + 0.5, 2);
+      graphics.fillStyle(0xffffff, 0.8);
+      graphics.fillCircle(bx + facing * 2, by + 0.5, 0.8);
+      if (flash && index === 0) {
+        graphics.fillStyle(0xffffff, 0.5);
+        graphics.fillPoints(diamond, true);
+      }
+    }
+    return;
+  }
+  // Ram Hauler: flat hauler body on two spoked wheels, wedge ram horn up
+  // front, hazard skirt, and the red beacon eye blinking on a 1Hz idle.
+  const footY = mob.y;
+  const cx = mob.x;
+  const rearUp = mob.state === "warn" ? 4 : 0;
+  const wheelSpin = mob.x * 0.16 + time * (mob.state === "dash" ? 0.09 : 0.012) * facing;
+  for (const wheelX of [cx - 10, cx + 10]) {
+    graphics.fillStyle(MOB_OUTLINE, 1);
+    graphics.fillCircle(wheelX, footY - 8, 9);
+    graphics.fillStyle(poster.panelShade, 1);
+    graphics.fillCircle(wheelX, footY - 8, 8);
+    graphics.lineStyle(1.5, MOB_OUTLINE, 0.9);
+    for (let spoke = 0; spoke < 4; spoke++) {
+      const angle = wheelSpin + (spoke * Math.PI) / 2;
+      graphics.lineBetween(wheelX, footY - 8, wheelX + Math.cos(angle) * 7, footY - 8 + Math.sin(angle) * 7);
+    }
+  }
+  const nose = cx + facing * 19;
+  const tail = cx - facing * 17;
+  const body = [
+    { x: tail, y: footY - 10 - (mob.state === "warn" ? rearUp : 0) },
+    { x: nose - facing * 4, y: footY - 10 },
+    { x: nose, y: footY - 13 },
+    { x: nose, y: footY - 22 },
+    { x: tail, y: footY - 25 - (mob.state === "warn" ? rearUp : 0) },
+  ];
+  graphics.fillStyle(MOB_OUTLINE, 1);
+  graphics.fillPoints(body, true);
+  graphics.fillStyle(poster.panelBase, 1);
+  graphics.fillPoints(body.map((point) => ({ x: point.x, y: point.y - 0.8 })), true);
+  graphics.fillStyle(poster.panelLit, 1);
+  graphics.fillRect(Math.min(tail, nose) + 4, footY - 27 - (mob.state === "warn" ? rearUp : 0), 22, 2.5);
+  graphics.fillStyle(poster.panelShade, 1);
+  graphics.fillRect(Math.min(tail, nose) + 2, footY - 13, 26, 3);
+  // Hazard skirt on the nose face.
+  graphics.fillStyle(0xe0a43c, 0.85);
+  for (let stripe = 0; stripe < 3; stripe++) {
+    graphics.fillPoints([
+      { x: nose - facing * (2 + stripe * 4), y: footY - 20 },
+      { x: nose - facing * (4 + stripe * 4), y: footY - 20 },
+      { x: nose - facing * (6 + stripe * 4), y: footY - 12 },
+      { x: nose - facing * (4 + stripe * 4), y: footY - 12 },
+    ], true);
+  }
+  // Beacon pole + blinking eye.
+  const beaconY = footY - 33;
+  graphics.lineStyle(2, MOB_OUTLINE, 1);
+  graphics.lineBetween(cx - facing * 10, footY - 26, cx - facing * 10, beaconY);
+  const blink = 0.45 + Math.max(0, Math.sin(time * 0.0063 + mob.id)) * 0.4;
+  graphics.fillStyle(MOB_SIGNALS.ramBeacon, blink);
+  graphics.fillCircle(cx - facing * 10, beaconY, 6);
+  graphics.fillStyle(0xffffff, blink * 0.9);
+  graphics.fillCircle(cx - facing * 10, beaconY, 2);
+  if (flash) {
+    graphics.fillStyle(0xffffff, 0.45);
+    graphics.fillPoints(body.map((point) => ({ x: point.x, y: point.y })), true);
+  }
+}
+
+/** M31 repair pack dropped by a dying mob: small medkit canister, expiring. */
+export function drawDrop(graphics: Phaser.GameObjects.Graphics, drop: { x: number; y: number; ttl: number; generation: number }, time: number) {
+  const bob = Math.sin(time * 0.005 + drop.generation) * 2;
+  const urgent = drop.ttl < 2 && Math.floor(time / 150) % 2 === 0;
+  const tint = 0x4fd07a;
+  graphics.fillStyle(0x10201a, 1);
+  graphics.fillRect(drop.x - 8, drop.y - 12 + bob, 16, 12);
+  graphics.lineStyle(2, tint, urgent ? 0.25 : 0.9);
+  graphics.strokeRect(drop.x - 8, drop.y - 12 + bob, 16, 12);
+  graphics.fillStyle(tint, urgent ? 0.3 : 0.95);
+  graphics.fillRect(drop.x - 5, drop.y - 8 + bob, 10, 4);
+  graphics.fillRect(drop.x - 2, drop.y - 11 + bob, 4, 10);
 }

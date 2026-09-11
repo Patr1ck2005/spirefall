@@ -344,6 +344,12 @@ const makeSquadRoom = (players: PlayerState[], teams: number): Room => ({
   hazardHits: new Map(),
   jumpHeld: new Map(),
   stats: {},
+  mobs: [],
+  mobQueue: [],
+  drops: [],
+  nextMobId: 1,
+  nextDropId: 1,
+  nextMobWaveTick: 0,
 }) as unknown as Room;
 
 const squadPilot = (id: string, index: number) => makePlayer(id, id, index, { ...DEFAULT_CONFIG, mapId: "canopy" });
@@ -433,6 +439,43 @@ const squadPilot = (id: string, index: number) => makePlayer(id, id, index, { ..
   for (const player of room.players.values()) player.lives = 0;
   const wiped = teamStandings(room);
   assert(wiped.every((squad) => !squad.alive), "A squad with zero lives and no respawn is dead");
+}
+
+// ---- M31 hostile mobs: waves, damage, drops --------------------------------
+
+import { MOB_TUNING } from "../shared/game.js";
+import { damageMob } from "../server/sim/damage.js";
+import { queueMobWave, updateMobs } from "../server/sim/mobs.js";
+
+{
+  const room = makeSquadRoom([squadPilot("pilot", 0)], 0);
+  room.config = { ...room.config, mobs: true };
+  const canopy = MAPS.canopy;
+  queueMobWave(room, canopy);
+  assert(room.mobQueue.length === 1, "Wave spawn must queue exactly one telegraph");
+  assert(room.events.some((event) => event.type === "mobSpawn"), "Telegraph must emit a mobSpawn event");
+  assert(room.mobQueue[0].tick - room.tick === Math.round(MOB_TUNING.telegraph * 60), "Telegraph must last one second of ticks");
+
+  // Promote at telegraph end: hp comes straight from the tuning table.
+  room.tick = room.mobQueue[0].tick;
+  updateMobs(room, canopy, 1 / 60);
+  assert(room.mobs.length === 1, "Telegraph must promote into a live mob");
+  assert(room.mobs[0].hp === MOB_TUNING.hp[room.mobs[0].kind], "Mob hp must come from the tuning table");
+  assert(room.mobQueue.length === 0, "Promoted telegraph must leave the queue");
+
+  // Kill → the 8-second repair pack drops and the death event fires.
+  const mob = room.mobs[0];
+  damageMob(room, mob, 999, mob.x - 20, 40);
+  assert(!room.mobs.some((candidate) => candidate.id === mob.id), "Dead mob must leave the roster");
+  assert(room.drops.length === 1 && room.drops[0].ttl === MOB_TUNING.dropTtl, "Mob death must drop a repair pack with the full ttl");
+  assert(room.events.some((event) => event.type === "mobDeath"), "Mob death must emit a mobDeath event");
+
+  // Concurrency cap: the spawner refuses to queue past the cap.
+  room.mobQueue.length = 0;
+  room.mobs = Array.from({ length: MOB_TUNING.cap }, (_, index) => ({ id: 100 + index, kind: "skitter" as const, x: 400, y: 700, vx: 0, vy: 0, hp: 30, facing: 1 as const, state: "stalk" as const, phaseTimer: 0 }));
+  room.nextMobWaveTick = room.tick;
+  updateMobs(room, canopy, 1 / 60);
+  assert(room.mobQueue.length === 0, "Wave spawner must respect the concurrency cap");
 }
 
 console.log("game logic tests passed");

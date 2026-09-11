@@ -59,7 +59,7 @@ app.innerHTML = `
         <div class="lobby-console">
           <section class="roster-column"><div class="section-title"><span>01</span><div><p data-i18n="section01">DEPLOYMENT</p><h3 data-i18n="roster">Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
           <section class="map-column"><div class="section-title"><span>02</span><div><p data-i18n="section02">LOCATION</p><h3 data-i18n="sectorFeed">Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
-          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingMode">Mode</span><select id="teams"><option value="0" data-i18n="modeFfa">Free-for-all</option><option value="2" data-i18n="modeTeams2">2 squads</option><option value="3" data-i18n="modeTeams3">3 squads</option><option value="4" data-i18n="modeTeams4">4 squads</option></select></label><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
+          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingMode">Mode</span><select id="teams"><option value="0" data-i18n="modeFfa">Free-for-all</option><option value="2" data-i18n="modeTeams2">2 squads</option><option value="3" data-i18n="modeTeams3">3 squads</option><option value="4" data-i18n="modeTeams4">4 squads</option></select></label><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label class="toggle"><input id="mobs" type="checkbox" /><span></span> <i data-i18n="settingMobs" style="font-style:normal">Hostile mobs</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
         </div>
         <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p data-i18n="section04">ARMORY</p><h3 data-i18n="loadout">Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
         <div class="lobby-actions"><div><button id="start" class="primary" data-i18n="startMatch">Start match</button><button id="solo-test" data-i18n="soloTest">Solo test</button></div><button id="leave" class="quiet" data-i18n="leaveSpire">Leave spire</button></div>
@@ -141,11 +141,12 @@ function enterLobby(room: RoomMessage) {
   $<HTMLSelectElement>("map").value = room.config.mapId;
   $<HTMLSelectElement>("lives").value = String(room.config.lives);
   $<HTMLInputElement>("crates").checked = room.config.crates;
+  $<HTMLInputElement>("mobs").checked = room.config.mobs === true;
   $<HTMLSelectElement>("bots").value = String(room.config.bots);
   $<HTMLSelectElement>("bot-skill").value = room.config.botSkill;
   updateMapVisual(room.config.mapId);
   const isHost = session.selfId === room.hostId;
-  for (const id of ["teams", "map", "lives", "crates", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
+  for (const id of ["teams", "map", "lives", "crates", "mobs", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
   for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
     input.checked = room.config.weaponSet.includes(input.value as WeaponId);
     input.disabled = !isHost;
@@ -365,11 +366,11 @@ export function initShell(sceneCtorParam: (new () => ArenaSceneLike & Phaser.Sce
   $("sound-volume").addEventListener("input", () => {
     sfx.setVolume(Number($<HTMLInputElement>("sound-volume").value) / 100);
   });
-  for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) {
+  for (const id of ["map", "lives", "crates", "mobs", "bots", "bot-skill"]) {
     $(id).addEventListener("change", () => {
       const mapId = $<HTMLSelectElement>("map").value as MapId;
       updateMapVisual(mapId);
-      send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked, bots: Number($<HTMLSelectElement>("bots").value), botSkill: $<HTMLSelectElement>("bot-skill").value } });
+      send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked, mobs: $<HTMLInputElement>("mobs").checked, bots: Number($<HTMLSelectElement>("bots").value), botSkill: $<HTMLSelectElement>("bot-skill").value } });
     });
   }
   // M30: squad mode rides its own host-only message (not the config patch).

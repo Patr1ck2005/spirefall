@@ -7,6 +7,7 @@ import {
   PLAYER_TARGET_OFFSET,
   PROP_TUNING,
   WEAPONS,
+  WORLD,
   calculateHazardState,
   calculateMoverState,
   clamp,
@@ -57,6 +58,12 @@ export function createRoom(client: Client, name: string) {
     hazardHits: new Map(),
     jumpHeld: new Map(),
     stats: weaponStatsBucket(),
+    mobs: [],
+    mobQueue: [],
+    drops: [],
+    nextMobId: 1,
+    nextDropId: 1,
+    nextMobWaveTick: 0,
   };
   client.room = room;
   room.players.set(client.id, makePlayer(client.id, name.slice(0, 16) || "Player", 0, room.config));
@@ -250,6 +257,14 @@ export function start(room: Room, mode: MatchMode) {
   }));
   room.hazards = MAPS[room.config.mapId].hazards.map((def) => calculateHazardState(def, 0));
   room.movers = MAPS[room.config.mapId].movers.map((def) => calculateMoverState(def, 0));
+  // M31 hostile mobs: opt-in wave mode. The first wave queues ~5s in so pilots
+  // spawn into a quiet read of the arena; the mob module owns later cadence.
+  room.mobs = [];
+  room.mobQueue = [];
+  room.drops = [];
+  room.nextMobId = 1;
+  room.nextDropId = 1;
+  room.nextMobWaveTick = room.config.mobs ? Math.round(WORLD.tickRate * 5) : 0;
   broadcastRoom(room);
 }
 
@@ -263,6 +278,10 @@ export function returnToLobby(room: Room) {
   room.hazards = [];
   room.movers = [];
   room.events = [];
+  room.mobs = [];
+  room.mobQueue = [];
+  room.drops = [];
+  room.nextMobWaveTick = 0;
   for (const player of room.players.values()) player.charge = 0;
   for (const client of room.clients.values()) {
     client.input = blankInput();
@@ -297,6 +316,7 @@ export function setConfig(room: Room, patch: Partial<MatchConfig>) {
     weaponSet: requestedWeapons?.length ? requestedWeapons : room.config.weaponSet,
     bots: clampBotCount(patch.bots ?? room.config.bots, humanCount(room)),
     botSkill,
+    mobs: typeof patch.mobs === "boolean" ? patch.mobs : room.config.mobs,
   };
   syncBotRoster(room);
   for (const player of room.players.values()) {

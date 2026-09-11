@@ -10,6 +10,8 @@ import type {
   HazardState,
   MatchConfig,
   MatchMode,
+  MobDrop,
+  MobState,
   MoverState,
   PlayerState,
   ProjectileState,
@@ -51,6 +53,16 @@ export type Room = {
   winner?: string;
   /** M20 balance instrumentation: per-weapon shots / hits / damage / kills. */
   stats: WeaponStats;
+  /** M31 hostile mobs (kept empty unless config.mobs is on). */
+  mobs: MobState[];
+  /** M31 pending ground telegraphs: { tick, x, y, kind } awaiting entry. */
+  mobQueue: Array<{ tick: number; x: number; y: number; kind: MobState["kind"] }>;
+  /** M31 repair packs dropped by dying mobs. */
+  drops: MobDrop[];
+  nextMobId: number;
+  nextDropId: number;
+  /** M31 next tick a spawn wave may fire (0 = disabled). */
+  nextMobWaveTick: number;
 };
 
 export type WeaponStats = Record<string, { shots: number; hits: number; damage: number; kills: number }>;
@@ -111,6 +123,8 @@ export function snapshot(room: Room): ServerSnapshot {
     events: room.events.map((event) => ({ ...event })),
     config: room.config,
     winner: room.winner,
+    mobs: room.mobs.map((mob) => ({ ...mob })),
+    drops: room.drops.map((drop) => ({ ...drop })),
   };
 }
 

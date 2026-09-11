@@ -104,7 +104,45 @@ export const DEFAULT_CONFIG: MatchConfig = {
   botSkill: "standard",
   // M30: free-for-all by default; the lobby's mode selector switches to 2-4 squads.
   teams: 0,
+  // M31: hostile mob waves are opt-in from the lobby toggle.
+  mobs: false,
 };
+
+// M31 hostile industrial pests. Everything a mob needs lives here so the
+// balance dossier and tests reason over one table. Mobs are hostile to every
+// pilot (bots included); they do NOT count toward win conditions.
+export const MOB_TUNING = {
+  /** Concurrent mob cap per room — the wave spawner refuses to exceed it. */
+  cap: 10,
+  /** Seconds between spawn waves while under the cap. */
+  waveInterval: 11,
+  /** Seconds of ground telegraph before a mob enters (1s light pillar). */
+  telegraph: 1,
+  /** Hit points per mob kind. */
+  hp: { skitter: 30, gnats: 26, ram: 44 } as Record<string, number>,
+  /** Stalk speeds (px/s) per kind. */
+  stalkSpeed: { skitter: 110, gnats: 84, ram: 46 } as Record<string, number>,
+  /** Dash/charge speeds (px/s) per kind. */
+  dashSpeed: { skitter: 330, gnats: 150, ram: 400 } as Record<string, number>,
+  /** Contact damage per connect (limb damage points). */
+  damage: { skitter: 16, gnats: 7, ram: 22 } as Record<string, number>,
+  /** Knockback applied to a pilot on connect (px/s). */
+  knockback: 300,
+  /** Fraction of incoming knockback a mob keeps (rest bleeds off as mass). */
+  knockbackResist: 0.35,
+  /** Behaviour windows (seconds) per kind. */
+  warnTime: { skitter: 0.6, gnats: 0, ram: 0.5 } as Record<string, number>,
+  dashTime: { skitter: 0.45, gnats: 0, ram: 0.6 } as Record<string, number>,
+  stunTime: { skitter: 0.5, gnats: 0.4, ram: 0.8 } as Record<string, number>,
+  /** Cooldown between connects per mob (seconds). */
+  hitCooldown: 0.9,
+  /** Mob body radius (px) for hit resolution. */
+  radius: { skitter: 12, gnats: 11, ram: 15 } as Record<string, number>,
+  /** Repair-pack drop lifetime (seconds) after a mob dies. */
+  dropTtl: 8,
+  /** Wave weights per kind — crawlers dominate, chargers are rarer. */
+  weights: { skitter: 5, gnats: 3, ram: 2 } as Record<string, number>,
+} as const;
 
 export const PLAYER_COLORS = [0x56d9d0, 0xf0715d, 0xf0c75e, 0xad80e8] as const;
 

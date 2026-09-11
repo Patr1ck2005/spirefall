@@ -496,6 +496,31 @@ assert(squadByPlayer.get(squadCreated.selfId) === 1 && squadByPlayer.get(squadJo
 squadHost.close();
 squadGuest.close();
 
+// --- M31 mobs: the sandbox telegraph promotes into a live mob and the
+// snapshot stream (mobs + drops arrays included) stays lean. ---
+const mobHost = await open();
+mobHost.send(JSON.stringify({ type: "create", name: "Mob-Watcher" }));
+const mobCreated = await waitFor(mobHost, "room");
+mobHost.send(JSON.stringify({ type: "config", patch: { mapId: "canopy", mobs: true, crates: false } }));
+await waitFor(mobHost, "room");
+mobHost.send(JSON.stringify({ type: "start_sandbox" }));
+const mobStarted = await waitFor(mobHost, "snapshot");
+assert(mobStarted.snapshot.config.mobs === true, "Sandbox did not keep the mobs toggle");
+let spawnEventSeen = false;
+let mobSeen = false;
+let maxSnapshotBytes = 0;
+// First wave queues 5s in with a 1s telegraph — 9s of snapshots is ample.
+for (let i = 0; i < 280 && !mobSeen; i++) {
+  const message = await waitFor(mobHost, "snapshot", 5000);
+  maxSnapshotBytes = Math.max(maxSnapshotBytes, JSON.stringify(message).length);
+  spawnEventSeen ||= message.snapshot.events.some((event: any) => event.type === "mobSpawn");
+  mobSeen = message.snapshot.mobs.length > 0;
+}
+assert(spawnEventSeen, "Mob telegraph never emitted a mobSpawn event");
+assert(mobSeen, "No hostile mob entered the sandbox within the wave window");
+assert(maxSnapshotBytes < 16000, `Snapshot bandwidth ballooned with mobs enabled (${maxSnapshotBytes} bytes)`);
+mobHost.close();
+
 // --- Explicit leave_room removes the pilot immediately (no 30s hold) ---
 const leaveHost = await open();
 // Continuous collector: ws drops messages that arrive while no listener is

@@ -3,6 +3,7 @@
 
 import {
   LIMB_IDS,
+  MOB_TUNING,
   PLAYER_TARGET_OFFSET,
   PROP_TUNING,
   WORLD,
@@ -10,6 +11,7 @@ import {
   selectLimbAtPoint,
   type CombatEvent,
   type LimbId,
+  type MobState,
   type PlayerState,
   type PropState,
   type WeaponId,
@@ -105,6 +107,37 @@ export function loseLife(room: Room, player: PlayerState, x: number, y: number, 
   return true;
 }
 
+// M31: hostile mobs settle through the same damage domain. Knockback is
+// mass-damped (MOB_TUNING.knockbackResist) and a solid hit (≥12) breaks a
+// wind-up — getting shot visibly ruins the dash telegraph.
+export function damageMob(room: Room, mob: MobState, amount: number, sourceX: number, knockback = 0): boolean {
+  if (mob.hp <= 0) return false;
+  mob.hp -= amount;
+  mob.hitFlash = 0.13;
+  const kb = knockback * MOB_TUNING.knockbackResist;
+  if (kb > 0) mob.vx += (mob.x >= sourceX ? 1 : -1) * kb;
+  if (mob.state === "warn" && amount >= 12) {
+    mob.state = "stun";
+    mob.phaseTimer = MOB_TUNING.stunTime[mob.kind];
+    mob.warn = 0;
+  }
+  emitEvent(room, "hit", mob.x, mob.y - 8, clamp(amount / 34, 0.3, 1.1), { mobId: mob.id, amount: Math.round(amount) });
+  if (mob.hp <= 0) {
+    killMob(room, mob, true);
+    return true;
+  }
+  return false;
+}
+
+/** Remove a dead mob, emit the death event and (optionally) drop the repair pack. */
+export function killMob(room: Room, mob: MobState, drop: boolean) {
+  if (!room.mobs.some((candidate) => candidate.id === mob.id)) return;
+  room.mobs = room.mobs.filter((candidate) => candidate.id !== mob.id);
+  emitEvent(room, "mobDeath", mob.x, mob.y - 8, 1.2, { mobKind: mob.kind, mobId: mob.id });
+  if (!drop) return;
+  room.drops.push({ id: room.nextDropId++, x: mob.x, y: mob.y, ttl: MOB_TUNING.dropTtl, generation: 1 });
+}
+
 // M25: a barrel's hp hit zero — explode it. Splash follows the same radial
 // falloff as rockets (0.7x core → 0.2x edge); nearby barrels take half damage
 // and pop on the following ticks through their own detonation calls (chain
@@ -126,6 +159,13 @@ export function detonateProp(room: Room, prop: PropState) {
     if (distance >= PROP_TUNING.blastRadius) continue;
     const falloff = clamp(0.7 - 0.5 * (distance / PROP_TUNING.blastRadius), 0.2, 0.7);
     damage(room, nearby, PROP_TUNING.damage * falloff, PROP_TUNING.knockback * falloff, prop.x, nearby.x, nearby.y - PLAYER_TARGET_OFFSET, { actorId: actor, explosive: true });
+  }
+  // M31: the blast also grinds hostile mobs with the same radial falloff.
+  for (const mob of [...room.mobs]) {
+    const distance = Math.hypot(mob.x - prop.x, mob.y - 8 - prop.y);
+    if (distance >= PROP_TUNING.blastRadius) continue;
+    const falloff = clamp(0.7 - 0.5 * (distance / PROP_TUNING.blastRadius), 0.2, 0.7);
+    damageMob(room, mob, PROP_TUNING.damage * falloff, prop.x, PROP_TUNING.knockback * falloff);
   }
   // Chain: other barrels in the blast catch FIRE instead of losing hp — the
   // M27 propagation model. Fire spreads barrel-to-barrel with a per-barrel

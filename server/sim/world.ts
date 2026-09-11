@@ -13,12 +13,13 @@ import {
   calculateHazardState,
   clamp,
   freshLimbs,
+  mobRadius,
   type CrateState,
   type HazardState,
   type PlayerState,
 } from "../../shared/game.js";
 import { emitEvent, randomBetween, type Room } from "../state.js";
-import { applyLimbDamage, damage, detonateProp, isEliminated, loseLife } from "./damage.js";
+import { applyLimbDamage, damage, damageMob, detonateProp, isEliminated, killMob, loseLife } from "./damage.js";
 import { intersectsPlayerRect } from "./players.js";
 
 export function scheduleCrateSpawn(room: Room, crate: CrateState, delayTicks: number) {
@@ -79,6 +80,17 @@ export function updateHazards(room: Room, previous: HazardState[], dt: number) {
         loseLife(room, player, player.x, player.y - PLAYER_TARGET_OFFSET, "hazard");
       } else {
         damage(room, player, def.limbDamage || 45, def.force || 560, state.x + state.width / 2, player.x, player.y - 12, {});
+      }
+    }
+    // M31: lethal crusher/piston zones grind hostile mobs instantly (no drops
+    // inside a machine — the pack would be unreachable anyway).
+    if (state.phase === "active" && state.lethal) {
+      for (const mob of [...room.mobs]) {
+        const radius = mobRadius(mob.kind);
+        const overlapping = mob.x + radius > state.x && mob.x - radius < state.x + state.width && mob.y + 4 > state.y && mob.y - 20 < state.y + state.height;
+        if (!overlapping) continue;
+        mob.hp = 0;
+        killMob(room, mob, false);
       }
     }
   }

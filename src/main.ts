@@ -22,10 +22,13 @@ import {
 } from "../shared/game";
 import {
   MUZZLE_OFFSET,
+  MOB_SIGNALS,
   colorCss,
   drawCrate,
+  drawDrop,
   drawEnvironment,
   drawHazard,
+  drawMob,
   drawMover,
   drawPlayer,
   drawProjectile,
@@ -118,6 +121,10 @@ class ArenaScene extends Phaser.Scene {
   private digits: Array<{ text: Phaser.GameObjects.Text; life: number }> = [];
   /** M29 smoothed camera focus point (world coords; eased toward the pilot). */
   private camTarget = { x: WORLD.width / 2, y: WORLD.height / 2 };
+  // M31 mob presentation: telegraph markers for off-screen spawns and the
+  // per-mob phase memory that fires dash-start / charge-impact flashes.
+  private spawnWarnings: Array<{ x: number; y: number; life: number }> = [];
+  private mobPhases = new Map<number, string>();
 
   /** Drop processed-event ids when switching rooms (ids restart per room). */
   clearProcessedEvents() {
@@ -131,6 +138,8 @@ class ArenaScene extends Phaser.Scene {
     this.landFx.clear();
     this.dashGhosts = [];
     this.prevState.clear();
+    this.spawnWarnings = [];
+    this.mobPhases.clear();
     for (const digit of this.digits) {
       digit.life = 0;
       digit.text.setVisible(false);
@@ -741,6 +750,15 @@ class ArenaScene extends Phaser.Scene {
           if (surface !== undefined) this.stampDecal({ x: event.x, y: surface + 1, radius: 1.6 + s * 1.6, alpha: 0.5, rotation: Math.random() * Math.PI, dir: 0 });
         }
       } else if (event.type === "hit") {
+        if (event.mobId !== undefined) {
+          // M31 mechanical feedback: sparks + hit bloom, no blood, no gore —
+          // the snapshot's mob.hitFlash drives the white-out on the body.
+          sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
+          this.lighting?.flash(event.x, event.y, 92, 0xffe2b8, 0.35, 0.14, undefined, 0, 0.35);
+          this.spawnBurst(event.x, event.y, 0xffc06a, 4, "spark", 0);
+          if (event.amount) this.spawnDamageDigit(event.x, event.y, event.amount, event.strength);
+          continue;
+        }
         sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
         // M24 floating damage digits (FX-toggleable). M30: a teammate's hit
         // digits take the squad color — own hits keep the white/heat ramp.
@@ -822,6 +840,25 @@ class ArenaScene extends Phaser.Scene {
         sfx.play("hazard", { ...at(event.x, event.y), strength: event.strength });
         this.spawnBurst(event.x, event.y, 0xf09b3d, 28, "spark", 0);
         this.shake(event.strength, target?.id === session.selfId);
+      } else if (event.type === "mobSpawn") {
+        // M31 ground telegraph: a light pillar warns of the entry for ~1s;
+        // off-screen spawns also stamp an edge chevron + warning sting.
+        this.spawnWarnings.push({ x: event.x, y: event.y, life: 1 });
+        this.spawnWarnings = this.spawnWarnings.slice(-6);
+        sfx.play("mobSpawn", { ...at(event.x, event.y), strength: 0.8 });
+        this.lighting?.flash(event.x, event.y - 40, 70, 0xe0a43c, 0.45, 0.9, undefined, 0, 0.5);
+      } else if (event.type === "mobDeath") {
+        // Hardware death: core flash, metal debris, scorch — never gore.
+        sfx.play("mobDeath", { ...at(event.x, event.y), strength: 0.9 });
+        this.spawnBurst(event.x, event.y, 0xffe7b0, 10, "flash", 0);
+        this.spawnBurst(event.x, event.y, 0x8d9497, 16, "spark", 0);
+        this.spawnBurst(event.x, event.y, 0x4b5254, 8, "smoke", 0);
+        this.lighting?.flash(event.x, event.y - 8, 120, 0xffd9a0, 0.6, 0.4, 50, 0, 1.1);
+        if (visualPrefs.gore) {
+          const map = MAPS[this.snapshot!.config.mapId];
+          const surface = surfaceBelow(map, event.x, event.y + 6);
+          if (surface !== undefined) this.stampDecal({ x: event.x, y: surface + 1, radius: 10 + event.strength * 6, alpha: 0.5, rotation: Math.random() * Math.PI, scorch: true });
+        }
       }
     }
   }
@@ -965,6 +1002,8 @@ class ArenaScene extends Phaser.Scene {
     this.rings = this.rings.filter((ring) => ring.life > 0);
     for (const marker of this.hitMarkers) marker.life -= dt;
     this.hitMarkers = this.hitMarkers.filter((marker) => marker.life > 0);
+    for (const warning of this.spawnWarnings) warning.life -= dt;
+    this.spawnWarnings = this.spawnWarnings.filter((warning) => warning.life > 0);
     // M24 animation timers: swing arcs, barrel heat, dash ghosts, damage digits.
     for (const [id, swing] of this.swings) {
       swing.t += dt;
@@ -1016,6 +1055,11 @@ class ArenaScene extends Phaser.Scene {
     for (const mover of snapshot.movers) drawMover(this.graphics, mover, map.accent, time);
     for (const prop of snapshot.props) if (prop.alive) drawProp(this.graphics, prop, time, this.lighting?.sampleLight(prop.x, prop.y - 12));
     for (const crate of snapshot.crates) if (crate.active) drawCrate(this.graphics, crate.x, crate.y, crate.weapon, time, crate.generation, crate.kind, this.lighting?.sampleLight(crate.x, crate.y));
+    for (const drop of snapshot.drops) drawDrop(this.graphics, drop, time);
+    // M31: hostile pests render under pilots (they are ground clutter) with
+    // their own cast shadows from the rig.
+    for (const mob of snapshot.mobs) drawMob(this.graphics, mob, snapshot.config.mapId, time);
+    this.syncMobPhases(snapshot, time);
     for (const projectile of snapshot.projectiles) drawProjectile(this.graphics, projectile, time);
     this.drawDashGhosts();
     this.drawTracers();
@@ -1030,9 +1074,52 @@ class ArenaScene extends Phaser.Scene {
     }
     for (const [id, label] of this.labels) label.setVisible(visible.has(id));
     this.drawTeamArrows(snapshot);
+    this.drawSpawnWarnings();
     this.drawGibs();
     this.drawForeground(snapshot.config.mapId, time);
     this.drawLighting(snapshot, time);
+  }
+
+  /**
+   * M31: one-shot phase flashes — a saw dash ignites its start burst and a
+   * Ram Hauler slamming into a wall (dash→stun) pops the impact flash.
+   */
+  private syncMobPhases(snapshot: ServerSnapshot, time: number) {
+    void time;
+    const live = new Set<number>();
+    for (const mob of snapshot.mobs) {
+      live.add(mob.id);
+      const previous = this.mobPhases.get(mob.id);
+      if (previous && previous !== mob.state) {
+        if (mob.state === "dash") {
+          this.lighting?.flash(mob.x, mob.y - 8, 70, 0xffe7b0, 0.5, 0.15, undefined, 0, 0.9);
+          this.spawnBurst(mob.x + mob.facing * 14, mob.y - 6, 0xffc06a, 6, "spark", mob.facing);
+          sfx.play("impact", { x: mob.x, y: mob.y, mx: this.renderPositions.get(session.selfId)?.x, my: this.renderPositions.get(session.selfId)?.y, strength: 0.5 });
+        } else if (previous === "dash" && mob.state === "stun" && mob.kind === "ram") {
+          this.lighting?.flash(mob.x, mob.y - 10, 110, MOB_SIGNALS.ramBeacon, 0.6, 0.25, 30, 0, 1.0);
+          this.shake(0.8, false);
+          sfx.play("explosion", { x: mob.x, y: mob.y, mx: this.renderPositions.get(session.selfId)?.x, my: this.renderPositions.get(session.selfId)?.y, strength: 0.6 });
+        }
+      }
+      this.mobPhases.set(mob.id, mob.state);
+    }
+    for (const id of [...this.mobPhases.keys()]) if (!live.has(id)) this.mobPhases.delete(id);
+  }
+
+  /** M31: amber edge chevrons for spawn telegraphs happening off screen. */
+  private drawSpawnWarnings() {
+    const view = this.cameras.main.worldView;
+    const inset = 34;
+    for (const warning of this.spawnWarnings) {
+      if (view.contains(warning.x, warning.y - 20)) continue;
+      const edgeX = clamp(warning.x, view.x + inset, view.right - inset);
+      const edgeY = clamp(warning.y - 20, view.y + inset, view.bottom - inset);
+      const pulse = 0.35 + 0.35 * Math.sin(warning.life * 18);
+      this.graphics.fillStyle(0xe0a43c, pulse);
+      this.graphics.fillTriangle(edgeX, edgeY - 9, edgeX - 8, edgeY + 5, edgeX + 8, edgeY + 5);
+      this.graphics.fillStyle(0x050708, 0.5);
+      this.graphics.fillTriangle(edgeX, edgeY - 3, edgeX - 4, edgeY + 4, edgeX + 4, edgeY + 4);
+    }
   }
 
   /**
@@ -1143,6 +1230,27 @@ class ArenaScene extends Phaser.Scene {
     for (const hazard of snapshot.hazards) {
       if (hazard.phase === "warning") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 90, tint: 0xe0a43c, alpha: 0.3, tier: 1, shadow: 0.3 });
       else if (hazard.phase === "active") lighting.add({ x: hazard.x + hazard.width / 2, y: hazard.y + hazard.height / 2, radius: 110, tint: 0xd84b44, alpha: 0.4, tier: 0, shadow: 0.5 });
+    }
+    // M31: mob signal glows — material language (same family as the pilot
+    // visor), tier 1 so the eye beads shed first under load. The Ram Hauler's
+    // wind-up cone is the one set-piece: it projects its own warning shadow.
+    for (const mob of snapshot.mobs) {
+      if (mob.kind === "skitter") {
+        lighting.add({ x: mob.x + mob.facing * 8, y: mob.y - 19, radius: 5, tint: MOB_SIGNALS.skitterEye, alpha: 0.5, tier: 1 });
+        lighting.add({ x: mob.x, y: mob.y - 8, radius: 16, tint: MOB_SIGNALS.skitterEye, alpha: 0.22, tier: 1 });
+        if (mob.state === "warn" || mob.state === "dash") {
+          lighting.add({ x: mob.x + mob.facing * 17, y: mob.y - 8, radius: 22, tint: MOB_SIGNALS.sawRim, alpha: 0.22 + (mob.warn ?? 0) * 0.2, tier: 1 });
+        }
+      } else if (mob.kind === "gnats") {
+        lighting.add({ x: mob.x, y: mob.y - 14, radius: 30, tint: MOB_SIGNALS.gnats, alpha: 0.16, tier: 1 });
+      } else {
+        const blink = 0.45 + Math.max(0, Math.sin(time * 0.0063 + mob.id)) * 0.4;
+        lighting.add({ x: mob.x - mob.facing * 10, y: mob.y - 33, radius: 6, tint: MOB_SIGNALS.ramBeacon, alpha: blink, tier: 1 });
+        lighting.add({ x: mob.x, y: mob.y - 16, radius: 18, tint: MOB_SIGNALS.ramBeacon, alpha: 0.2, tier: 1 });
+        if (mob.state === "warn") {
+          lighting.add({ x: mob.x + mob.facing * 60, y: mob.y - 10, radius: 90, tint: MOB_SIGNALS.ramBeacon, alpha: 0.3, kind: "cone", angle: mob.facing === 1 ? 0 : Math.PI, coneHalf: 0.5, shadow: 0.5, tier: 1 });
+        }
+      }
     }
     // Occluders: platforms + solids + movers + live barrels + pilots. All
     // boxes share the shadow physics (attenuation-driven alpha) — no per-box
