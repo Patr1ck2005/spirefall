@@ -450,6 +450,52 @@ assert(!repeatedDeaths, "An eliminated pilot emitted repeated death events (free
 assert(resolved, "Match with one eliminated pilot did not resolve");
 elimHost.close();
 
+// --- M30 squads: set_teams balances lobby squads, invalid counts fall back
+// to FFA, and the playing snapshot carries teamId to every client. Friendly
+// fire math itself is pinned deterministically in game-logic. ---
+// Room replies are collected continuously (same pattern as the leave test):
+// a per-message waitFor races the join broadcast, which sits in the socket
+// buffer until the next listener attaches and then resolves the wait with a
+// STALE roster.
+const squadHost = await open();
+const squadRosters: any[] = [];
+squadHost.on("message", (raw: WebSocket.RawData) => {
+  const message = JSON.parse(raw.toString()) as Message;
+  if (message.type === "room") squadRosters.push(message.room);
+});
+squadHost.send(JSON.stringify({ type: "create", name: "Squad-Alpha" }));
+const squadCreated = await waitFor(squadHost, "room");
+const squadGuest = await open();
+squadGuest.send(JSON.stringify({ type: "join", roomCode: squadCreated.room.code, name: "Squad-Bravo" }));
+const squadJoined = await waitFor(squadGuest, "room");
+squadHost.send(JSON.stringify({ type: "set_teams", teams: 2 }));
+let squadLobby: Message["room"] | undefined;
+for (let i = 0; i < 100 && !squadLobby; i++) {
+  squadLobby = squadRosters.find((room) => room.config.teams === 2);
+  if (!squadLobby) await new Promise((resolve) => setTimeout(resolve, 50));
+}
+assert(squadLobby, "set_teams did not persist the squad count");
+const squadAlpha = squadLobby!.players.find((p: any) => p.id === squadCreated.selfId);
+const squadBravo = squadLobby!.players.find((p: any) => p.id === squadJoined.selfId);
+assert(squadAlpha?.teamId === 1 && squadBravo?.teamId === 2, `Two lobby pilots did not split into opposite squads (${squadAlpha?.teamId}/${squadBravo?.teamId})`);
+squadHost.send(JSON.stringify({ type: "set_teams", teams: 5 }));
+let invalidTeams: Message["room"] | undefined;
+for (let i = 0; i < 100 && !invalidTeams; i++) {
+  const at = squadRosters.findIndex((room) => room.config.teams === 2);
+  invalidTeams = at >= 0 ? squadRosters.slice(at + 1).find((room) => room.config.teams === 0) : undefined;
+  if (!invalidTeams) await new Promise((resolve) => setTimeout(resolve, 50));
+}
+assert(invalidTeams, "Out-of-range squad count did not fall back to FFA");
+assert(invalidTeams!.players.every((p: any) => p.teamId === undefined), "FFA fallback did not strip squad ids");
+squadHost.send(JSON.stringify({ type: "set_teams", teams: 2 }));
+await new Promise((resolve) => setTimeout(resolve, 200));
+squadHost.send(JSON.stringify({ type: "start" }));
+const squadStarted = await waitFor(squadHost, "snapshot");
+const squadByPlayer = new Map(squadStarted.snapshot.players.map((p: any) => [p.id, p.teamId]));
+assert(squadByPlayer.get(squadCreated.selfId) === 1 && squadByPlayer.get(squadJoined.selfId) === 2, "Playing snapshot lost the squad split");
+squadHost.close();
+squadGuest.close();
+
 // --- Explicit leave_room removes the pilot immediately (no 30s hold) ---
 const leaveHost = await open();
 // Continuous collector: ws drops messages that arrive while no listener is

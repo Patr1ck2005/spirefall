@@ -15,6 +15,7 @@ import {
   type WeaponId,
 } from "../../shared/game.js";
 import { emitEvent, randomBetween, statsEntry, type Room } from "../state.js";
+import { sameTeam } from "./teams.js";
 
 // Eliminated players (out of lives in a match) are frozen server-side: no
 // physics, no AI inputs, no hazard or projectile interaction, no repeated
@@ -38,6 +39,10 @@ export function damage(
   details: { actorId?: string; weaponId?: WeaponId; secondary?: boolean; explosive?: boolean; lethal?: boolean } = {},
 ) {
   if (victim.invulnerable > 0 || victim.respawnTimer > 0 || isEliminated(room, victim)) return;
+  // M30 friendly fire OFF: squadmates take neither damage nor knockback from
+  // each other (single gate — every weapon, blast and barrel path funnels
+  // through here). Falls/hazards stay unattributed and remain lethal to all.
+  if (details.actorId && sameTeam(room, room.players.get(details.actorId), victim)) return;
   // M20 balance instrumentation: attribute hits/damage/kills to the weapon.
   if (room.mode === "match" && details.weaponId) {
     const entry = statsEntry(room.stats, details.weaponId);

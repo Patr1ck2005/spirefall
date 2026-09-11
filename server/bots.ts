@@ -21,6 +21,7 @@ import {
 import { randomInt } from "node:crypto";
 import type { Room } from "./state.js";
 import { stepOffLedge } from "./bot-motion.js";
+import { sameTeam } from "./sim/teams.js";
 
 const randomBetween = (min: number, max: number) => randomInt(min, max + 1);
 
@@ -267,6 +268,9 @@ function collectPercept(room: Room, self: PlayerState): Percept {
   let bestScore = Infinity;
   for (const other of room.players.values()) {
     if (other.id === self.id || other.lives <= 0 || other.respawnTimer > 0 || other.connected === false) continue;
+    // M30: squads never target each other (friendly fire is off — a squadmate
+    // is not a combatant, just scenery sharing the scoreboard).
+    if (sameTeam(room, self, other)) continue;
     const distance = Math.hypot(other.x - self.x, other.y - self.y);
     if (distance < bestScore) {
       bestScore = distance;
@@ -295,6 +299,9 @@ function collectPercept(room: Room, self: PlayerState): Percept {
   const incoming: Percept["incoming"] = [];
   for (const projectile of room.projectiles) {
     if (projectile.ownerId === self.id) continue;
+    // M30: ally rounds pass through the bot without interaction — dodging
+    // them would burn rescue jumps against harmless fire.
+    if (sameTeam(room, room.players.get(projectile.ownerId), self)) continue;
     const dx = self.x - projectile.x;
     const dy = self.y - 14 - projectile.y;
     const distance = Math.hypot(dx, dy);

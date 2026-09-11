@@ -102,9 +102,16 @@ export const DEFAULT_CONFIG: MatchConfig = {
   weaponSet: ["sidearm", "scatter", "rifle", "sniper", "rocket", "blade", "echo", "flame"],
   bots: 0,
   botSkill: "standard",
+  // M30: free-for-all by default; the lobby's mode selector switches to 2-4 squads.
+  teams: 0,
 };
 
 export const PLAYER_COLORS = [0x56d9d0, 0xf0715d, 0xf0c75e, 0xad80e8] as const;
+
+// M30 squad identity colors. Chosen apart from the four pilot tints so a team
+// ring never reads as one pilot's personal color. Index 0 is the FFA slot
+// (unused); team 1..4 map to red/blue/green/gold.
+export const TEAM_COLORS = [0x000000, 0xe8574f, 0x4f8ae8, 0x53c463, 0xf0c75e] as const;
 
 // Movement budget derived from MOVE_TUNING in this file:
 // ground-jump apex ≈ 620²/(2·1600) ≈ 120px, air-jump apex ≈ 445²/(2·1600) ≈ 62px.

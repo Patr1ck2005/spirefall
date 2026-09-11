@@ -15,6 +15,7 @@ import {
 } from "../../shared/game.js";
 import { emitEvent, type Room } from "../state.js";
 import { damage, damageProp, isEliminated } from "./damage.js";
+import { sameTeam } from "./teams.js";
 
 // Echo Shard ricochet: reflect the shard off the struck platform face using
 // the pre-move position to pick the axis (both on corner strikes) and push it
@@ -148,28 +149,35 @@ export function stepProjectiles(room: Room, map: MapDef, dt: number) {
       else dead = true;
       break;
     }
-    if (!dead) for (const target of room.players.values()) {
-      if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target)) continue;
-      // M24 swept capsule test: the projectile's prev→next segment must miss
-      // the whole capsule for the round to pass by. Tunneling is now
-      // geometrically impossible regardless of projectile speed.
-      const impact = segmentImpactPoint(target, prevX, prevY, projectile.x, projectile.y);
-      if (!impact) continue;
-      projectile.hitIds.push(target.id);
-      const travelFalloff = rangeFalloff(projectile.travelled, attackDef.range);
-      damage(room, target, projectile.damage * travelFalloff, projectile.knockback, prevX, impact.x, impact.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
-      if (projectile.explosiveRadius) {
-        detonate(projectile, projectile.x, projectile.y, target.id);
-      }
-      if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
-      else {
-        // Non-explosive rounds that die on a body still chip the surface behind it.
-        if (!projectile.explosiveRadius) {
-          emitEvent(room, "impact", projectile.x, projectile.y, 0.7, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
+    if (!dead) {
+      // M30: rounds resolve owner→squad once per flight step; squadmates are
+      // skipped entirely so shots pass THROUGH them instead of being eaten
+      // (the old path registered the hit and wasted the round on zero damage).
+      const owner = room.players.get(projectile.ownerId);
+      for (const target of room.players.values()) {
+        if (target.id === projectile.ownerId || projectile.hitIds.includes(target.id) || target.respawnTimer > 0 || isEliminated(room, target)) continue;
+        if (sameTeam(room, owner, target)) continue;
+        // M24 swept capsule test: the projectile's prev→next segment must miss
+        // the whole capsule for the round to pass by. Tunneling is now
+        // geometrically impossible regardless of projectile speed.
+        const impact = segmentImpactPoint(target, prevX, prevY, projectile.x, projectile.y);
+        if (!impact) continue;
+        projectile.hitIds.push(target.id);
+        const travelFalloff = rangeFalloff(projectile.travelled, attackDef.range);
+        damage(room, target, projectile.damage * travelFalloff, projectile.knockback, prevX, impact.x, impact.y, { actorId: projectile.ownerId, weaponId: projectile.weaponId, secondary: projectile.secondary, explosive: projectile.explosiveRadius > 0 });
+        if (projectile.explosiveRadius) {
+          detonate(projectile, projectile.x, projectile.y, target.id);
         }
-        dead = true;
+        if (projectile.pierceRemaining > 0) projectile.pierceRemaining -= 1;
+        else {
+          // Non-explosive rounds that die on a body still chip the surface behind it.
+          if (!projectile.explosiveRadius) {
+            emitEvent(room, "impact", projectile.x, projectile.y, 0.7, { weaponId: projectile.weaponId, secondary: projectile.secondary, pattern: projectile.pattern, surface: true });
+          }
+          dead = true;
+        }
+        break;
       }
-      break;
     }
     if (dead) projectile.ttl = 0;
   }

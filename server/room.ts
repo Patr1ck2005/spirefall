@@ -31,6 +31,7 @@ import {
 } from "./state.js";
 import { BOT_IDS, botNameFor, clampBotCount, clearBotInputs, ensureControllers } from "./bots.js";
 import { loseLife } from "./sim/damage.js";
+import { pickSpawn, rebalanceTeams } from "./sim/teams.js";
 
 export function createRoom(client: Client, name: string) {
   client.token = randomUUID();
@@ -85,6 +86,8 @@ export function joinRoom(client: Client, roomCode: string, name: string) {
   room.clients.set(client.id, client);
   // An orphaned lobby (every human left before this arrival) adopts the newcomer.
   if (!room.hostId || !room.players.has(room.hostId)) room.hostId = client.id;
+  // M30: squads auto-balance — the newcomer lands on the thinnest squad.
+  rebalanceTeams(room);
   send(client, "room", { room: roomView(room), token: client.token, selfId: client.id });
   broadcastRoom(room);
 }
@@ -127,6 +130,7 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.jumpHeld.delete(client.id);
     // A room with no connected humans (bots only) is dead weight — dissolve it.
     if (humanCount(room) === 0) rooms.delete(room.code);
+    if (room.phase === "lobby") rebalanceTeams(room);
     broadcastRoom(room);
     client.room = undefined;
     return;
@@ -138,7 +142,10 @@ function removeClient(room: Room, client: Client, immediate: boolean) {
     room.jumpHeld.delete(client.id);
     room.reconnectTimers.delete(client.id);
     if (humanCount(room) === 0) rooms.delete(room.code);
-    else broadcastRoom(room);
+    else {
+      if (room.phase === "lobby") rebalanceTeams(room);
+      broadcastRoom(room);
+    }
   }, 30000);
   room.reconnectTimers.set(client.id, timer);
   broadcastRoom(room);
@@ -164,7 +171,8 @@ export function reconnect(client: Client, roomCode: string, playerId: string, to
 }
 
 function resetPlayer(room: Room, player: PlayerState, index: number) {
-  const spawn = MAPS[room.config.mapId].spawns[index % 4];
+  // M30: squad-aware spawn pick — FFA keeps the M29 contract, teams hold a half.
+  const spawn = pickSpawn(room, MAPS[room.config.mapId], player, index);
   player.x = spawn.x;
   player.y = spawn.y;
   player.vx = 0;
@@ -221,6 +229,9 @@ export function start(room: Room, mode: MatchMode) {
   room.projectiles = [];
   room.events = [];
   room.hazardHits.clear();
+  // M30: final squad balance over the full roster (bots included); sandbox
+  // strips team ids entirely so nothing squad-flavoured can leak into solo.
+  rebalanceTeams(room);
   [...room.players.values()].forEach((player, index) => resetPlayer(room, player, index));
   room.crates = room.config.crates
     ? [0, 1, 2, 3, 4, 5].map((id) => ({ id, x: 0, y: 0, kind: "weapon" as const, weapon: "sidearm" as WeaponId, active: false, respawnTimer: 0, socketId: "", generation: 0, nextSpawnTick: id < 3 ? randomBetween(60, 180) : Number.MAX_SAFE_INTEGER }))
@@ -292,5 +303,20 @@ export function setConfig(room: Room, patch: Partial<MatchConfig>) {
     player.weapon = "sidearm";
     player.ammo = player.ammoByWeapon[player.weapon];
   }
+  broadcastRoom(room);
+}
+
+/**
+ * M30 squad mode (host-only, lobby-only): switch between FFA (0) and 2-4
+ * squads. Anything outside the whitelist falls back to FFA. Squad ids are
+ * rebalanced immediately so the lobby roster shows the new split; bots join
+ * the balance on the next syncBotRoster (start() rebalances again anyway).
+ */
+export function setTeams(room: Room, raw: number) {
+  if (room.phase !== "lobby") return;
+  const teams = raw === 2 || raw === 3 || raw === 4 ? (raw as MatchConfig["teams"]) : 0;
+  room.config = { ...room.config, teams };
+  syncBotRoster(room);
+  rebalanceTeams(room);
   broadcastRoom(room);
 }

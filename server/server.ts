@@ -20,7 +20,7 @@ import {
   type Room,
   type WeaponStats,
 } from "./state.js";
-import { createRoom, joinRoom, leave, leaveRoom, reconnect, respawnSandboxPlayer, returnToLobby, setConfig, start } from "./room.js";
+import { createRoom, joinRoom, leave, leaveRoom, reconnect, respawnSandboxPlayer, returnToLobby, setConfig, setTeams, start } from "./room.js";
 import { updateRoom } from "./sim/tick.js";
 
 // Single-port hosting (M23): when a production build exists, the game server
@@ -112,6 +112,9 @@ wss.on("connection", (ws) => {
     else if (message.type === "return_lobby" && client.room && client.room.mode === "sandbox" && client.id === client.room.hostId) returnToLobby(client.room);
     else if (message.type === "sandbox_respawn" && client.room && client.id === client.room.hostId) respawnSandboxPlayer(client.room, client.id);
     else if (message.type === "config" && client.room && client.id === client.room.hostId) setConfig(client.room, message.patch || {});
+    // M30: squad mode is its own host-only message (kept out of the config
+    // patch whitelist so there is exactly one path that assigns squads).
+    else if (message.type === "set_teams" && client.room && client.id === client.room.hostId) setTeams(client.room, Number(message.teams));
     else if (message.type === "input" && client.room) {
       // Whitelist known input fields — never trust client payloads wholesale.
       // M24b: weaponSlot is MERGED, not replaced — a plain movement message

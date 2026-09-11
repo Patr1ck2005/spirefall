@@ -8,6 +8,7 @@ import {
   MOVE_TUNING,
   PLAYER_TARGET_OFFSET,
   PROP_TUNING,
+  TEAM_COLORS,
   WEAPONS,
   WORLD,
   clamp,
@@ -61,6 +62,13 @@ const patternZh: Record<string, string> = {
   single: "单发", burst: "连发", pellet: "散射", piercing: "穿透", cluster: "集束",
   slash: "挥砍", dashSlash: "突刺", beam: "光束", bounce: "弹射",
 };
+
+// M30 squad helpers: `teamsActive` gates every squad-flavoured view (FFA and
+// sandbox render exactly as before); `teamTint` swaps the pilot color for the
+// squad color wherever identity should read as ally/enemy (HUD roster, kill
+// feed, scoreboard). The pilot sprite itself keeps its personal color.
+const teamsActive = (snapshot?: ServerSnapshot) => (snapshot?.config.teams ?? 0) > 0 && snapshot?.mode !== "sandbox";
+const teamTint = (snapshot: ServerSnapshot, player: PlayerState) => (teamsActive(snapshot) && player.teamId ? TEAM_COLORS[player.teamId] : player.color);
 
 // Physical-key → weapon slot map for Digit row and numpad (IME-proof).
 const WeaponSlotCodes: Record<string, number> = {
@@ -310,13 +318,24 @@ class ArenaScene extends Phaser.Scene {
     this.updatePhaseAudio(snapshot, previousPhase, previousMode);
     this.updateHud(snapshot);
     this.refreshWeaponPanel();
+    this.refreshTeamPanel();
     const finished = snapshot.phase === "results";
     $("result").classList.toggle("hidden", !finished);
     $("sandbox-actions").classList.toggle("hidden", snapshot.mode !== "sandbox" || snapshot.phase !== "playing");
     // Winner is a player id — display names are not unique.
     const winnerEntry = snapshot.players.find((player) => player.id === snapshot.winner);
     const subtitle = $("result-subtitle");
-    if (winnerEntry?.isBot) {
+    // M30: squad matches resolve the banner by TEAM (winner carries teamId);
+    // FFA keeps the pilot banner untouched.
+    const squadMode = teamsActive(snapshot);
+    const myTeam = squadMode ? snapshot.players.find((player) => player.id === session.selfId)?.teamId : undefined;
+    $("result").classList.toggle("team-result", squadMode);
+    if (squadMode && winnerEntry?.teamId !== undefined) {
+      const won = winnerEntry.teamId === myTeam;
+      subtitle.textContent = i18n.t(won ? "teamVictory" : "teamDefeated", { n: winnerEntry.teamId });
+      subtitle.classList.toggle("defeated", !won);
+      $("result").classList.toggle("bot-victory", winnerEntry.isBot === true && !won);
+    } else if (winnerEntry?.isBot) {
       subtitle.textContent = i18n.t("defeatedBy", { name: snapshot.winner ? winnerEntry?.name.toUpperCase() ?? "" : "" });
       subtitle.classList.add("defeated");
       $("result").classList.add("bot-victory");
@@ -326,6 +345,25 @@ class ArenaScene extends Phaser.Scene {
       $("result").classList.remove("bot-victory");
     }
     $("winner").textContent = (snapshot.winner && winnerEntry?.name) || i18n.t("noSurvivor");
+    // M30: squad ranking block under the banner (hidden in FFA).
+    const ranking = $("result-ranking");
+    if (squadMode) {
+      const squads = new Map<number, PlayerState[]>();
+      for (const player of snapshot.players) {
+        if (player.teamId === undefined) continue;
+        const list = squads.get(player.teamId) ?? [];
+        list.push(player);
+        squads.set(player.teamId, list);
+      }
+      const rows = [...squads.entries()]
+        .map(([teamId, members]) => ({ teamId, members, lives: members.reduce((sum, player) => sum + Math.max(0, player.lives), 0), limbs: members.reduce((sum, player) => sum + LIMB_IDS.reduce((inner, limbId) => inner + player.limbs[limbId], 0), 0) }))
+        .sort((a, b) => b.lives - a.lives || b.limbs - a.limbs || a.teamId - b.teamId);
+      ranking.innerHTML = rows.map(({ teamId, members, lives }) => `<div class="result-team" style="--team:${colorCss(TEAM_COLORS[teamId])}"><i></i><b>${i18n.t("teamLabel", { n: teamId })}</b><span>${members.map((player) => escapeHtml(player.name)).join(" · ")}</span><em>${lives}</em></div>`).join("");
+      ranking.classList.remove("hidden");
+    } else {
+      ranking.innerHTML = "";
+      ranking.classList.add("hidden");
+    }
     $<HTMLButtonElement>("restart").classList.toggle("hidden", session.selfId !== session.currentRoom?.hostId);
   }
 
@@ -335,6 +373,7 @@ class ArenaScene extends Phaser.Scene {
       this.lastPhaseKey = "";
       this.updateHud(this.snapshot);
       this.refreshWeaponPanel();
+      this.refreshTeamPanel();
     }
   }
 
@@ -369,6 +408,44 @@ class ArenaScene extends Phaser.Scene {
 
   hasSnapshot() {
     return Boolean(this.snapshot);
+  }
+
+  private lastTeamPanelHtml = "";
+
+  /**
+   * M30 Tab squad scoreboard: squads ranked by remaining lives, each squad a
+   * colored block listing its pilots. FFA/sandbox hide the panel entirely
+   * (the shell only reveals it in squad matches).
+   */
+  refreshTeamPanel() {
+    const snapshot = this.snapshot;
+    const panel = $("team-panel");
+    if (!snapshot || !teamsActive(snapshot)) {
+      if (this.lastTeamPanelHtml) {
+        this.lastTeamPanelHtml = "";
+        panel.innerHTML = "";
+      }
+      return;
+    }
+    const squads = new Map<number, PlayerState[]>();
+    for (const player of snapshot.players) {
+      if (player.teamId === undefined) continue;
+      const list = squads.get(player.teamId) ?? [];
+      list.push(player);
+      squads.set(player.teamId, list);
+    }
+    const rows = [...squads.entries()]
+      .map(([teamId, members]) => ({ teamId, members, lives: members.reduce((sum, player) => sum + Math.max(0, player.lives), 0) }))
+      .sort((a, b) => b.lives - a.lives || a.teamId - b.teamId);
+    const html = `<p class="panel-hint">${i18n.t("teamPanelHint")}</p>` + rows.map(({ teamId, members, lives }) => `
+      <div class="team-row" style="--team:${colorCss(TEAM_COLORS[teamId])}">
+        <b>${i18n.t("teamLabel", { n: teamId })}<em>${lives}</em></b>
+        ${members.map((player) => `<span class="${player.id === session.selfId ? " self" : ""}${player.lives <= 0 ? " out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("")}
+      </div>`).join("");
+    if (html !== this.lastTeamPanelHtml) {
+      this.lastTeamPanelHtml = html;
+      panel.innerHTML = html;
+    }
   }
 
   setVisualPreferences() {
@@ -409,7 +486,11 @@ class ArenaScene extends Phaser.Scene {
     // HUD blocks rebuild only when their content actually changed (names,
     // lives, weapon, cooldown bars). Cuts three innerHTML parses per snapshot
     // during steady-state combat — the biggest remaining main-thread cost.
-    const rosterHtml = snapshot.players.map((player) => `<span style="--pilot:${colorCss(player.color)}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
+    // M30: squad matches order the chips by squad (and tint them with the
+    // squad color); FFA keeps the flat pilot-colored strip.
+    const squadMode = teamsActive(snapshot);
+    const rosterPlayers = squadMode ? [...snapshot.players].sort((a, b) => (a.teamId ?? 0) - (b.teamId ?? 0) || b.lives - a.lives) : snapshot.players;
+    const rosterHtml = rosterPlayers.map((player) => `<span style="--pilot:${colorCss(teamTint(snapshot, player))}" class="${player.lives <= 0 ? "out" : ""}"><i></i>${escapeHtml(player.name)}${player.isBot ? " <small>[BOT]</small>" : ""} <b>${player.lives}</b></span>`).join("");
     if (rosterHtml !== this.lastRosterHtml) {
       this.lastRosterHtml = rosterHtml;
       $("hud-roster").innerHTML = rosterHtml;
@@ -661,8 +742,12 @@ class ArenaScene extends Phaser.Scene {
         }
       } else if (event.type === "hit") {
         sfx.play("hit", { ...at(event.x, event.y), strength: event.strength, priority: "high" });
-        // M24 floating damage digits (FX-toggleable).
-        if (event.amount) this.spawnDamageDigit(event.x, event.y, event.amount, event.strength);
+        // M24 floating damage digits (FX-toggleable). M30: a teammate's hit
+        // digits take the squad color — own hits keep the white/heat ramp.
+        if (event.amount) {
+          const allyTeamId = teamsActive(this.snapshot) && actor && actor.id !== session.selfId ? actor.teamId : undefined;
+          this.spawnDamageDigit(event.x, event.y, event.amount, event.strength, allyTeamId !== undefined && allyTeamId === mine?.teamId ? TEAM_COLORS[allyTeamId] : undefined);
+        }
         if (visualPrefs.gore) {
           // M19: blood sprays AWAY from the shooter (event carries actorId);
           // unknown shooter degenerates to a radial splash.
@@ -764,8 +849,9 @@ class ArenaScene extends Phaser.Scene {
     this.cameras.main.shake(duration, intensity, true);
   }
 
-  /** M24 pooled floating damage digits; big hits render larger and hotter. */
-  private spawnDamageDigit(x: number, y: number, amount: number, strength: number) {
+  /** M24 pooled floating damage digits; big hits render larger and hotter.
+   *  M30: `allyColor` tints a teammate's digits with the squad color. */
+  private spawnDamageDigit(x: number, y: number, amount: number, strength: number, allyColor?: number) {
     if (!visualPrefs.digits) return;
     let entry = this.digits.find((candidate) => candidate.life <= 0);
     if (!entry) {
@@ -777,7 +863,7 @@ class ArenaScene extends Phaser.Scene {
     const execution = strength >= 1.2;
     const heavy = amount >= 20 || execution;
     entry.text.setText(String(amount));
-    entry.text.setColor(execution ? "#ff6d5e" : heavy ? "#ffb35c" : "#f5f2e8");
+    entry.text.setColor(allyColor !== undefined ? colorCss(allyColor) : execution ? "#ff6d5e" : heavy ? "#ffb35c" : "#f5f2e8");
     entry.text.setFontSize(execution ? 17 : heavy ? 14 : 12);
     entry.text.setPosition(x + (Math.random() - 0.5) * 10, y - 8);
     entry.text.setAlpha(1);
@@ -793,15 +879,22 @@ class ArenaScene extends Phaser.Scene {
 
   // M20 kill feed: killer ▸ weapon bar ▸ victim. Hazards and falls arrive
   // without a killer (actorId undefined) and read as "THE SPIRE".
+  // M30: in squad matches names take their SQUAD color and own-team members
+  // carry an underline, so a glance sorts allies from enemies.
   private addKillFeed(event: CombatEvent, victim?: PlayerState, killer?: PlayerState) {
     const feed = $("kill-feed");
     if (!feed) return;
+    const snapshot = this.snapshot;
+    const mine = snapshot?.players.find((player) => player.id === session.selfId);
+    const squadMode = teamsActive(snapshot);
     const weapon = event.weaponId ? WEAPONS[event.weaponId] : undefined;
     const name = (player?: PlayerState) => player ? `${escapeHtml(player.name)}${player.isBot ? " [BOT]" : ""}` : "—";
+    const tint = (player?: PlayerState) => player && snapshot ? colorCss(teamTint(snapshot, player)) : colorCss(0xf0a14a);
+    const ally = (player?: PlayerState) => squadMode && player && mine && player.teamId !== undefined && player.teamId === mine.teamId ? " ally" : "";
     const killerHtml = killer
-      ? `<b style="--pilot:${colorCss(killer.color)}">${name(killer)}</b>`
+      ? `<b class="${ally(killer).trim()}" style="--pilot:${tint(killer)}">${name(killer)}</b>`
       : `<b class="spire-kill">${i18n.t("spireKill")}</b>`;
-    const victimHtml = `<b style="--pilot:${colorCss(victim?.color ?? 0xf0a14a)}">${name(victim)}</b>`;
+    const victimHtml = `<b class="${ally(victim).trim()}" style="--pilot:${tint(victim)}">${name(victim)}</b>`;
     const row = document.createElement("div");
     row.className = "kill-entry";
     row.innerHTML = `${killerHtml}<i class="kill-arrow">▸</i>${weapon ? `<i class="kill-weapon" style="--weapon:${colorCss(weapon.color)}" title="${weapon.label}"></i>` : ""}<i class="kill-arrow">▸</i>${victimHtml}`;
@@ -936,9 +1029,42 @@ class ArenaScene extends Phaser.Scene {
       this.drawPlayerState(player, time);
     }
     for (const [id, label] of this.labels) label.setVisible(visible.has(id));
+    this.drawTeamArrows(snapshot);
     this.drawGibs();
     this.drawForeground(snapshot.config.mapId, time);
     this.drawLighting(snapshot, time);
+  }
+
+  /**
+   * M30: off-screen squad direction arrows. With only ~44% of the arena on
+   * screen, squad matches stamp a team-colored triangle at the view edge for
+   * every pilot outside it — the plan's compensator for the larger world.
+   * FFA renders none (unchanged from M29).
+   */
+  private drawTeamArrows(snapshot: ServerSnapshot) {
+    if (!teamsActive(snapshot)) return;
+    const view = this.cameras.main.worldView;
+    const inset = 30;
+    let drawn = 0;
+    for (const player of snapshot.players) {
+      if (drawn >= 3) break;
+      if (player.id === session.selfId || player.teamId === undefined || player.respawnTimer > 0 || player.lives <= 0) continue;
+      const position = this.renderPositions.get(player.id);
+      if (!position) continue;
+      const aimY = position.y - 16;
+      if (view.contains(position.x, aimY)) continue;
+      const edgeX = clamp(position.x, view.x + inset, view.right - inset);
+      const edgeY = clamp(aimY, view.y + inset, view.bottom - inset);
+      const angle = Math.atan2(aimY - edgeY, position.x - edgeX);
+      this.graphics.fillStyle(TEAM_COLORS[player.teamId], 0.8);
+      this.graphics.beginPath();
+      this.graphics.moveTo(edgeX + Math.cos(angle) * 9, edgeY + Math.sin(angle) * 9);
+      this.graphics.lineTo(edgeX + Math.cos(angle + 2.5) * 7, edgeY + Math.sin(angle + 2.5) * 7);
+      this.graphics.lineTo(edgeX + Math.cos(angle - 2.5) * 7, edgeY + Math.sin(angle - 2.5) * 7);
+      this.graphics.closePath();
+      this.graphics.fillPath();
+      drawn += 1;
+    }
   }
 
   /**
@@ -1406,6 +1532,13 @@ class ArenaScene extends Phaser.Scene {
     }
     label.setText(`${player.name.toUpperCase()}  ${player.lives}`).setPosition(position.x, position.y - 54).setVisible(player.respawnTimer <= 0);
     if (player.respawnTimer > 0) return;
+    // M30: squad ring — a flat hard-edge ellipse under the feet (poster style,
+    // no glow, no light) so allies/enemies sort at a glance; the pilot body
+    // keeps its personal color.
+    if (teamsActive(this.snapshot) && player.teamId) {
+      this.graphics.lineStyle(player.id === session.selfId ? 2.5 : 2, TEAM_COLORS[player.teamId], 0.85);
+      this.graphics.strokeEllipse(position.x, player.y + 4, player.id === session.selfId ? 28 : 24, 7);
+    }
     // M24: swing/heat state rides along to the art layer. M26: the sampled
     // key light drives rim + armor response — the pilot reacts to the room.
     // M27: the charge fraction rides along too (Voltrail muzzle focus ring).

@@ -71,7 +71,7 @@ export const roomView = (room: Room): RoomView => ({
   phase: room.phase,
   mode: room.mode,
   config: room.config,
-  players: [...room.players.values()].map(({ id, name, connected, color, archetype, isBot }) => ({ id, name, connected, color, archetype, isBot })),
+  players: [...room.players.values()].map(({ id, name, connected, color, archetype, isBot, teamId }) => ({ id, name, connected, color, archetype, isBot, teamId })),
 });
 
 export const createCode = () => {

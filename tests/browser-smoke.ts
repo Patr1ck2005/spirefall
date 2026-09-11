@@ -35,6 +35,17 @@ await guest.locator("#join").click();
 await guest.locator("#lobby:not(.hidden)").waitFor({ timeout: 30000 });
 await host.locator(".player-slot").nth(1).waitFor({ timeout: 30000 });
 
+// M30: lobby squad mode selector — host-driven set_teams round-trip.
+const teamOptions = await host.locator("#teams option").count();
+if (teamOptions !== 4) throw new Error(`Squad mode selector does not offer FFA + 2/3/4 squads (found ${teamOptions})`);
+if (!(await guest.locator("#teams").isDisabled())) throw new Error("Guest can edit the host-only squad mode selector");
+await host.locator("#teams").selectOption("2");
+await host.locator(".team-tag").first().waitFor({ timeout: 5000 });
+const guestTags = await guest.locator(".team-tag").allTextContents();
+if (guestTags.length !== 2 || !guestTags.includes("T1") || !guestTags.includes("T2")) throw new Error(`Guest lobby did not render T1/T2 squad tags (got ${guestTags.join(",")})`);
+await host.locator("#teams").selectOption("0");
+await host.locator(".team-tag").first().waitFor({ state: "detached", timeout: 5000 });
+
 await host.locator("#map").selectOption("fortress");
 await host.locator("#lives").selectOption("2");
 await host.locator("#start").click();

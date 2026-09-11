@@ -61,6 +61,12 @@ const DICT = {
   settingLives: { zh: "生命", en: "Lives" },
   settingCrates: { zh: "补给箱", en: "Supply drops" },
   settingBots: { zh: "AI 机师", en: "AI pilots" },
+  // M30 squad mode selector
+  settingMode: { zh: "模式", en: "Mode" },
+  modeFfa: { zh: "混战 FFA", en: "Free-for-all" },
+  modeTeams2: { zh: "2 队分队", en: "2 squads" },
+  modeTeams3: { zh: "3 队分队", en: "3 squads" },
+  modeTeams4: { zh: "4 队分队", en: "4 squads" },
   botsOff: { zh: "关闭", en: "Off" },
   settingSkill: { zh: "难度", en: "Skill" },
   skillCasual: { zh: "休闲", en: "Casual" },
@@ -81,6 +87,8 @@ const DICT = {
   bodyIntegrity: { zh: "机体完整度", en: "BODY INTEGRITY" },
   exitMatch: { zh: "退出对局", en: "Exit match" },
   panelHint: { zh: "按住 TAB — 松开关闭", en: "HOLD TAB — RELEASE TO CLOSE" },
+  teamPanelHint: { zh: "分队战况 — 按住 TAB 查看", en: "SQUAD STANDINGS — HOLD TAB" },
+  teamLabel: { zh: "{n} 队", en: "TEAM {n}" },
   spireKill: { zh: "高塔", en: "THE SPIRE" },
   sandboxRespawn: { zh: "测试重生", en: "Test respawn" },
   sandboxReturn: { zh: "返回大厅", en: "Return to lobby" },
@@ -90,6 +98,8 @@ const DICT = {
   onePilotRemains: { zh: "最后一名机师", en: "ONE PILOT REMAINS" },
   noSurvivor: { zh: "无人生还", en: "NO SURVIVOR" },
   defeatedBy: { zh: "落败 — {name} 占据了高塔", en: "DEFEATED — {name} HOLDS THE SPIRE" },
+  teamVictory: { zh: "胜利 — {n} 队占据了高塔", en: "VICTORY — TEAM {n} HOLDS THE SPIRE" },
+  teamDefeated: { zh: "落败 — {n} 队占据了高塔", en: "DEFEATED — TEAM {n} HOLDS THE SPIRE" },
   returnLobby: { zh: "返回大厅", en: "Return to lobby" },
 
   // Server errors

@@ -35,6 +35,11 @@ export type WeaponId = "sidearm" | "scatter" | "rifle" | "sniper" | "rocket" | "
 export type AttackKind = "projectile" | "hitscan" | "melee" | "explosive";
 export type AttackPattern = "single" | "burst" | "pellet" | "piercing" | "cluster" | "slash" | "dashSlash" | "beam" | "bounce";
 export type MatchMode = "match" | "sandbox";
+/**
+ * M30 squad count: 0 (or absent) keeps the classic free-for-all; 2-4 split the
+ * roster into auto-balanced squads with friendly fire off. Sandbox ignores it.
+ */
+export type TeamCount = 0 | 2 | 3 | 4;
 export type BotSkill = "casual" | "standard" | "brutal";
 export type LimbId = "leftArm" | "rightArm" | "leftLeg" | "rightLeg";
 export type LimbIntegrity = Record<LimbId, number>;
@@ -49,6 +54,8 @@ export type MatchConfig = {
   weaponSet: WeaponId[];
   bots: number;
   botSkill: BotSkill;
+  /** M30: squad count for team matches; 0/absent = free-for-all. */
+  teams?: TeamCount;
 };
 
 export type ClientInput = {
@@ -87,6 +94,12 @@ export type PlayerState = {
   hitFlash: number;
   connected: boolean;
   color: number;
+  /**
+   * M30 squad id (1..teams) in team matches; absent in FFA and sandbox.
+   * The pilot keeps `color` as the personal tint — teamId drives rings,
+   * feed coloring and the squad scoreboard instead.
+   */
+  teamId?: number;
   limbs: LimbIntegrity;
 };
 
@@ -216,7 +229,7 @@ export type RoomView = {
   hostId: string;
   phase: ServerSnapshot["phase"];
   mode: MatchMode;
-  players: Array<Pick<PlayerState, "id" | "name" | "connected" | "color" | "archetype" | "isBot">>;
+  players: Array<Pick<PlayerState, "id" | "name" | "connected" | "color" | "archetype" | "isBot" | "teamId">>;
   config: MatchConfig;
 };
 

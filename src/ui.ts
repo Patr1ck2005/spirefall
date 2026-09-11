@@ -10,7 +10,7 @@ import { availablePortraits, RENDER_SCALE, session, visualPrefs, VIEW, type Aren
 import "./style.css";
 import { i18n, type I18nKey } from "./i18n";
 import type { MapId, WeaponId } from "../shared/game.js";
-import { WEAPONS } from "../shared/game.js";
+import { TEAM_COLORS, WEAPONS } from "../shared/game.js";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const weaponOptions = Object.values(WEAPONS).map((weapon, index) => `
@@ -59,7 +59,7 @@ app.innerHTML = `
         <div class="lobby-console">
           <section class="roster-column"><div class="section-title"><span>01</span><div><p data-i18n="section01">DEPLOYMENT</p><h3 data-i18n="roster">Pilot roster</h3></div></div><div id="players" class="players"></div><p id="lobby-note" class="lobby-note"></p></section>
           <section class="map-column"><div class="section-title"><span>02</span><div><p data-i18n="section02">LOCATION</p><h3 data-i18n="sectorFeed">Sector feed</h3></div></div><div id="map-visual" class="map-visual" data-map="canopy"><div class="map-noise"></div><div class="map-frame"><span id="map-index">SECTOR 01</span><strong id="map-title">THE CROWN</strong><small id="map-brief">Freight lifts drift above the storm line.</small></div></div></section>
-          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
+          <section class="settings-column"><div class="section-title"><span>03</span><div><p data-i18n="section03">PARAMETERS</p><h3 data-i18n="matchControl">Match control</h3></div></div><div class="settings"><label><span data-i18n="settingMode">Mode</span><select id="teams"><option value="0" data-i18n="modeFfa">Free-for-all</option><option value="2" data-i18n="modeTeams2">2 squads</option><option value="3" data-i18n="modeTeams3">3 squads</option><option value="4" data-i18n="modeTeams4">4 squads</option></select></label><label><span data-i18n="settingSector">Sector</span><select id="map"><option value="canopy">Canopy</option><option value="fortress">Fortress</option><option value="factory">Factory</option></select></label><label><span data-i18n="settingLives">Lives</span><select id="lives"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><label class="toggle"><input id="crates" type="checkbox" checked /><span></span> <i data-i18n="settingCrates" style="font-style:normal">Supply drops</i></label><label><span data-i18n="settingBots">AI pilots</span><select id="bots"><option value="0">Off</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label><label><span data-i18n="settingSkill">Skill</span><select id="bot-skill"><option value="casual">Casual</option><option value="standard" selected>Standard</option><option value="brutal">Brutal</option></select></label></div></section>
         </div>
         <section class="loadout-strip"><div class="section-title compact"><span>04</span><div><p data-i18n="section04">ARMORY</p><h3 data-i18n="loadout">Authorized loadout</h3></div></div><div id="weapon-options" class="weapon-options">${weaponOptions}</div></section>
         <div class="lobby-actions"><div><button id="start" class="primary" data-i18n="startMatch">Start match</button><button id="solo-test" data-i18n="soloTest">Solo test</button></div><button id="leave" class="quiet" data-i18n="leaveSpire">Leave spire</button></div>
@@ -72,11 +72,12 @@ app.innerHTML = `
           <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
           <div class="hud-bottom"><div id="hud-weapon" class="hud-weapon"></div><div id="hud-limbs" class="hud-limbs"></div></div>
           <div id="weapon-panel" class="weapon-panel hidden"></div>
+          <div id="team-panel" class="team-panel hidden"></div>
           <button id="in-match-leave" class="quiet hud-leave" data-i18n="exitMatch">Exit match</button>
         </div>
         <div id="vignette" class="vignette" aria-hidden="true"></div>
         <div id="sandbox-actions" class="game-actions hidden"><button id="sandbox-respawn" data-i18n="sandboxRespawn">Test respawn</button><button id="sandbox-return" data-i18n="sandboxReturn">Return to lobby</button></div>
-        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow" data-i18n="resultEyebrow">Spire resolved</p><h2 id="winner"></h2><p id="result-subtitle">ONE PILOT REMAINS</p><div><button id="restart" class="primary" data-i18n="returnLobby">Return to lobby</button><button id="result-leave" data-i18n="leaveSpire">Leave spire</button></div></div>
+        <div id="result" class="result hidden"><div class="result-signal"></div><p class="eyebrow" data-i18n="resultEyebrow">Spire resolved</p><h2 id="winner"></h2><p id="result-subtitle">ONE PILOT REMAINS</p><div id="result-ranking" class="hidden"></div><div><button id="restart" class="primary" data-i18n="returnLobby">Return to lobby</button><button id="result-leave" data-i18n="leaveSpire">Leave spire</button></div></div>
       </div>
     </main>
   </section>`;
@@ -136,6 +137,7 @@ function enterLobby(room: RoomMessage) {
     session.lastRosterKey = rosterKey;
   }
   $("room-label").textContent = room.code;
+  $<HTMLSelectElement>("teams").value = String(room.config.teams ?? 0);
   $<HTMLSelectElement>("map").value = room.config.mapId;
   $<HTMLSelectElement>("lives").value = String(room.config.lives);
   $<HTMLInputElement>("crates").checked = room.config.crates;
@@ -143,7 +145,7 @@ function enterLobby(room: RoomMessage) {
   $<HTMLSelectElement>("bot-skill").value = room.config.botSkill;
   updateMapVisual(room.config.mapId);
   const isHost = session.selfId === room.hostId;
-  for (const id of ["map", "lives", "crates", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
+  for (const id of ["teams", "map", "lives", "crates", "bots", "bot-skill"]) $<HTMLInputElement | HTMLSelectElement>(id).disabled = !isHost;
   for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
     input.checked = room.config.weaponSet.includes(input.value as WeaponId);
     input.disabled = !isHost;
@@ -155,6 +157,7 @@ function enterLobby(room: RoomMessage) {
 }
 
 function renderPlayers(room: RoomMessage) {
+  const squads = room.config.teams ?? 0;
   const slots = Array.from({ length: 4 }, (_, index) => {
     const player = room.players[index];
     const archetype = ARCHETYPES[player?.archetype ?? index];
@@ -162,7 +165,9 @@ function renderPlayers(room: RoomMessage) {
     if (!player) return `<div class="player-slot empty"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette generated" data-archetype="${index}"${portraitStyle}><i></i></div><div><strong>${i18n.t("openSlot")}</strong><small>${archetype.name}</small></div><em>${i18n.t("waiting")}</em></div>`;
     const accent = colorCss(player.color);
     const statusKey = player.id === room.hostId ? "statusHost" : player.isBot ? "statusBot" : player.connected ? "statusReady" : "statusReconnect";
-    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div><em>${i18n.t(statusKey)}</em></div>`;
+    // M30: squad tag rides next to the status while a team match is configured.
+    const teamTag = squads > 0 && player.teamId ? `<u class="team-tag" style="--team:${colorCss(TEAM_COLORS[player.teamId])}">T${player.teamId}</u>` : "";
+    return `<div class="player-slot${player.isBot ? " bot-slot" : ""}" style="--pilot:${accent}"><span class="slot-number">0${index + 1}</span><div class="pilot-silhouette${portraitStyle ? " generated" : ""}" data-archetype="${player.archetype}"${portraitStyle}><i></i></div><div><strong>${escapeHtml(player.name)}</strong><small>${archetype.name} / ${archetype.role}</small></div>${teamTag}<em>${i18n.t(statusKey)}</em></div>`;
   });
   $("players").innerHTML = slots.join("");
   $("lobby-note").textContent = room.players.length >= 2
@@ -367,6 +372,10 @@ export function initShell(sceneCtorParam: (new () => ArenaSceneLike & Phaser.Sce
       send("config", { patch: { mapId, lives: Number($<HTMLSelectElement>("lives").value), crates: $<HTMLInputElement>("crates").checked, bots: Number($<HTMLSelectElement>("bots").value), botSkill: $<HTMLSelectElement>("bot-skill").value } });
     });
   }
+  // M30: squad mode rides its own host-only message (not the config patch).
+  $("teams").addEventListener("change", () => {
+    send("set_teams", { teams: Number($<HTMLSelectElement>("teams").value) });
+  });
   for (const input of document.querySelectorAll<HTMLInputElement>('input[name="weapon"]')) {
     input.addEventListener("change", () => {
       let weaponSet = [...document.querySelectorAll<HTMLInputElement>('input[name="weapon"]:checked')].map((item) => item.value as WeaponId);
@@ -378,11 +387,17 @@ export function initShell(sceneCtorParam: (new () => ArenaSceneLike & Phaser.Sce
     });
   }
   connect();
-  // Tab weapon panel: hold to inspect the loadout, release to dismiss.
+  // Tab weapon panel: hold to inspect the loadout (and, in squad matches, the
+  // team standings), release to dismiss.
   const weaponPanel = $("weapon-panel");
+  const teamPanel = $("team-panel");
   const syncWeaponPanel = (held: boolean) => {
     const show = held && !gameWrap.classList.contains("hidden") && Boolean(session.scene?.hasSnapshot());
     weaponPanel.classList.toggle("hidden", !show);
+    // M30: the squad scoreboard shares the Tab overlay in team matches only —
+    // FFA keeps the panel exactly as it was (tests pin the loadout layout).
+    const squads = (session.currentRoom?.config.teams ?? 0) > 0 && session.currentRoom?.mode !== "sandbox";
+    teamPanel.classList.toggle("hidden", !show || !squads);
   };
   window.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") return;

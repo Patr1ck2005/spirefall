@@ -314,4 +314,125 @@ for (const map of Object.values(MAPS)) {
   }
 }
 
+// ---- M30 squad mode: balance, friendly fire, spawns, standings -------------
+
+import { DEFAULT_CONFIG, LIMB_IDS, WORLD, freshLimbs, makePlayer, type MatchConfig, type PlayerState } from "../shared/game.js";
+import { pickSpawn, rebalanceTeams, sameTeam, teamStandings } from "../server/sim/teams.js";
+import { damage } from "../server/sim/damage.js";
+import type { Room } from "../server/state.js";
+
+/** Minimal lobby-phase Room stub: the teams module only touches these fields. */
+const makeSquadRoom = (players: PlayerState[], teams: number): Room => ({
+  code: "TEST01",
+  hostId: players[0]?.id ?? "",
+  clients: new Map(),
+  players: new Map(players.map((player) => [player.id, player])),
+  tokens: new Map(),
+  config: { ...DEFAULT_CONFIG, teams: teams as MatchConfig["teams"] },
+  phase: "lobby",
+  mode: "match",
+  tick: 0,
+  projectiles: [],
+  crates: [],
+  props: [],
+  hazards: [],
+  movers: [],
+  events: [],
+  nextProjectile: 1,
+  nextEvent: 1,
+  reconnectTimers: new Map(),
+  hazardHits: new Map(),
+  jumpHeld: new Map(),
+  stats: {},
+}) as unknown as Room;
+
+const squadPilot = (id: string, index: number) => makePlayer(id, id, index, { ...DEFAULT_CONFIG, mapId: "canopy" });
+
+{
+  // Every block builds a FRESH roster — PlayerStates are mutable and shared
+  // ids across rooms would leak squad ids between scenarios.
+  const ffa = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1)], 0);
+  rebalanceTeams(ffa);
+  assert(ffa.players.get("a")!.teamId === undefined, "FFA rebalance must strip team ids");
+
+  // All-unassigned 4p/2teams fills round-robin by least-filled: a→1 b→2 c→1 d→2.
+  const twos = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2), squadPilot("d", 3)], 2);
+  rebalanceTeams(twos);
+  const sizes2 = [1, 2, 3, 4].map((teamId) => [...twos.players.values()].filter((player) => player.teamId === teamId).length);
+  const active2 = sizes2.filter((size) => size > 0);
+  assert(active2.length === 2 && Math.max(...active2) - Math.min(...active2) <= 1, `2-squad balance drifted: ${sizes2.join("/")}`);
+  assert(sameTeam(twos, twos.players.get("a"), twos.players.get("c")), "Alternating fill should put a and c on the same squad");
+  assert(!sameTeam(twos, twos.players.get("a"), twos.players.get("b")), "Distinct squads must not read as allies");
+
+  const threes = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2), squadPilot("d", 3)], 3);
+  rebalanceTeams(threes);
+  const sizes3 = [1, 2, 3].map((teamId) => [...threes.players.values()].filter((player) => player.teamId === teamId).length);
+  assert(sizes3.reduce((sum, size) => sum + size, 0) === 4 && Math.max(...sizes3) === 2 && Math.min(...sizes3) === 1, `3-squad balance drifted: ${sizes3.join("/")}`);
+
+  // Auto-balance on join: the newcomer lands on the thinnest squad.
+  const joined = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1)], 3);
+  rebalanceTeams(joined);
+  const newcomer = squadPilot("c", 2);
+  joined.players.set(newcomer.id, newcomer);
+  rebalanceTeams(joined);
+  assert(newcomer.teamId === 3, `Joiner should fill the empty third squad, got ${newcomer.teamId}`);
+
+  // Squad spawns: the M29 L,R,L,R alternation splits west/east by parity.
+  const spawnRoom = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2), squadPilot("d", 3)], 2);
+  rebalanceTeams(spawnRoom);
+  const canopy = MAPS.canopy;
+  for (const player of spawnRoom.players.values()) {
+    const index = [...spawnRoom.players.keys()].indexOf(player.id);
+    const spawn = pickSpawn(spawnRoom, canopy, player, index);
+    const west = player.teamId === 1;
+    assert(west === spawn.x < WORLD.width / 2, `Squad ${player.teamId} spawn ${spawn.x} crossed the half line`);
+  }
+  const trioRoom = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2)], 3);
+  rebalanceTeams(trioRoom);
+  const primaryPads = [...trioRoom.players.values()].map((player) => pickSpawn(trioRoom, canopy, player, 0));
+  assert(primaryPads[0] === canopy.spawns[0] && primaryPads[1] === canopy.spawns[1] && primaryPads[2] === canopy.spawns[2], "Three squads must take the first three primary pads");
+}
+
+{
+  // Friendly fire OFF: squadmates walk away from point-blank shots untouched.
+  const room = makeSquadRoom([squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2)], 2);
+  rebalanceTeams(room);
+  const shooter = room.players.get("a")!;
+  const mate = [...room.players.values()].find((player) => player.id !== "a" && sameTeam(room, shooter, player))!;
+  const enemy = [...room.players.values()].find((player) => !sameTeam(room, shooter, player))!;
+  mate.limbs = freshLimbs();
+  mate.invulnerable = 0;
+  const before = { ...mate.limbs };
+  damage(room, mate, 20, 0, mate.x - 40, mate.x, mate.y - 14, { actorId: shooter.id, weaponId: "sidearm" });
+  assert(LIMB_IDS.every((limbId) => mate.limbs[limbId] === before[limbId]), "Squadmate shot must deal zero damage");
+  assert(mate.vx === 0 && mate.vy === 0, "Squadmate shot must not knock back");
+  enemy.limbs = freshLimbs();
+  enemy.invulnerable = 0;
+  damage(room, enemy, 20, 0, enemy.x - 40, enemy.x, enemy.y - 14, { actorId: shooter.id, weaponId: "sidearm" });
+  assert(LIMB_IDS.some((limbId) => enemy.limbs[limbId] < 100), "Enemy shot must still wound");
+  assert(room.events.some((event) => event.type === "hit" && event.targetId === enemy.id), "Enemy hit must emit the hit event");
+  assert(!room.events.some((event) => event.type === "hit" && event.targetId === mate.id), "Squadmate shot must not emit a hit event");
+}
+
+{
+  // Standings + squad resolution inputs: lives sum, alive flag, lead ordering.
+  const roster = [squadPilot("a", 0), squadPilot("b", 1), squadPilot("c", 2), squadPilot("d", 3)];
+  const room = makeSquadRoom(roster, 2);
+  rebalanceTeams(room);
+  for (const player of room.players.values()) player.lives = 1;
+  const first = [...room.players.values()][0];
+  first.lives = 2;
+  first.limbs.rightLeg = 40;
+  const standings = teamStandings(room);
+  assert(standings.length === 2, "Standings must list both squads");
+  // Squad sums: first's squad holds 2+1 lives, the other 1+1.
+  assert(standings[0].teamId === first.teamId && standings[0].lives === 3, "Timeout ranking must lead with the most remaining lives");
+  assert(standings[0].members[0].id === first.id, "Squad lead must be the pilot with the most lives");
+  assert(standings[0].limbs < standings[1].limbs, "Remaining lives must dominate the timeout ranking over limb integrity");
+  assert(standings.every((squad) => squad.alive), "Pilots with lives left keep their squad alive");
+  for (const player of room.players.values()) player.lives = 0;
+  const wiped = teamStandings(room);
+  assert(wiped.every((squad) => !squad.alive), "A squad with zero lives and no respawn is dead");
+}
+
 console.log("game logic tests passed");

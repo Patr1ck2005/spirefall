@@ -9,7 +9,7 @@ export type RoomMessage = {
   hostId: string;
   phase: ServerSnapshot["phase"];
   mode: ServerSnapshot["mode"];
-  players: Array<{ id: string; name: string; connected: boolean; color: number; archetype: 0 | 1 | 2 | 3; isBot?: boolean }>;
+  players: Array<{ id: string; name: string; connected: boolean; color: number; archetype: 0 | 1 | 2 | 3; isBot?: boolean; teamId?: number }>;
   config: MatchConfig;
 };
 
@@ -21,6 +21,8 @@ export interface ArenaSceneLike {
   clearProcessedEvents(): void;
   refreshLocalizedViews(): void;
   setVisualPreferences(): void;
+  /** M30: refresh the Tab squad scoreboard from the current snapshot. */
+  refreshTeamPanel?(): void;
 }
 
 /**

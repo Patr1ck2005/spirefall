@@ -27,6 +27,7 @@ import {
 } from "../../shared/game.js";
 import { emitEvent, statsEntry, type Room } from "../state.js";
 import { damage, damageProp, isEliminated, loseLife } from "./damage.js";
+import { pickSpawn, sameTeam } from "./teams.js";
 
 export function intersectsPlayerRect(player: PlayerState, rect: { x: number; y: number; width: number; height: number }) {
   return player.x + PLAYER_HALF_WIDTH > rect.x && player.x - PLAYER_HALF_WIDTH < rect.x + rect.width && player.y + PLAYER_FOOT_OFFSET > rect.y && player.y - PLAYER_BODY_HEIGHT < rect.y + rect.height;
@@ -106,7 +107,8 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
     // circle of radius range/2 centered ahead — it hit people BEHIND the
     // muzzle and whiffed on the tip. Segment test matches the swing shape.
     for (const other of room.players.values()) {
-      if (other.id === player.id) continue;
+      // M30: the swing passes through squadmates — no damage, no feed noise.
+      if (other.id === player.id || sameTeam(room, player, other)) continue;
       const tipX = originX + player.facing * def.range;
       if (!segmentHitsPlayer(other, originX, originY, tipX, originY)) continue;
       const impact = segmentImpactPoint(other, originX, originY, tipX, originY) ?? { x: other.x, y: other.y - PLAYER_TARGET_OFFSET };
@@ -162,7 +164,7 @@ export function attack(room: Room, player: PlayerState, secondary: boolean, char
           const along = directionX * dx + directionY * dy;
           return { other, along };
         })
-        .filter(({ other, along }) => other.id !== player.id && along > 0 && along <= wallDistance && segmentHitsPlayer(other, originX, originY, rayEndX, rayEndY, 3))
+        .filter(({ other, along }) => other.id !== player.id && along > 0 && along <= wallDistance && segmentHitsPlayer(other, originX, originY, rayEndX, rayEndY, 3) && !sameTeam(room, player, other))
         .sort((a, b) => a.along - b.along);
       const limit = def.pattern === "piercing" || def.pattern === "beam" ? (def.pattern === "beam" ? targets.length : def.pierce + 1) : 1;
       // Charged Voltrail rails (>=0.8) are executions: pierce the whole line.
@@ -220,7 +222,8 @@ export function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: 
     player.respawnTimer -= dt;
     if (player.respawnTimer <= 0 && player.lives > 0) {
       const index = [...room.players.keys()].indexOf(player.id);
-      const spawn = map.spawns[index % 4];
+      // M30: respawn on the squad's half when a team match is running.
+      const spawn = pickSpawn(room, map, player, index);
       player.x = spawn.x;
       player.y = spawn.y;
       player.vx = 0;
@@ -306,7 +309,7 @@ export function stepPlayer(room: Room, map: MapDef, player: PlayerState, input: 
     // failure, not a kill. Teleport back to the spawn pad.
     if (player.invulnerable > 0.9) {
       const index = [...room.players.keys()].indexOf(player.id);
-      const spawn = map.spawns[index % 4];
+      const spawn = pickSpawn(room, map, player, index);
       player.x = spawn.x;
       player.y = spawn.y;
       player.vx = 0;

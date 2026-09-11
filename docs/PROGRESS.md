@@ -574,7 +574,7 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 - 回归：tsc/build/logic/network/browser/visual 全绿；**performance 47.8 FPS / p95 29.5ms**（安静机器）；ai-smoke 后台运行中（结果见提交前记录）
 - **状态**：已提交 `5b78f8c`（重构）+ `9ec716b`（备料文档），trailer `ai:glm-5.3-flash-dsh`
 
-### M29 世界 ×1.5 与镜头跟随（2026-09，DSH/glm-5.3-flash，进行中）
+### M29 世界 ×1.5 与镜头跟随（2026-09，DSH/glm-5.3-flash，已完成）
 
 大地图地基（坐标源：docs/MAP_LAYOUT_1500.md，本轮 29a+29b 已落地）：
 
@@ -597,11 +597,27 @@ M24 用户实测四项遗留：仍粘手、跳太高与场景不符、数字键�
 - **运维实录**：Codex 会话遗留 59 个 `server.mjs` 僵尸（持续孵化）致 performance 假失败 41.6 FPS——用户批准清理后 46.7 FPS 过线（新底板成本 ~2 FPS）
 - 回归收尾：light-check 三图（canopy 54.4 / fortress 36.0 / factory 30.8 luma，fortress/factory 比 1.17 ≥ 0.85，canopy 暗部 20.6%→4.7%）；**performance 46.7 FPS / p95 29.5ms**（安静机器）；logic/network/browser/visual 重跑全绿
 
+### M30 分队模式（2026-09，DSH/glm-5.3-flash）
+
+FFA 正式化（teams=0 显式分支）+ 2–4 队分队；依赖方向新增 `teams → state` 叶子域，被 room/damage/players/projectiles/bots/tick 消费：
+
+- **shared 契约**：`MatchConfig.teams?: 0|2|3|4`（0/缺省 = FFA）、`PlayerState.teamId?`（FFA/sandbox 恒 undefined）、`TeamCount` 类型、`TEAM_COLORS`（1..4 = 红/蓝/绿/金，与四机师色拉开；本体保留飞行员个人色）、DEFAULT_CONFIG 显式 `teams: 0`、RoomView players pick 带 teamId
+- **server/sim/teams.ts（新模块）**：`teamCountOf`（sandbox 恒 0）、`sameTeam`、`rebalanceTeams`（确定性平衡：有效队且未超容量者保留、其余填最薄队——新加入者自动落最少人数队，set_teams/start 全量重平衡，lobby 离场也触发）、`pickSpawn`（FFA 严格保持 M29 `spawns[index%4]` 契约；2 队按 M29 L,R,L,R 交替序**奇偶=半场**分池、队友在半场内两垫脚位铺开；3–4 队每队一支柱垫脚位、溢出队友回退 FFA 轮转）、`teamStandings`（按剩余命数总和 → 肢体完整度 → 队号排序；alive 判定 `lives>0 || respawnTimer>0` 与 tick 的 FFA alive 语义一致）
+- **协议**：新消息 `set_teams`（房主专用、仅大厅）——**不走 config patch 白名单**，分队只有这一条赋值路径；越界值（非 0/2/3/4）回落 FFA 并剥除 teamId
+- **友伤关闭（单一闸门）**：`damage()` 入口处同队直接 return（无伤害/无击退/无 hit 事件/不进武器统计）；近战扫掠与 hitscan 目标解析**跳过队友**（射线/刀弧穿过队友而非被吃掉）；弹道直击循环跳过队友（子弹穿过而非浪费）；桶/爆炸溅射经 damage() 闸门天然豁免队友；坠落/机关伤害无归属、对全员有效
+- **bot 适配**：collectPercept 索敌跳过队友（"队友不是战斗对象"）；incoming 弹道扫描跳过队友弹药（不对无害友军弹浪费救援跳）
+- **按队结算（tick.ts）**：全灭——有存活成员的队 ≤1 即终局，winner = 存活队命数最高者的 id；超时——`teamStandings[0]`（命数总和优先、肢体破平）的队长；同时灭亡 winner 为空（无人生还）；FFA 分支原样保留
+- **出生点**：resetPlayer/重生/坠落救援三处统一走 `pickSpawn`（2 队半场重生、FFA 契约不变）
+- **客户端**：大厅参数列新增**模式选择器**（FFA/2/3/4 队，房主专用，`set_teams` 直发）；名册 slot 显示 `T1..T4` 队伍色标签；HUD 名册分队排序 + 队伍色条；击杀信息名字改队伍色、本队成员加下划线（.ally）；队友伤害数字染本队色（自己的命中保持白/热度渐变）；Tab 覆盖层在分队模式追加 **#team-panel 计分板**（按队分组、按剩余命数排名、self 高亮——FFA 完全不变，browser-smoke 的 Tab 断言不受影响）；结算屏分队模式显示"×队占据高塔"副标题 + **按队排名列表**（#result-ranking，FFA 隐藏）；场景内**脚下队伍色环**（硬边 poster 椭圆，self 稍大，无辉光无光源——遵守"不挂光"铁律）+ **屏幕边缘队伍色方位箭头**（视口外玩家在视野边缘 stamping 三角，≤3 枚，FFA 不渲染）
+- **i18n**：settingMode/modeFfa/modeTeams2-4/teamPanelHint/teamLabel/teamVictory/teamDefeated（中英双语）
+- **测试**：game-logic 新增分队块（FFA 剥离/2 队 2v2 交替填充/3 队 2+1+1/加入自动平衡/半场出生越线断言/3 队支柱垫脚位/友伤零伤害零击退零事件/敌人照常受伤/standings 排序与全灭判定）；network-smoke 新增 set_teams 流（持久化/T1+T2 对分/越界回落 FFA/快照携带 teamId）——**踩到并绕过该文件已知的 waitFor 缓冲竞态**（join 广播滞留 socket 缓冲直到下个监听器附加、先于 set_teams 回包被 waitFor 捕获；改用 leave 测试已有的连续收集器 + 轮询模式）；browser-smoke 新增大厅断言（#teams 4 选项/guest 不可编辑/selectOption 2 → 双端 T1/T2 标签/回 0 → 标签消失）
+- **实现假设（可否决）**：边缘箭头显示**所有**视口外玩家（队伍色即敌我信息），仅分队模式生效；3–4 队无半场语义、退化为角垫脚位铺开；分队队友伤害无开关（按已确认假设常关）
+
 ## 6. 用户约束（继承自全部历史会话，继续有效）
 
 - 清洁室边界不可破（见 §1）
 - ~~不引入 AI 机器人~~ **2026-08-23 用户解除该排除项**：机器人作为房主可控的补位/陪练加入（沙盒+对战），三档难度；其余排除项不变（无账号、匹配、移动端、观战、公网托管）
-- ~~队伍~~ **2026-09 用户主动需求解除**：M30 将实装 2–4 队分队模式（此前"无队伍"为排除项，用户在大扩充计划中明确要求分队，排除项作废）
+- ~~队伍~~ **2026-09 用户主动需求解除**：M30 已实装 2–4 队分队模式（此前"无队伍"为排除项，用户在大扩充计划中明确要求分队，排除项作废）
 - 攻击冷却和机关周期在手感调参时保持不变
 - 密钥不发聊天；不提交密钥
 - ~~界面英文~~ **2026-09 用户改为**：界面默认中文、可一键切换英文（M24 i18n 落地，武器名保留英文专有名词）

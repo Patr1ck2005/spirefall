@@ -7,6 +7,7 @@ import { getBotInput, updateBots } from "../bots.js";
 import { isEliminated } from "./damage.js";
 import { stepPlayer } from "./players.js";
 import { stepProjectiles } from "./projectiles.js";
+import { teamStandings } from "./teams.js";
 import { updateCrates, updateHazards, updateProps } from "./world.js";
 
 export function updateRoom(room: Room, dt: number) {
@@ -36,6 +37,27 @@ export function updateRoom(room: Room, dt: number) {
   stepProjectiles(room, map, dt);
 
   if (room.mode === "match") {
+    // M30 team resolution: a squad loses when every member is eliminated;
+    // timeouts rank squads by total remaining lives (limb integrity breaks
+    // ties). `winner` stays a player id — the lead pilot of the best squad —
+    // and clients group the results screen by teamId.
+    if ((room.config.teams ?? 0) > 0) {
+      const standings = teamStandings(room);
+      const aliveTeams = standings.filter((squad) => squad.alive);
+      if (room.tick > MATCH_TIME_LIMIT_TICKS && aliveTeams.length > 1) {
+        room.phase = "results";
+        room.winner = standings[0]?.members[0]?.id;
+        broadcastSnapshot(room);
+        return;
+      }
+      if (aliveTeams.length <= 1) {
+        room.phase = "results";
+        room.winner = aliveTeams[0]?.members[0]?.id;
+        broadcastSnapshot(room);
+        return;
+      }
+      return;
+    }
     const alive = [...room.players.values()].filter((player) => !isEliminated(room, player) && (player.lives > 0 || player.respawnTimer > 0));
     // Match time limit: any stalemate (camping, unreachable standoff) resolves
     // at 4 minutes — most lives, then most intact limbs wins. Winner is stored
